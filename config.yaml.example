@@ -1,0 +1,41 @@
+# Bind to localhost only — nginx handles external traffic.
+listen: "127.0.0.1:8080"
+
+# IPs allowed to set X-Real-IP / X-Forwarded-For headers.
+# Only trust your nginx server. Without this, attackers can spoof IPs
+# to bypass rate limiting.
+trusted_proxies:
+  - "127.0.0.1"
+  # - "192.168.1.0/24"
+
+models:
+  - name: MiniMax-M2.5
+    backend: http://192.168.100.10:8000/v1
+    api_key: your-backend-key
+    timeout: 300
+
+  - name: glm-4.5
+    backend: https://api.z.ai/api/coding/paas/v4
+    api_key: your-zhipu-key
+
+  - name: nomic-embed
+    backend: http://192.168.100.12:8002/v1
+    model: nomic-embed-text-v1.5.Q8_0.gguf  # name sent to backend
+    api_key: your-backend-key
+
+  - name: Nemotron-3-Super
+    backend: http://192.168.100.15:8003/v1
+    api_key: anything
+    timeout: 600
+
+# API keys for clients. Remove this section entirely to disable auth.
+keys:
+  - key: sk-your-api-key-here
+    name: admin
+    models: []    # empty = access to all models
+
+  - key: sk-restricted-key
+    name: guest
+    models:       # restricted to specific models
+      - MiniMax-M2.5
+      - nomic-embed

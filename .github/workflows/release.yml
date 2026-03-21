@@ -1,0 +1,110 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            suffix: linux-amd64
+            archive: tar.gz
+          - goos: linux
+            goarch: arm64
+            suffix: linux-arm64
+            archive: tar.gz
+          - goos: windows
+            goarch: amd64
+            suffix: windows-amd64
+            archive: zip
+          - goos: darwin
+            goarch: amd64
+            suffix: darwin-amd64
+            archive: tar.gz
+          - goos: darwin
+            goarch: arm64
+            suffix: darwin-arm64
+            archive: tar.gz
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          BINARY_NAME=go-llm-proxy
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            BINARY_NAME=go-llm-proxy.exe
+          fi
+          go build -trimpath -ldflags "-s -w" -o "${BINARY_NAME}" .
+          chmod +x "${BINARY_NAME}" 2>/dev/null || true
+
+      - name: Package (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          tar -czf go-llm-proxy-${{ matrix.suffix }}.tar.gz go-llm-proxy README.md config.yaml.example
+
+      - name: Package (zip)
+        if: matrix.archive == 'zip'
+        run: |
+          zip go-llm-proxy-${{ matrix.suffix }}.zip go-llm-proxy.exe README.md config.yaml.example
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-llm-proxy-${{ matrix.suffix }}
+          path: go-llm-proxy-${{ matrix.suffix }}.${{ matrix.archive }}
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          for dir in artifacts/*/; do
+            cp "$dir"* release/
+          done
+          cd release
+          sha256sum * > checksums.txt
+
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            release/*
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
