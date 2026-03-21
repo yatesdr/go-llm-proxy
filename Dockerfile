@@ -1,13 +1,16 @@
-FROM golang:1.24-alpine AS builder
+FROM golang:1.26.1-alpine AS builder
 
 WORKDIR /src
+
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
 
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=$(go env GOARCH) \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/go-llm-proxy .
 
 FROM alpine:3.21
@@ -18,7 +21,8 @@ RUN addgroup -S app && adduser -S -G app app \
 WORKDIR /app
 
 COPY --from=builder /out/go-llm-proxy /usr/local/bin/go-llm-proxy
-COPY config.yaml.example /app/config.yaml.example
+
+RUN mkdir -p /config && chown app:app /config
 
 USER app
 

@@ -136,6 +136,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/yatesdr/go-llm-proxy
+          flavor: |
+            latest=false
           tags: |
             type=ref,event=tag
             type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}

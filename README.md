@@ -4,8 +4,6 @@ A lightweight, secure LLM API proxy that aggregates multiple backends (vLLM, lla
 
 No database or dependencies - single binary and a YAML config file.
 
-Most useful for when you have some local models that you want to serve, and best used behind an Nginx reverse proxy.
-
 ## Features
 
 - OpenAI-compatible API passthrough (completions, chat, embeddings, images, audio)
@@ -22,68 +20,29 @@ Most useful for when you have some local models that you want to serve, and best
 
 There are two easy deployment paths:
 
-1. Docker
-   Often the easiest option for servers, especially if you already use nginx, Compose, or container-based deployment.
+1. Docker. Often the easiest option for servers, especially if you already use Compose or container-based deployment.
 
 ```bash
+cp config.yaml.example config.yaml
 docker run --rm \
   -p 8080:8080 \
   -v $(pwd)/config.yaml:/config/config.yaml:ro \
   ghcr.io/yatesdr/go-llm-proxy:latest
 ```
 
-2. Prebuilt binary
-   Download the archive for your platform from:
+2. Prebuilt binary. Download the archive for your platform from:
 
    https://github.com/yatesdr/go-llm-proxy/releases
 
-   Extract it, copy `config.yaml.example` to `config.yaml`, and run `go-llm-proxy`.
+   Then:
+
+```bash
+cp config.yaml.example config.yaml
+./go-llm-proxy -config ./config.yaml
+```
 
 Docker images are published to GHCR on version tags and stable releases also update `:latest`.
-
-## Build From Source
-
-```bash
-go build -o go-llm-proxy .
-```
-
-Or cross-compile for a Linux server:
-
-```bash
-GOOS=linux GOARCH=amd64 go build -o go-llm-proxy .
-```
-
-## Docker
-
-Build locally:
-
-```bash
-docker build -t go-llm-proxy .
-```
-
-Run with a mounted config file:
-
-```bash
-docker run --rm \
-  -p 8080:8080 \
-  -v $(pwd)/config.yaml:/config/config.yaml:ro \
-  go-llm-proxy
-```
-
-Or use the published image:
-
-```bash
-docker run --rm \
-  -p 8080:8080 \
-  -v $(pwd)/config.yaml:/config/config.yaml:ro \
-  ghcr.io/yatesdr/go-llm-proxy:latest
-```
-
-If you prefer Compose, a sample file is included at `docker-compose.yml`:
-
-```bash
-docker compose up -d
-```
+The Docker image does not bake in a config file; mount your own `config.yaml` at `/config/config.yaml`.
 
 ## Configuration
 
@@ -184,96 +143,15 @@ This is why nginx should stay a plain pass-through proxy and why the `backend` v
 
 Remove the `keys` section entirely to disable authentication (not recommended for public exposure).
 
-## Running
+## More Docs
+
+- Docker: [doc/docker.md](/Users/derek/Library/Mobile%20Documents/com~apple~CloudDocs/Code/go-llm/doc/docker.md)
+- Deployment, systemd, and nginx: [doc/deployment.md](/Users/derek/Library/Mobile%20Documents/com~apple~CloudDocs/Code/go-llm/doc/deployment.md)
+- Build from source:
 
 ```bash
-./go-llm-proxy -config /path/to/config.yaml
+go build -o go-llm-proxy .
 ```
-
-### Hot-reload config
-
-After editing `config.yaml`, reload without restarting:
-
-```bash
-kill -HUP $(pidof go-llm-proxy)
-```
-
-The proxy validates the new config before applying it. If validation fails, the old config stays active and an error is logged.
-
-### Systemd service
-
-Create `/etc/systemd/system/go-llm-proxy.service`:
-
-```ini
-[Unit]
-Description=go-llm-proxy
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/go-llm-proxy -config /etc/go-llm-proxy/config.yaml
-ExecReload=/bin/kill -HUP $MAINPID
-Restart=on-failure
-RestartSec=5
-LimitNOFILE=65536
-
-# Security hardening
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-ReadOnlyPaths=/etc/go-llm-proxy
-PrivateTmp=true
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now go-llm-proxy
-```
-
-Reload config via systemd:
-
-```bash
-sudo systemctl reload go-llm-proxy
-```
-
-## Nginx configuration
-
-Add this inside your existing server block that handles TLS termination, for example one managed by Certbot:
-
-```nginx
-server {
-    server_name llm.example.com;
-
-    # Proxy to go-llm-proxy without rewriting paths.
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-
-        # Pass real client IP for rate limiting
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header Host $host;
-
-        # Streaming support — disable buffering
-        proxy_buffering off;
-        proxy_cache off;
-        chunked_transfer_encoding on;
-
-        # Timeouts — match the longest model timeout in your config
-        proxy_read_timeout 600s;
-        proxy_send_timeout 600s;
-        proxy_connect_timeout 10s;
-
-        # Request body size — match go-llm-proxy's limit (50 MB for vision/audio)
-        client_max_body_size 50m;
-    }
-}
-```
-
-If go-llm-proxy runs on a different host from nginx, replace `127.0.0.1` with the internal IP. Keep nginx as a plain pass-through proxy here; go-llm-proxy handles translating `/v1/...` requests to each configured backend base URL, including provider-specific paths like `https://api.z.ai/api/coding/paas/v4`.
 
 ## Supported endpoints
 
