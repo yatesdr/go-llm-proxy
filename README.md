@@ -20,11 +20,26 @@ Most useful for when you have some local models that you want to serve, and best
 
 ## Quick Start
 
-The easiest way to get started is to download a prebuilt binary from the GitHub releases page:
+There are two easy deployment paths:
 
-https://github.com/yatesdr/go-llm-proxy/releases
+1. Docker
+   Often the easiest option for servers, especially if you already use nginx, Compose, or container-based deployment.
 
-Choose the archive for your platform, extract it, and run `go-llm-proxy` with your config file.
+```bash
+docker run --rm \
+  -p 8080:8080 \
+  -v $(pwd)/config.yaml:/config/config.yaml:ro \
+  ghcr.io/yatesdr/go-llm-proxy:latest
+```
+
+2. Prebuilt binary
+   Download the archive for your platform from:
+
+   https://github.com/yatesdr/go-llm-proxy/releases
+
+   Extract it, copy `config.yaml.example` to `config.yaml`, and run `go-llm-proxy`.
+
+Docker images are published to GHCR on version tags and stable releases also update `:latest`.
 
 ## Build From Source
 
@@ -38,6 +53,38 @@ Or cross-compile for a Linux server:
 GOOS=linux GOARCH=amd64 go build -o go-llm-proxy .
 ```
 
+## Docker
+
+Build locally:
+
+```bash
+docker build -t go-llm-proxy .
+```
+
+Run with a mounted config file:
+
+```bash
+docker run --rm \
+  -p 8080:8080 \
+  -v $(pwd)/config.yaml:/config/config.yaml:ro \
+  go-llm-proxy
+```
+
+Or use the published image:
+
+```bash
+docker run --rm \
+  -p 8080:8080 \
+  -v $(pwd)/config.yaml:/config/config.yaml:ro \
+  ghcr.io/yatesdr/go-llm-proxy:latest
+```
+
+If you prefer Compose, a sample file is included at `docker-compose.yml`:
+
+```bash
+docker compose up -d
+```
+
 ## Configuration
 
 Copy the example config and edit it:
@@ -45,6 +92,8 @@ Copy the example config and edit it:
 ```bash
 cp config.yaml.example config.yaml
 ```
+
+If you are deploying with Docker, mount that file into the container as `/config/config.yaml`.
 
 ### config.yaml
 

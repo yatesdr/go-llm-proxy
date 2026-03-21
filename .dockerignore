@@ -1,4 +1,7 @@
+.git
+.github
+.DS_Store
 go-llm
 go-llm-proxy
 config.yaml
-.DS_Store
+dist

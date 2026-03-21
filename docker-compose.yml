@@ -1,0 +1,10 @@
+services:
+  go-llm-proxy:
+    build: .
+    image: ghcr.io/yatesdr/go-llm-proxy:latest
+    container_name: go-llm-proxy
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
