@@ -18,7 +18,15 @@ Most useful for when you have some local models that you want to serve, and best
 - Graceful shutdown — active connections drain on restart
 - Hardened for public internet exposure
 
-## Building
+## Quick Start
+
+The easiest way to get started is to download a prebuilt binary from the GitHub releases page:
+
+https://github.com/yatesdr/go-llm-proxy/releases
+
+Choose the archive for your platform, extract it, and run `go-llm-proxy` with your config file.
+
+## Build From Source
 
 ```bash
 go build -o go-llm-proxy .
