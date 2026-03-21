@@ -80,10 +80,42 @@ keys:
 | Field | Required | Description |
 |-------|----------|-------------|
 | `name` | yes | Model name clients use in requests |
-| `backend` | yes | Upstream URL (must include `/v1` path if backend expects it) |
+| `backend` | yes | Upstream base URL. This can be `/v1` for OpenAI-compatible servers or a provider-specific root such as `/api/coding/paas/v4`. |
 | `api_key` | no | Bearer token sent to the backend |
 | `model` | no | Model name sent to the backend (defaults to `name`) |
 | `timeout` | no | Request timeout in seconds (default: 300) |
+
+### Backend URL examples
+
+Use the backend's base path, not a hardcoded `/v1` assumption:
+
+```yaml
+models:
+  # Standard OpenAI-compatible backend
+  - name: MiniMax-M2.5
+    backend: http://192.168.100.10:8000/v1
+    api_key: your-backend-key
+
+  # Provider-specific root path: requests like /v1/chat/completions
+  # are appended to /api/coding/paas/v4 by go-llm-proxy.
+  - name: glm-5
+    backend: https://api.z.ai/api/coding/paas/v4
+    api_key: your-provider-key
+```
+
+For example, a client request to:
+
+```text
+POST /v1/chat/completions
+```
+
+is sent upstream as:
+
+```text
+https://api.z.ai/api/coding/paas/v4/chat/completions
+```
+
+This is why nginx should stay a plain pass-through proxy and why the `backend` value should point at the provider's actual base path.
 
 ### Key fields
 
@@ -152,20 +184,15 @@ sudo systemctl reload go-llm-proxy
 
 ## Nginx configuration
 
-Add this to your existing nginx server block that handles TLS termination for `llm.example.com`:
+Add this inside your existing server block that handles TLS termination, for example one managed by Certbot:
 
 ```nginx
 server {
-    listen 443 ssl http2;
-    server_name llm.your-site.com;
+    server_name llm.example.com;
 
-    # Your existing TLS config
-    ssl_certificate     /path/to/cert.pem;
-    ssl_certificate_key /path/to/key.pem;
-
-    # Proxy to go-llm-proxy
-    location /v1/ {
-        proxy_pass http://127.0.0.1:8080/v1/;
+    # Proxy to go-llm-proxy without rewriting paths.
+    location / {
+        proxy_pass http://127.0.0.1:8080;
 
         # Pass real client IP for rate limiting
         proxy_set_header X-Real-IP $remote_addr;
@@ -189,7 +216,7 @@ server {
 }
 ```
 
-If go-llm-proxy runs on a different host from nginx, replace `127.0.0.1` with the internal IP.
+If go-llm-proxy runs on a different host from nginx, replace `127.0.0.1` with the internal IP. Keep nginx as a plain pass-through proxy here; go-llm-proxy handles translating `/v1/...` requests to each configured backend base URL, including provider-specific paths like `https://api.z.ai/api/coding/paas/v4`.
 
 ## Supported endpoints
 
