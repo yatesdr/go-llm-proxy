@@ -2,7 +2,11 @@
 
 A lightweight, secure LLM API proxy that aggregates multiple backends (vLLM, llama-server, cloud APIs) behind a single OpenAI-compatible endpoint.
 
-No database or dependencies - single binary and a YAML config file.
+This was built to proxy internally hosted models on a single endpoint, combine them with your subscription plans, and make it easy to select the models you want to use.   For example, if you're running a production model on VLLM and an embeddings model on llama-server, you can join them and proxy through go-llm-proxy to list both models on the same endpoint, then also link in your gpt or glm subs to allow for easily switching models and testing or serving them in production.
+
+This use-case is also served by litellm[proxy], but this is a much lighter weight approach and much simpler to install and configure.  No database or dependencies - single binary and a YAML config file.
+
+If serving publicly, it's probably best to put an NGINX reverse proxy ahead of this (see config examples later for this), and to make sure you select secure and lengthy API keys.   Basic security best practices are included for throttling and banning, but no guarantee is made as to suitability for any particular use.
 
 ## Features
 
