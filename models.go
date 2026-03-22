@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"net/http"
-	"time"
 )
 
 // ModelsHandler serves GET /v1/models — returns the aggregated model list.
@@ -39,7 +38,7 @@ func (h *ModelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		models = append(models, modelObj{
 			ID:       m.Name,
 			Object:   "model",
-			Created:  time.Now().Unix(),
+			Created:  0,
 			OwnedBy: "organization",
 		})
 	}

@@ -231,7 +231,8 @@ func extractModelFromMultipart(body []byte, contentType string) string {
 	return ""
 }
 
-// rewriteModelName replaces only the "model" field in JSON without re-serializing other fields.
+// rewriteModelName replaces the "model" field in a JSON body. Other field values
+// are preserved as raw bytes via json.RawMessage, but top-level key order may change.
 func rewriteModelName(body []byte, newName string) []byte {
 	var m map[string]json.RawMessage
 	if json.Unmarshal(body, &m) != nil {
