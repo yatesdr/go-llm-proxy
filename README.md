@@ -179,10 +179,10 @@ Rate limiting applies only to failed authentication attempts. Valid API keys are
 | Failed attempts | Action |
 |-----------------|--------|
 | 1-2 | Normal response |
-| 3-9 | Progressive delay: 1s, 2s, 4s, 8s... up to 30s |
-| 10+ | IP blocked for 15 minutes |
+| 3-4 | Throttled (computed delay within tolerance) |
+| 5+ | Rejected with 429 |
 
-Strikes decay at 1 per minute of inactivity. Stale records are cleaned up every 5 minutes.
+Strikes decay at 1 per minute of inactivity. An IP rejected at 5 failures recovers after ~5 minutes without further attempts. Stale records are cleaned up every 5 minutes.
 
 ## Client usage
 

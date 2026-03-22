@@ -11,19 +11,16 @@ import (
 )
 
 const (
-	defaultThrottleAfter = 3           // start throttling after this many failures
-	defaultBlockAfter    = 10          // block entirely after this many failures
-	defaultBlockDuration = 15 * time.Minute
-	defaultDecayInterval = 1 * time.Minute // remove one strike per interval of no activity
+	defaultThrottleAfter = 3                // start throttling after this many failures
+	defaultDecayInterval = 1 * time.Minute  // remove one strike per interval of no activity
 	defaultCleanupEvery  = 5 * time.Minute
-	maxTrackedIPs        = 100000 // hard cap to prevent memory exhaustion
+	maxTrackedIPs        = 100000          // hard cap to prevent memory exhaustion
 	maxThrottleDelay     = 2 * time.Second // above this, just reject immediately
 )
 
 type ipRecord struct {
-	failures     int
-	lastFailure  time.Time
-	blockedUntil time.Time
+	failures    int
+	lastFailure time.Time
 }
 
 type RateLimiter struct {
@@ -31,8 +28,6 @@ type RateLimiter struct {
 	ips map[string]*ipRecord
 
 	throttleAfter int
-	blockAfter    int
-	blockDuration time.Duration
 	decayInterval time.Duration
 
 	// trustedProxies are CIDR ranges that are allowed to set X-Real-IP / X-Forwarded-For.
@@ -62,8 +57,6 @@ func NewRateLimiter(trustedProxies []string) *RateLimiter {
 	rl := &RateLimiter{
 		ips:            make(map[string]*ipRecord),
 		throttleAfter:  defaultThrottleAfter,
-		blockAfter:     defaultBlockAfter,
-		blockDuration:  defaultBlockDuration,
 		decayInterval:  defaultDecayInterval,
 		trustedProxies: nets,
 	}
@@ -91,14 +84,7 @@ func (rl *RateLimiter) RecordFailure(ip string) {
 	rec.failures++
 	rec.lastFailure = time.Now()
 
-	if rec.failures >= rl.blockAfter {
-		rec.blockedUntil = time.Now().Add(rl.blockDuration)
-		slog.Warn("IP blocked",
-			"ip", ip,
-			"failures", rec.failures,
-			"blocked_until", rec.blockedUntil.Format(time.RFC3339),
-		)
-	} else if rec.failures >= rl.throttleAfter {
+	if rec.failures >= rl.throttleAfter {
 		slog.Warn("IP throttled",
 			"ip", ip,
 			"failures", rec.failures,
@@ -129,17 +115,6 @@ func (rl *RateLimiter) Check(ip string) (allowed bool) {
 		}
 	}
 
-	// Check if currently blocked.
-	if time.Now().Before(rec.blockedUntil) {
-		return false
-	}
-
-	// If was blocked but block expired, reset to throttle level.
-	if !rec.blockedUntil.IsZero() && time.Now().After(rec.blockedUntil) {
-		rec.blockedUntil = time.Time{}
-		rec.failures = rl.throttleAfter
-	}
-
 	// If in throttle range, compute delay — if too high, just reject.
 	if rec.failures >= rl.throttleAfter {
 		exponent := rec.failures - rl.throttleAfter
@@ -160,9 +135,7 @@ func (rl *RateLimiter) cleanup() {
 		rl.mu.Lock()
 		now := time.Now()
 		for ip, rec := range rl.ips {
-			stale := now.Sub(rec.lastFailure) > rl.decayInterval*time.Duration(rec.failures+1)
-			unblocked := now.After(rec.blockedUntil)
-			if stale && unblocked {
+			if now.Sub(rec.lastFailure) > rl.decayInterval*time.Duration(rec.failures+1) {
 				delete(rl.ips, ip)
 			}
 		}
