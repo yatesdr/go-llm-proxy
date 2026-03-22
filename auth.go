@@ -58,18 +58,16 @@ func extractBearer(r *http.Request) string {
 }
 
 func findKey(cfg *Config, token string) *KeyConfig {
-	// Hash both values to fixed length before comparing.
-	// This prevents length oracle attacks from subtle.ConstantTimeCompare.
+	// Hash to fixed length before comparing to prevent length oracle attacks.
 	tokenHash := sha256.Sum256([]byte(token))
 
-	var match *KeyConfig
 	for i := range cfg.Keys {
 		keyHash := sha256.Sum256([]byte(cfg.Keys[i].Key))
 		if subtle.ConstantTimeCompare(tokenHash[:], keyHash[:]) == 1 {
-			match = &cfg.Keys[i]
+			return &cfg.Keys[i]
 		}
 	}
-	return match
+	return nil
 }
 
 // keyAllowsModel checks if the key is authorized for the given model.

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"log/slog"
-	"math"
 	"net"
 	"net/http"
 	"strings"
@@ -12,11 +11,10 @@ import (
 )
 
 const (
-	defaultThrottleAfter = 3                // start throttling after this many failures
-	defaultDecayInterval = 1 * time.Minute  // remove one strike per interval of no activity
+	defaultThrottleAfter = 3               // start throttling after this many failures
+	defaultDecayInterval = 1 * time.Minute // remove one strike per interval of no activity
 	defaultCleanupEvery  = 5 * time.Minute
-	maxTrackedIPs        = 100000          // hard cap to prevent memory exhaustion
-	maxThrottleDelay     = 2 * time.Second // above this, just reject immediately
+	maxTrackedIPs        = 100000 // hard cap to prevent memory exhaustion
 )
 
 type ipRecord struct {
@@ -39,20 +37,17 @@ type RateLimiter struct {
 
 func NewRateLimiter(trustedProxies []string) *RateLimiter {
 	var nets []*net.IPNet
-	for _, cidr := range trustedProxies {
-		_, ipNet, err := net.ParseCIDR(cidr)
-		if err != nil {
-			// Try as single IP.
-			ip := net.ParseIP(cidr)
-			if ip != nil {
-				if ip.To4() != nil {
-					_, ipNet, _ = net.ParseCIDR(cidr + "/32")
-				} else {
-					_, ipNet, _ = net.ParseCIDR(cidr + "/128")
-				}
+	for _, entry := range trustedProxies {
+		// Normalize bare IPs to CIDR notation.
+		cidr := entry
+		if !strings.Contains(entry, "/") {
+			if strings.Contains(entry, ":") {
+				cidr = entry + "/128"
+			} else {
+				cidr = entry + "/32"
 			}
 		}
-		if ipNet != nil {
+		if _, ipNet, err := net.ParseCIDR(cidr); err == nil {
 			nets = append(nets, ipNet)
 		}
 	}
@@ -125,10 +120,10 @@ func (rl *RateLimiter) Check(ip string) (allowed bool) {
 		}
 	}
 
-	// If in throttle range, reject once exponential delay exceeds the threshold.
+	// If in throttle range, reject once exponential delay exceeds maxThrottleDelay.
+	// Delay is 1000ms * 2^exponent; exceeds 2000ms when exponent >= 2.
 	if rec.failures >= rl.throttleAfter {
-		exponent := rec.failures - rl.throttleAfter
-		if 1000*math.Pow(2, float64(exponent)) > float64(maxThrottleDelay/time.Millisecond) {
+		if rec.failures-rl.throttleAfter >= 2 {
 			return false
 		}
 	}
@@ -223,22 +218,19 @@ func (rl *RateLimiter) isTrustedProxy(host string) bool {
 // statusRecorder captures the HTTP status code written by downstream handlers.
 type statusRecorder struct {
 	http.ResponseWriter
-	status      int
-	wroteHeader bool
+	status int
 }
 
 func (sr *statusRecorder) WriteHeader(code int) {
-	if !sr.wroteHeader {
+	if sr.status == 0 {
 		sr.status = code
-		sr.wroteHeader = true
 	}
 	sr.ResponseWriter.WriteHeader(code)
 }
 
 func (sr *statusRecorder) Write(b []byte) (int, error) {
-	if !sr.wroteHeader {
+	if sr.status == 0 {
 		sr.status = http.StatusOK
-		sr.wroteHeader = true
 	}
 	return sr.ResponseWriter.Write(b)
 }

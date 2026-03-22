@@ -25,7 +25,7 @@ func (h *ModelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		OwnedBy string `json:"owned_by"`
 	}
 
-	var models []modelObj
+	models := make([]modelObj, 0, len(cfg.Models))
 	for _, m := range cfg.Models {
 		if !keyAllowsModel(key, m.Name) {
 			continue
