@@ -69,6 +69,7 @@ func main() {
 		if err := srv.Shutdown(ctx); err != nil {
 			slog.Error("shutdown error", "error", err)
 		}
+		rl.Close()
 	}()
 
 	slog.Info("starting server", "listen", cfg.Listen)

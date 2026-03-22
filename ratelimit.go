@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"math"
 	"net"
@@ -32,6 +33,8 @@ type RateLimiter struct {
 
 	// trustedProxies are CIDR ranges that are allowed to set X-Real-IP / X-Forwarded-For.
 	trustedProxies []*net.IPNet
+
+	cancel context.CancelFunc
 }
 
 func NewRateLimiter(trustedProxies []string) *RateLimiter {
@@ -54,15 +57,22 @@ func NewRateLimiter(trustedProxies []string) *RateLimiter {
 		}
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	rl := &RateLimiter{
 		ips:            make(map[string]*ipRecord),
 		throttleAfter:  defaultThrottleAfter,
 		decayInterval:  defaultDecayInterval,
 		trustedProxies: nets,
+		cancel:         cancel,
 	}
 
-	go rl.cleanup()
+	go rl.cleanup(ctx)
 	return rl
+}
+
+// Close stops the background cleanup goroutine.
+func (rl *RateLimiter) Close() {
+	rl.cancel()
 }
 
 // RecordFailure registers a failed auth attempt from an IP.
@@ -126,18 +136,24 @@ func (rl *RateLimiter) Check(ip string) (allowed bool) {
 	return true
 }
 
-// cleanup periodically removes stale IP records.
-func (rl *RateLimiter) cleanup() {
+// cleanup periodically removes stale IP records until ctx is cancelled.
+func (rl *RateLimiter) cleanup(ctx context.Context) {
 	ticker := time.NewTicker(defaultCleanupEvery)
-	for range ticker.C {
-		rl.mu.Lock()
-		now := time.Now()
-		for ip, rec := range rl.ips {
-			if now.Sub(rec.lastFailure) > rl.decayInterval*time.Duration(rec.failures+1) {
-				delete(rl.ips, ip)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			rl.mu.Lock()
+			now := time.Now()
+			for ip, rec := range rl.ips {
+				if now.Sub(rec.lastFailure) > rl.decayInterval*time.Duration(rec.failures+1) {
+					delete(rl.ips, ip)
+				}
 			}
+			rl.mu.Unlock()
 		}
-		rl.mu.Unlock()
 	}
 }
 
