@@ -1,11 +1,25 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"net/http"
 	"strings"
 )
+
+type contextKey int
+
+const keyContextKey contextKey = iota
+
+func withKeyContext(ctx context.Context, key *KeyConfig) context.Context {
+	return context.WithValue(ctx, keyContextKey, key)
+}
+
+func keyFromContext(ctx context.Context) *KeyConfig {
+	key, _ := ctx.Value(keyContextKey).(*KeyConfig)
+	return key
+}
 
 // AuthMiddleware validates Bearer tokens against configured keys.
 func AuthMiddleware(cs *ConfigStore, next http.Handler) http.Handler {

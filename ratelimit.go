@@ -115,12 +115,10 @@ func (rl *RateLimiter) Check(ip string) (allowed bool) {
 		}
 	}
 
-	// If in throttle range, compute delay — if too high, just reject.
+	// If in throttle range, reject once exponential delay exceeds the threshold.
 	if rec.failures >= rl.throttleAfter {
 		exponent := rec.failures - rl.throttleAfter
-		delayMs := math.Min(float64(1000*math.Pow(2, float64(exponent))), 30000)
-		delay := time.Duration(delayMs) * time.Millisecond
-		if delay > maxThrottleDelay {
+		if 1000*math.Pow(2, float64(exponent)) > float64(maxThrottleDelay/time.Millisecond) {
 			return false
 		}
 	}

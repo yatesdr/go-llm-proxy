@@ -15,11 +15,6 @@ func NewModelsHandler(cs *ConfigStore) *ModelsHandler {
 }
 
 func (h *ModelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
 	cfg := h.config.Get()
 	key := keyFromContext(r.Context())
 
