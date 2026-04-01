@@ -194,6 +194,8 @@ select:focus,input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 
 .tab.active{color:var(--blue);border-bottom-color:var(--blue);font-weight:600}
 .tab-content{display:none}
 .tab-content.active{display:block}
+.cmd-tab{display:none}
+.cmd-tab.active{display:block}
 
 /* ---- Install steps ---- */
 .install-steps{font-size:.88rem;line-height:1.7}
@@ -508,8 +510,24 @@ function renderOutput(r){
 
   document.getElementById("configTitle").textContent = r.title || "Configuration File";
   const co = document.getElementById("configOutput");
-  co.innerHTML = '<div style="margin-bottom:6px"><span class="file-path">' + esc(r.filename) + '</span></div>' +
-    '<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button>' + esc(r.config) + '</div>';
+
+  if(r.configTabs){
+    // Tabbed code blocks (e.g. start command with macOS/Linux + PowerShell)
+    const tabKeys = Object.keys(r.configTabs);
+    let tabsHtml = '<div class="tabs" style="margin-bottom:0">';
+    tabKeys.forEach((k,i) => {
+      tabsHtml += '<button class="tab' + (i===0?' active':'') + '" onclick="switchCmdTab(this,\'' + i + '\')">' + esc(k) + '</button>';
+    });
+    tabsHtml += '</div>';
+    tabKeys.forEach((k,i) => {
+      tabsHtml += '<div class="cmd-tab' + (i===0?' active':'') + '" data-idx="' + i + '">' +
+        '<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button>' + esc(r.configTabs[k]) + '</div></div>';
+    });
+    co.innerHTML = tabsHtml;
+  } else {
+    co.innerHTML = '<div style="margin-bottom:6px"><span class="file-path">' + esc(r.filename) + '</span></div>' +
+      '<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button>' + esc(r.config) + '</div>';
+  }
 
   // Download buttons (per-OS scripts)
   if(r.downloads){
@@ -673,16 +691,20 @@ function genClaudeCodeCommand(apiKey, tavily){
   ps1Lines.push("", "claude --settings '" + settingsJSON + "' @args");
   const ps1Content = ps1Lines.join("\r\n") + "\r\n";
 
-  // Display the unix version as the "config" block (most common)
-  const displayLines = [];
-  vars.forEach(([k,v]) => displayLines.push(k + '="' + v + '" \\'));
-  displayLines.push("claude --settings '" + settingsJSON + "'");
-  const displayCmd = displayLines.join("\n");
+  // Display versions per OS
+  const unixLines = [];
+  vars.forEach(([k,v]) => unixLines.push(k + '="' + v + '" \\'));
+  unixLines.push("claude --settings '" + settingsJSON + "'");
+  const unixCmd = unixLines.join("\n");
+
+  const ps1Display = ps1Lines.slice(2).join("\n"); // skip header comments
 
   return {
     title: "Start Command",
-    config: displayCmd,
-    filename: "Inline command (macOS / Linux)",
+    configTabs: {
+      "macOS / Linux": unixCmd,
+      "PowerShell": ps1Display
+    },
     envBlock: null,
     downloads: [
       { name: "claude-proxy.sh", label: "Download .sh (macOS/Linux)", content: shContent },
@@ -867,6 +889,13 @@ function copyCode(btn){
   navigator.clipboard.writeText(text).then(()=>{
     btn.textContent="Copied!"; setTimeout(()=>{btn.textContent="Copy";},1500);
   });
+}
+
+function switchCmdTab(btn, idx){
+  const parent = btn.parentElement.parentElement;
+  parent.querySelectorAll(".tabs .tab").forEach(t=>t.classList.remove("active"));
+  btn.classList.add("active");
+  parent.querySelectorAll(".cmd-tab").forEach(t=>t.classList.toggle("active",t.dataset.idx===idx));
 }
 
 function switchOS(os){
