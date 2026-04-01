@@ -575,19 +575,30 @@ function genClaudeCode(apiKey, tavily){
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     "API_TIMEOUT_MS": "900000"
   };
-  if(tavily) env["TAVILY_API_KEY"] = tavily;
+
+  const settings = {
+    attribution: { commit: "", pr: "" },
+    env: env
+  };
+
+  if(tavily){
+    settings.mcpServers = {
+      tavily: {
+        command: "npx",
+        args: ["-y", "tavily-mcp-server"],
+        env: { TAVILY_API_KEY: tavily }
+      }
+    };
+  }
 
   const fn = "settings.json";
   const unixSteps = ol([
     'Create the config directory:<br><code>mkdir -p ~/.claude</code>',
     'Save the generated file as:<br><code>~/.claude/settings.json</code>',
     'Restart Claude Code for changes to take effect.',
-    'Verify by running <code>/status</code> inside Claude Code.'
+    'Verify by running <code>/status</code> inside Claude Code.' +
+    (tavily ? ' Web search is available via the Tavily MCP server (requires <code>npx</code>).' : '')
   ]);
-  const settings = {
-    attribution: { commit: "", pr: "" },
-    env: env
-  };
 
   return {
     config: JSON.stringify(settings, null, 2),
@@ -635,10 +646,14 @@ function genClaudeCodeCommand(apiKey, tavily){
     ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"],
     ["API_TIMEOUT_MS", "900000"]
   ];
-  if(tavily) vars.push(["TAVILY_API_KEY", tavily]);
-
   // Settings JSON for non-env-var options (passed via --settings)
-  const settingsJSON = JSON.stringify({attribution:{commit:"",pr:""}});
+  const settingsObj = {attribution:{commit:"",pr:""}};
+  if(tavily){
+    settingsObj.mcpServers = {
+      tavily: { command:"npx", args:["-y","tavily-mcp-server"], env:{TAVILY_API_KEY:tavily} }
+    };
+  }
+  const settingsJSON = JSON.stringify(settingsObj);
 
   // Unix shell script (.sh)
   const shLines = ["#!/usr/bin/env bash", "# go-llm-proxy: Claude Code start script", ""];
