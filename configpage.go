@@ -460,6 +460,19 @@ function populateClaudeSelects(){
   });
 }
 
+// Sync checkboxes: check+disable models selected in dropdowns
+function syncCheckboxes(containerId, selectIds){
+  const selected = new Set(selectIds.map(id=>document.getElementById(id).value));
+  document.querySelectorAll("#"+containerId+" input[type=checkbox]").forEach(cb=>{
+    if(selected.has(cb.value)){
+      cb.checked=true;
+      cb.disabled=true;
+    } else {
+      cb.disabled=false;
+    }
+  });
+}
+
 function populateOpenCodeSelects(){
   populateSelects(["buildModel","planModel"], {
     buildModel: "MiniMax-M2.5",
@@ -481,6 +494,10 @@ function populateOpenCodeSelects(){
     label.appendChild(span);
     container.appendChild(label);
   });
+  const sync = ()=>syncCheckboxes("ocAdditionalModels",["buildModel","planModel"]);
+  sync();
+  document.getElementById("buildModel").onchange = sync;
+  document.getElementById("planModel").onchange = sync;
 }
 
 function populateMultiSelects(){
@@ -509,6 +526,9 @@ function populateMultiSelects(){
     label.appendChild(span);
     container.appendChild(label);
   });
+  const sync = ()=>syncCheckboxes("additionalModels",["defaultModel"]);
+  sync();
+  defSel.onchange = sync;
 }
 
 function setDefault(id,val){ const s=document.getElementById(id); for(const o of s.options) if(o.value===val){s.value=val;return;} }
