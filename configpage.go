@@ -564,31 +564,25 @@ function genClaudeCode(apiKey, tavily){
   const agent = getModel(agentId);
   const planner = getModel(plannerId);
 
-  // Determine base URL based on backend protocols.
-  // Claude Code speaks Anthropic protocol natively.
-  // - If all models are anthropic-type: use /anthropic base (proxy validates backend type).
-  // - Otherwise: use /v1 base (proxy routes by model name).
-  const allAnthropic = agent.protocol==="anthropic" && planner.protocol==="anthropic";
-  const baseURL = allAnthropic ? (PROXY_ORIGIN + "/anthropic") : PROXY_URL;
-
+  // Claude Code uses the Anthropic SDK which appends /v1/messages to the base URL.
+  // So base URL must NOT include /v1 — just the origin.
   const env = {
-    "ANTHROPIC_BASE_URL": baseURL,
+    "ANTHROPIC_BASE_URL": PROXY_ORIGIN,
     "ANTHROPIC_API_KEY": apiKey,
 
     "ANTHROPIC_DEFAULT_SONNET_MODEL": agentId,
     "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME": displayName(agentId),
-    "ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES": "",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES": "thinking,interleaved_thinking",
 
     "ANTHROPIC_DEFAULT_OPUS_MODEL": plannerId,
     "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME": displayName(plannerId),
-    "ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES": "",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES": "thinking,interleaved_thinking",
 
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": agentId,
     "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME": displayName(agentId),
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES": "",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES": "thinking,interleaved_thinking",
 
     "DISABLE_PROMPT_CACHING": "1",
-    "CLAUDE_CODE_DISABLE_THINKING": "1",
     "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     "API_TIMEOUT_MS": "900000"
@@ -642,24 +636,20 @@ function genClaudeCodeCommand(apiKey, tavily){
   const agent = getModel(agentId);
   const planner = getModel(plannerId);
 
-  const allAnthropic = agent.protocol==="anthropic" && planner.protocol==="anthropic";
-  const baseURL = allAnthropic ? (PROXY_ORIGIN + "/anthropic") : PROXY_URL;
-
-  // Build env var map (same as config version)
+  // Claude Code uses the Anthropic SDK which appends /v1/messages to the base URL.
   const vars = [
-    ["ANTHROPIC_BASE_URL", baseURL],
+    ["ANTHROPIC_BASE_URL", PROXY_ORIGIN],
     ["ANTHROPIC_API_KEY", apiKey],
     ["ANTHROPIC_DEFAULT_SONNET_MODEL", agentId],
     ["ANTHROPIC_DEFAULT_SONNET_MODEL_NAME", displayName(agentId)],
-    ['ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES', ''],
+    ["ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES", "thinking,interleaved_thinking"],
     ["ANTHROPIC_DEFAULT_OPUS_MODEL", plannerId],
     ["ANTHROPIC_DEFAULT_OPUS_MODEL_NAME", displayName(plannerId)],
-    ['ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES', ''],
+    ["ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES", "thinking,interleaved_thinking"],
     ["ANTHROPIC_DEFAULT_HAIKU_MODEL", agentId],
     ["ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME", displayName(agentId)],
-    ['ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES', ''],
+    ["ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES", "thinking,interleaved_thinking"],
     ["DISABLE_PROMPT_CACHING", "1"],
-    ["CLAUDE_CODE_DISABLE_THINKING", "1"],
     ["CLAUDE_CODE_DISABLE_1M_CONTEXT", "1"],
     ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"],
     ["API_TIMEOUT_MS", "900000"]
