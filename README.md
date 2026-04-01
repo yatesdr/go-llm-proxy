@@ -1,6 +1,6 @@
 # go-llm-proxy
 
-A lightweight, secure LLM API proxy that aggregates multiple backends (vLLM, llama-server, cloud APIs) behind a single OpenAI-compatible endpoint.
+A lightweight, secure LLM API proxy that aggregates multiple backends (vLLM, llama-server, cloud APIs) behind a single endpoint. Supports both OpenAI and Anthropic API protocols.
 
 This was built to proxy internally hosted models on a single endpoint, combine them with your subscription plans, and make it easy to select the models you want to use.   For example, if you're running a production model on VLLM and an embeddings model on llama-server, you can join them and proxy through go-llm-proxy to list both models on the same endpoint, then also link in your gpt or glm subs to allow for easily switching models and testing or serving them in production.
 
@@ -10,10 +10,11 @@ If serving publicly, it's probably best to put an NGINX reverse proxy ahead of t
 
 ## Features
 
-- OpenAI-compatible API passthrough (completions, chat, embeddings, images, audio)
+- OpenAI and Anthropic API passthrough (completions, chat, embeddings, images, audio, messages)
+- Anthropic Messages API support via `/v1/messages` and explicit `/anthropic/` route prefix
 - Model name routing — clients request by name, proxy routes to the right backend
 - Model name rewriting — expose friendly names while backends use internal identifiers
-- API key authentication with per-key model access control
+- API key authentication with per-key model access control (supports both `Authorization: Bearer` and `x-api-key` headers)
 - IP-based rate limiting and throttling for failed auth attempts
 - Streaming (SSE) support with proper flush handling
 - Hot-reload config via `SIGHUP` — no downtime for model changes
@@ -83,6 +84,12 @@ models:
     api_key: anything
     timeout: 600
 
+  - name: claude-sonnet-4-20250514
+    backend: https://api.anthropic.com
+    api_key: sk-ant-your-anthropic-key
+    type: anthropic
+    timeout: 300
+
 keys:
   - key: sk-your-api-key-here
     name: admin
@@ -100,10 +107,11 @@ keys:
 | Field | Required | Description |
 |-------|----------|-------------|
 | `name` | yes | Model name clients use in requests |
-| `backend` | yes | Upstream base URL. This can be `/v1` for OpenAI-compatible servers or a provider-specific root such as `/api/coding/paas/v4`. |
-| `api_key` | no | Bearer token sent to the backend |
+| `backend` | yes | Upstream base URL (see [Backend URL examples](#backend-url-examples)) |
+| `api_key` | no | Token sent to the backend (`Bearer` for OpenAI, `x-api-key` for Anthropic) |
 | `model` | no | Model name sent to the backend (defaults to `name`) |
 | `timeout` | no | Request timeout in seconds (default: 300) |
+| `type` | no | Backend type: `"openai"` (default) or `"anthropic"` |
 
 ### Backend URL examples
 
@@ -121,27 +129,29 @@ models:
   - name: glm-5
     backend: https://api.z.ai/api/coding/paas/v4
     api_key: your-provider-key
+
+  # Anthropic backend — base URL omits /v1 (the proxy preserves it in the path)
+  - name: claude-sonnet-4-20250514
+    backend: https://api.anthropic.com
+    api_key: sk-ant-your-key
+    type: anthropic
+
+  # Third-party Anthropic-compatible endpoint
+  - name: MiniMax-M2.7
+    backend: https://api.minimax.io/anthropic
+    api_key: your-minimax-key
+    type: anthropic
 ```
 
-For example, a client request to:
+**OpenAI backends** (`type: openai` or default): The proxy strips `/v1` from the client path and appends the remainder to the backend URL. A client request to `POST /v1/chat/completions` with backend `https://api.z.ai/api/coding/paas/v4` is sent upstream as `https://api.z.ai/api/coding/paas/v4/chat/completions`.
 
-```text
-POST /v1/chat/completions
-```
-
-is sent upstream as:
-
-```text
-https://api.z.ai/api/coding/paas/v4/chat/completions
-```
-
-This is why nginx should stay a plain pass-through proxy and why the `backend` value should point at the provider's actual base path.
+**Anthropic backends** (`type: anthropic`): The proxy keeps `/v1` in the path. A client request to `POST /v1/messages` with backend `https://api.anthropic.com` is sent upstream as `https://api.anthropic.com/v1/messages`. This matches the Anthropic SDK convention where the base URL omits `/v1`.
 
 ### Key fields
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `key` | yes | The API key value clients send as `Bearer <key>` |
+| `key` | yes | The API key value clients send via `Authorization: Bearer` or `x-api-key` header |
 | `name` | yes | Friendly name for logging |
 | `models` | no | List of allowed model names. Empty or omitted = all models |
 
@@ -171,6 +181,22 @@ All endpoints are proxied transparently to the backend identified by the `model`
 | `POST /v1/audio/transcriptions` | Speech-to-text |
 | `POST /v1/audio/translations` | Audio translation |
 | `POST /v1/audio/speech` | Text-to-speech |
+| `POST /v1/messages` | Anthropic Messages API |
+| `POST /anthropic/v1/messages` | Anthropic Messages API (explicit prefix, validates backend type) |
+
+### The `/anthropic/` route prefix
+
+Clients can use `/anthropic/v1/...` instead of `/v1/...` to explicitly target Anthropic-type backends. Requests via this prefix are validated: if the resolved model is not `type: anthropic`, the proxy returns `400 Bad Request`.
+
+This allows Anthropic SDKs to use their standard base URL convention:
+
+```python
+# base_url omits /v1 — the SDK appends /v1/messages automatically
+client = anthropic.Anthropic(
+    base_url="https://llm.example.com/anthropic",
+    api_key="sk-your-proxy-key",
+)
+```
 
 ## Rate limiting
 
@@ -185,6 +211,8 @@ Rate limiting applies only to failed authentication attempts. Valid API keys are
 Strikes decay at 1 per minute of inactivity. An IP rejected at 5 failures recovers after ~5 minutes without further attempts. Stale records are cleaned up every 5 minutes.
 
 ## Client usage
+
+### OpenAI-compatible clients
 
 Any OpenAI-compatible client works. Point it at your endpoint and use the model names from your config:
 
@@ -205,6 +233,28 @@ response = client.chat.completions.create(
 for chunk in response:
     print(chunk.choices[0].delta.content or "", end="")
 ```
+
+### Anthropic-compatible clients
+
+Use the `/anthropic` prefix as the base URL so the SDK constructs the correct paths:
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(
+    base_url="https://llm.example.com/anthropic",
+    api_key="sk-your-api-key-here",
+)
+
+message = client.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+print(message.content[0].text)
+```
+
+Anthropic-style clients can also use `/v1/messages` directly without the prefix — the `/anthropic` prefix simply adds backend type validation.
 
 ## Security
 

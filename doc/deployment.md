@@ -88,4 +88,4 @@ server {
 }
 ```
 
-Keep nginx as a plain pass-through proxy. `go-llm-proxy` maps `/v1/...` requests onto each configured backend base URL, including provider-specific paths like `https://api.z.ai/api/coding/paas/v4`.
+Keep nginx as a plain pass-through proxy. `go-llm-proxy` maps `/v1/...` and `/anthropic/...` requests onto each configured backend base URL, including provider-specific paths like `https://api.z.ai/api/coding/paas/v4`.
