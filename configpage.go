@@ -607,38 +607,37 @@ function genClaudeCode(apiKey, tavily){
     env: env
   };
 
-  if(tavily){
-    settings.mcpServers = {
-      tavily: {
-        command: "npx",
-        args: ["-y", "tavily-mcp-server"],
-        env: { TAVILY_API_KEY: tavily }
-      }
-    };
-  }
-
   const fn = "settings.json";
-  const unixSteps = ol([
+  const tavilyJSON = tavily ? JSON.stringify({type:"http",url:"https://mcp.tavily.com/mcp",headers:{"Authorization":"Bearer "+tavily}}) : "";
+  const tavilyStep = tavily
+    ? 'Install Tavily web search:<br><code>claude mcp remove tavily -s user 2&gt;/dev/null; claude mcp add-json tavily \'' + esc(tavilyJSON) + '\' -s user</code>'
+    : "";
+  const tavilyStepWin = tavily
+    ? 'Install Tavily web search:<br><code>claude mcp remove tavily -s user 2>nul & claude mcp add-json tavily "' + esc(tavilyJSON.replace(/"/g,'\\"')) + '" -s user</code>'
+    : "";
+
+  const macLinuxSteps = [
     'Create the config directory:<br><code>mkdir -p ~/.claude</code>',
-    'Save the generated file as:<br><code>~/.claude/settings.json</code>',
-    'Restart Claude Code for changes to take effect.',
-    'Verify by running <code>/status</code> inside Claude Code.' +
-    (tavily ? ' Web search is available via the Tavily MCP server (requires <code>npx</code>).' : '')
-  ]);
+    'Save the generated file as:<br><code>~/.claude/settings.json</code>'
+  ];
+  if(tavilyStep) macLinuxSteps.push(tavilyStep);
+  macLinuxSteps.push('Restart Claude Code for changes to take effect.');
+
+  const winSteps = [
+    'Create the config directory:<br><code>mkdir %USERPROFILE%\\.claude</code>',
+    'Save the generated file as:<br><code>%USERPROFILE%\\.claude\\settings.json</code>'
+  ];
+  if(tavilyStepWin) winSteps.push(tavilyStepWin);
+  winSteps.push('Restart Claude Code for changes to take effect.');
 
   return {
     config: JSON.stringify(settings, null, 2),
     filename: fn,
     envBlock: null,
     install: {
-      macos: unixSteps,
-      linux: unixSteps,
-      windows: ol([
-        'Create the config directory:<br><code>mkdir %USERPROFILE%\\.claude</code>',
-        'Save the generated file as:<br><code>%USERPROFILE%\\.claude\\settings.json</code>',
-        'Restart Claude Code for changes to take effect.',
-        'Verify by running <code>/status</code> inside Claude Code.'
-      ])
+      macos: ol(macLinuxSteps),
+      linux: ol(macLinuxSteps),
+      windows: ol(winSteps)
     }
   };
 }
@@ -668,29 +667,41 @@ function genClaudeCodeCommand(apiKey, tavily){
     ["API_TIMEOUT_MS", "900000"]
   ];
   // Settings JSON for non-env-var options (passed via --settings)
-  const settingsObj = {attribution:{commit:"",pr:""}};
-  if(tavily){
-    settingsObj.mcpServers = {
-      tavily: { command:"npx", args:["-y","tavily-mcp-server"], env:{TAVILY_API_KEY:tavily} }
-    };
-  }
-  const settingsJSON = JSON.stringify(settingsObj);
+  const settingsJSON = JSON.stringify({attribution:{commit:"",pr:""}});
+
+  // Tavily MCP setup commands (idempotent: remove then add-json)
+  const tavilyMcpJSON = tavily ? JSON.stringify({type:"http",url:"https://mcp.tavily.com/mcp",headers:{"Authorization":"Bearer "+tavily}}) : "";
 
   // Unix shell script (.sh)
   const shLines = ["#!/usr/bin/env bash", "# go-llm-proxy: Claude Code start script", ""];
   vars.forEach(([k,v]) => shLines.push('export ' + k + '="' + v + '"'));
+  if(tavily){
+    shLines.push("", "# Configure Tavily web search");
+    shLines.push("claude mcp remove tavily -s user 2>/dev/null");
+    shLines.push("claude mcp add-json tavily '" + tavilyMcpJSON + "' -s user");
+  }
   shLines.push("", "claude --settings '" + settingsJSON + "' \"$@\"");
   const shContent = shLines.join("\n") + "\n";
 
   // Windows batch file (.bat)
   const batLines = ["@echo off", "REM go-llm-proxy: Claude Code start script", ""];
   vars.forEach(([k,v]) => batLines.push("set " + k + "=" + v));
+  if(tavily){
+    batLines.push("", "REM Configure Tavily web search");
+    batLines.push('claude mcp remove tavily -s user 2>nul');
+    batLines.push('claude mcp add-json tavily "' + tavilyMcpJSON.replace(/"/g,'\\"') + '" -s user');
+  }
   batLines.push("", 'claude --settings "' + settingsJSON.replace(/"/g, '\\"') + '" %*');
   const batContent = batLines.join("\r\n") + "\r\n";
 
   // PowerShell script (.ps1)
   const ps1Lines = ["# go-llm-proxy: Claude Code start script", ""];
   vars.forEach(([k,v]) => ps1Lines.push('$env:' + k + ' = "' + v + '"'));
+  if(tavily){
+    ps1Lines.push("", "# Configure Tavily web search");
+    ps1Lines.push("claude mcp remove tavily -s user 2>$null");
+    ps1Lines.push("claude mcp add-json tavily '" + tavilyMcpJSON + "' -s user");
+  }
   ps1Lines.push("", "claude --settings '" + settingsJSON + "' @args");
   const ps1Content = ps1Lines.join("\r\n") + "\r\n";
 
