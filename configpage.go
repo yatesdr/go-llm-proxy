@@ -457,18 +457,10 @@ function populateClaudeSelects(){
 }
 
 function populateOpenCodeSelects(){
-  // Only OpenAI-protocol models work with OpenCode's openai-compatible provider
-  const oai = chatModels().filter(m=>m.protocol!=="anthropic");
-  ["buildModel","planModel"].forEach(id=>{
-    const sel=document.getElementById(id);
-    sel.innerHTML="";
-    oai.forEach(m=>{
-      const o=document.createElement("option"); o.value=m.id; o.textContent=optionText(m);
-      sel.appendChild(o);
-    });
+  populateSelects(["buildModel","planModel"], {
+    buildModel: "MiniMax-M2.5",
+    planModel: "qwen-3.5"
   });
-  setDefault("buildModel","MiniMax-M2.5");
-  setDefault("planModel","qwen-3.5");
 }
 
 function populateMultiSelects(){
@@ -830,29 +822,49 @@ function genOpenCode(apiKey, tavily){
   const agentId = document.getElementById("buildModel").value;
   const plannerId = document.getElementById("planModel").value;
 
-  // OpenCode uses @ai-sdk/openai-compatible which sends OpenAI-format requests.
-  // Anthropic-protocol models won't work through this provider.
-  const oaiChatModels = chatModels().filter(m=>m.protocol!=="anthropic");
-  const modelsObj = {};
-  oaiChatModels.forEach(m=>{
-    modelsObj[m.id] = { name: displayName(m.id) };
-  });
+  // Split models by protocol — OpenAI-compatible and Anthropic need separate providers.
+  const oaiModels = chatModels().filter(m=>m.protocol!=="anthropic");
+  const antModels = chatModels().filter(m=>m.protocol==="anthropic");
+
+  const oaiModelsObj = {};
+  oaiModels.forEach(m=>{ oaiModelsObj[m.id] = { name: displayName(m.id) }; });
+
+  const antModelsObj = {};
+  antModels.forEach(m=>{ antModelsObj[m.id] = { name: displayName(m.id) }; });
+
+  const providers = {};
+  if(oaiModels.length){
+    providers["go-llm-proxy"] = {
+      npm: "@ai-sdk/openai-compatible",
+      name: "go-llm-proxy (OpenAI)",
+      options: { baseURL: PROXY_URL, apiKey: apiKey },
+      models: oaiModelsObj
+    };
+  }
+  if(antModels.length){
+    providers["go-llm-proxy-ant"] = {
+      npm: "@ai-sdk/anthropic",
+      name: "go-llm-proxy (Anthropic)",
+      options: { baseURL: PROXY_ORIGIN + "/anthropic", apiKey: apiKey },
+      models: antModelsObj
+    };
+  }
+
+  // Prefix model IDs with their provider
+  function ocModel(id){
+    const m = getModel(id);
+    if(m && m.protocol==="anthropic") return "go-llm-proxy-ant/" + id;
+    return "go-llm-proxy/" + id;
+  }
 
   const obj = {
     "$schema": "https://opencode.ai/config.json",
-    provider: {
-      "go-llm-proxy": {
-        npm: "@ai-sdk/openai-compatible",
-        name: "go-llm-proxy",
-        options: { baseURL: PROXY_URL, apiKey: apiKey },
-        models: modelsObj
-      }
-    },
-    model: "go-llm-proxy/" + agentId,
-    small_model: "go-llm-proxy/" + agentId,
+    provider: providers,
+    model: ocModel(agentId),
+    small_model: ocModel(agentId),
     agent: {
-      build: { model: "go-llm-proxy/" + agentId, description: "Coding agent" },
-      plan:  { model: "go-llm-proxy/" + plannerId, description: "Planning agent" }
+      build: { model: ocModel(agentId), description: "Coding agent" },
+      plan:  { model: ocModel(plannerId), description: "Planning agent" }
     }
   };
 
