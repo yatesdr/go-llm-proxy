@@ -13,7 +13,13 @@ import (
 
 func main() {
 	configPath := flag.String("config", "config.yaml", "path to config file")
+	addUser := flag.Bool("adduser", false, "interactively add a new API key to the config")
 	flag.Parse()
+
+	if *addUser {
+		runAddUser(*configPath)
+		return
+	}
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
