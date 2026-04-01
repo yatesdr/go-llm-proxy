@@ -584,8 +584,13 @@ function genClaudeCode(apiKey, tavily){
     'Restart Claude Code for changes to take effect.',
     'Verify by running <code>/status</code> inside Claude Code.'
   ]);
+  const settings = {
+    attribution: { commit: "", pr: "" },
+    env: env
+  };
+
   return {
-    config: JSON.stringify({env}, null, 2),
+    config: JSON.stringify(settings, null, 2),
     filename: fn,
     envBlock: null,
     install: {
@@ -632,28 +637,31 @@ function genClaudeCodeCommand(apiKey, tavily){
   ];
   if(tavily) vars.push(["TAVILY_API_KEY", tavily]);
 
+  // Settings JSON for non-env-var options (passed via --settings)
+  const settingsJSON = JSON.stringify({attribution:{commit:"",pr:""}});
+
   // Unix shell script (.sh)
   const shLines = ["#!/usr/bin/env bash", "# go-llm-proxy: Claude Code start script", ""];
   vars.forEach(([k,v]) => shLines.push('export ' + k + '="' + v + '"'));
-  shLines.push("", "claude \"$@\"");
+  shLines.push("", "claude --settings '" + settingsJSON + "' \"$@\"");
   const shContent = shLines.join("\n") + "\n";
 
   // Windows batch file (.bat)
   const batLines = ["@echo off", "REM go-llm-proxy: Claude Code start script", ""];
   vars.forEach(([k,v]) => batLines.push("set " + k + "=" + v));
-  batLines.push("", "claude %*");
+  batLines.push("", 'claude --settings "' + settingsJSON.replace(/"/g, '\\"') + '" %*');
   const batContent = batLines.join("\r\n") + "\r\n";
 
   // PowerShell script (.ps1)
   const ps1Lines = ["# go-llm-proxy: Claude Code start script", ""];
   vars.forEach(([k,v]) => ps1Lines.push('$env:' + k + ' = "' + v + '"'));
-  ps1Lines.push("", "claude @args");
+  ps1Lines.push("", "claude --settings '" + settingsJSON + "' @args");
   const ps1Content = ps1Lines.join("\r\n") + "\r\n";
 
   // Display the unix version as the "config" block (most common)
   const displayLines = [];
   vars.forEach(([k,v]) => displayLines.push(k + '="' + v + '" \\'));
-  displayLines.push("claude");
+  displayLines.push("claude --settings '" + settingsJSON + "'");
   const displayCmd = displayLines.join("\n");
 
   return {
