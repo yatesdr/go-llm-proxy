@@ -845,7 +845,7 @@ function genOpenCode(apiKey, tavily){
     providers["go-llm-proxy-ant"] = {
       npm: "@ai-sdk/anthropic",
       name: "go-llm-proxy (Anthropic)",
-      options: { baseURL: PROXY_ORIGIN + "/anthropic", apiKey: apiKey },
+      options: { baseURL: PROXY_ORIGIN + "/anthropic/v1", apiKey: apiKey },
       models: antModelsObj
     };
   }
