@@ -705,18 +705,14 @@ function genClaudeCodeCommand(apiKey, tavily){
   ps1Lines.push("", "claude --settings '" + settingsJSON + "' @args");
   const ps1Content = ps1Lines.join("\r\n") + "\r\n";
 
-  // Display versions per OS
-  const unixLines = [];
-  vars.forEach(([k,v]) => unixLines.push(k + '="' + v + '" \\'));
-  unixLines.push("claude --settings '" + settingsJSON + "'");
-  const unixCmd = unixLines.join("\n");
-
-  const ps1Display = ps1Lines.slice(2).join("\n"); // skip header comments
+  // Display versions per OS (show full script content, skip shebang/header)
+  const shDisplay = shLines.slice(2).join("\n").trim();
+  const ps1Display = ps1Lines.slice(2).join("\n").trim();
 
   return {
     title: "Start Command",
     configTabs: {
-      "macOS / Linux": unixCmd,
+      "macOS / Linux": shDisplay,
       "PowerShell": ps1Display
     },
     envBlock: null,
