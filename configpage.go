@@ -847,11 +847,11 @@ function genOpenCode(apiKey, tavily){
   };
 
   if(tavily){
-    obj.env.TAVILY_API_KEY = tavily;
     obj.mcp = {
       tavily: {
         type: "remote",
-        url: "https://mcp.tavily.com/mcp?tavilyApiKey={env:TAVILY_API_KEY}",
+        url: "https://mcp.tavily.com/mcp",
+        headers: { "Authorization": "Bearer " + tavily },
         enabled: true
       }
     };
