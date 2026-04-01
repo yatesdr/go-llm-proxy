@@ -289,17 +289,17 @@ select:focus,input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 
         <div class="field">
           <label for="sonnetModel">Sonnet <span style="font-weight:400;text-transform:none">(default model)</span></label>
           <select id="sonnetModel"></select>
-          <div class="hint">Primary model for all tasks</div>
+          <label style="display:inline-flex;align-items:center;gap:5px;margin-top:5px;font-size:.82rem;font-weight:400;text-transform:none;letter-spacing:0;cursor:pointer"><input type="checkbox" id="sonnetThinking" checked style="width:14px;height:14px;accent-color:var(--blue)"> Thinking</label>
         </div>
         <div class="field">
           <label for="opusModel">Opus <span style="font-weight:400;text-transform:none">(large model)</span></label>
           <select id="opusModel"></select>
-          <div class="hint">Complex reasoning via /model opus</div>
+          <label style="display:inline-flex;align-items:center;gap:5px;margin-top:5px;font-size:.82rem;font-weight:400;text-transform:none;letter-spacing:0;cursor:pointer"><input type="checkbox" id="opusThinking" checked style="width:14px;height:14px;accent-color:var(--blue)"> Thinking</label>
         </div>
         <div class="field">
           <label for="haikuModel">Haiku <span style="font-weight:400;text-transform:none">(fast model)</span></label>
           <select id="haikuModel"></select>
-          <div class="hint">Background tasks (titles, summaries)</div>
+          <label style="display:inline-flex;align-items:center;gap:5px;margin-top:5px;font-size:.82rem;font-weight:400;text-transform:none;letter-spacing:0;cursor:pointer"><input type="checkbox" id="haikuThinking" style="width:14px;height:14px;accent-color:var(--blue)"> Thinking</label>
         </div>
       </div>
     </div>
@@ -570,6 +570,10 @@ function renderOutput(r){
 }
 
 // ---- Claude Code ----
+function thinkingCaps(checkboxId){
+  return document.getElementById(checkboxId).checked ? "thinking,interleaved_thinking" : "";
+}
+
 function genClaudeCode(apiKey, tavily){
   const sonnetId = document.getElementById("sonnetModel").value;
   const opusId = document.getElementById("opusModel").value;
@@ -582,15 +586,15 @@ function genClaudeCode(apiKey, tavily){
 
     "ANTHROPIC_DEFAULT_SONNET_MODEL": sonnetId,
     "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME": displayName(sonnetId),
-    "ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES": "thinking,interleaved_thinking",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES": thinkingCaps("sonnetThinking"),
 
     "ANTHROPIC_DEFAULT_OPUS_MODEL": opusId,
     "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME": displayName(opusId),
-    "ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES": "thinking,interleaved_thinking",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES": thinkingCaps("opusThinking"),
 
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": haikuId,
     "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME": displayName(haikuId),
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES": "thinking,interleaved_thinking",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES": thinkingCaps("haikuThinking"),
 
     "DISABLE_PROMPT_CACHING": "1",
     "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1",
@@ -651,13 +655,13 @@ function genClaudeCodeCommand(apiKey, tavily){
     ["ANTHROPIC_API_KEY", apiKey],
     ["ANTHROPIC_DEFAULT_SONNET_MODEL", sonnetId],
     ["ANTHROPIC_DEFAULT_SONNET_MODEL_NAME", displayName(sonnetId)],
-    ["ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES", "thinking,interleaved_thinking"],
+    ["ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES", thinkingCaps("sonnetThinking")],
     ["ANTHROPIC_DEFAULT_OPUS_MODEL", opusId],
     ["ANTHROPIC_DEFAULT_OPUS_MODEL_NAME", displayName(opusId)],
-    ["ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES", "thinking,interleaved_thinking"],
+    ["ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES", thinkingCaps("opusThinking")],
     ["ANTHROPIC_DEFAULT_HAIKU_MODEL", haikuId],
     ["ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME", displayName(haikuId)],
-    ["ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES", "thinking,interleaved_thinking"],
+    ["ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES", thinkingCaps("haikuThinking")],
     ["DISABLE_PROMPT_CACHING", "1"],
     ["CLAUDE_CODE_DISABLE_1M_CONTEXT", "1"],
     ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"],
