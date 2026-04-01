@@ -19,15 +19,16 @@ import (
 const maxRequestBodySize = 50 * 1024 * 1024
 
 // allowedPaths restricts which sub-paths can be proxied to backends.
-var allowedPaths = regexp.MustCompile(`^/v1/(chat/completions|completions|embeddings|images/generations|audio/(transcriptions|translations|speech))$`)
+var allowedPaths = regexp.MustCompile(`^/v1/(chat/completions|completions|embeddings|images/generations|audio/(transcriptions|translations|speech)|messages)$`)
 
 // allowedResponseHeaders controls which upstream headers are forwarded to clients.
 var allowedResponseHeaders = map[string]bool{
 	"Content-Type":          true,
 	"Content-Length":        true,
-	"X-Request-ID":         true,
+	"X-Request-ID":         true, // OpenAI
 	"Openai-Processing-Ms": true,
 	"Openai-Model":         true,
+	"Request-Id":           true, // Anthropic (different header from X-Request-ID)
 }
 
 type ProxyHandler struct {
@@ -54,8 +55,15 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate the request path against the allowlist.
+	// Check for /anthropic prefix — requests via this path must route to anthropic backends.
 	cleanPath := path.Clean(r.URL.Path)
+	requireAnthropic := false
+	if strings.HasPrefix(cleanPath, "/anthropic/") {
+		cleanPath = strings.TrimPrefix(cleanPath, "/anthropic")
+		requireAnthropic = true
+	}
+
+	// Validate the request path against the allowlist.
 	if !allowedPaths.MatchString(cleanPath) {
 		writeError(w, http.StatusNotFound, "unsupported endpoint")
 		return
@@ -101,6 +109,12 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Requests via /anthropic/ must only route to anthropic-type backends.
+	if requireAnthropic && model.Type != BackendAnthropic {
+		writeError(w, http.StatusBadRequest, "model is not an anthropic backend")
+		return
+	}
+
 	// Rewrite the model name in the body if the backend expects a different name.
 	if model.Model != modelName {
 		if isMultipart {
@@ -110,8 +124,13 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Build the upstream URL. Strip the /v1 prefix since backends include their own version path.
-	relPath := strings.TrimPrefix(cleanPath, "/v1")
+	// Build the upstream URL.
+	// OpenAI backends include /v1 in their base URL, so strip /v1 from the client path.
+	// Anthropic backends omit /v1 from their base URL (the SDK adds it), so keep the full path.
+	relPath := cleanPath
+	if model.Type != BackendAnthropic {
+		relPath = strings.TrimPrefix(cleanPath, "/v1")
+	}
 	upstreamURL := strings.TrimRight(model.Backend, "/") + relPath
 
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(model.Timeout)*time.Second)
@@ -124,11 +143,15 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Copy only specific headers from the client.
-	copyHeaders(upReq.Header, r.Header)
+	copyHeaders(upReq.Header, r.Header, model.Type)
 
-	// Set the backend API key if configured.
+	// Set the backend API key using the appropriate auth scheme.
 	if model.APIKey != "" {
-		upReq.Header.Set("Authorization", "Bearer "+model.APIKey)
+		if model.Type == BackendAnthropic {
+			upReq.Header.Set("X-Api-Key", model.APIKey)
+		} else {
+			upReq.Header.Set("Authorization", "Bearer "+model.APIKey)
+		}
 	}
 
 	keyName := ""
@@ -301,15 +324,28 @@ func rewriteModelInMultipart(body []byte, contentType string, newModel string) [
 	return buf.Bytes()
 }
 
-func copyHeaders(dst, src http.Header) {
-	forward := []string{
-		"Accept",
-		"Content-Type",
-		"X-Request-ID",
-	}
-	for _, h := range forward {
+var forwardHeaders = []string{
+	"Accept",
+	"Content-Type",
+	"X-Request-ID",
+}
+
+var anthropicHeaders = []string{
+	"Anthropic-Version",
+	"Anthropic-Beta",
+}
+
+func copyHeaders(dst, src http.Header, backendType string) {
+	for _, h := range forwardHeaders {
 		if v := src.Get(h); v != "" {
 			dst.Set(h, v)
+		}
+	}
+	if backendType == BackendAnthropic {
+		for _, h := range anthropicHeaders {
+			if v := src.Get(h); v != "" {
+				dst.Set(h, v)
+			}
 		}
 	}
 }

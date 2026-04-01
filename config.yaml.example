@@ -28,6 +28,12 @@ models:
     api_key: anything
     timeout: 600
 
+  - name: claude-sonnet-4-20250514
+    backend: https://api.anthropic.com
+    api_key: sk-ant-your-anthropic-key
+    type: anthropic    # keeps /v1 in path; uses x-api-key header upstream
+    timeout: 300
+
 # API keys for clients. Remove this section entirely to disable auth.
 keys:
   - key: sk-your-api-key-here

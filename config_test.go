@@ -115,3 +115,28 @@ func TestValidateConfig_MissingHost(t *testing.T) {
 		t.Fatalf("expected missing host error, got: %v", err)
 	}
 }
+
+func TestValidateConfig_ValidAnthropicType(t *testing.T) {
+	cfg := validConfig()
+	cfg.Models[0].Type = BackendAnthropic
+	if err := validateConfig(cfg); err != nil {
+		t.Fatalf("expected no error for anthropic type, got: %v", err)
+	}
+}
+
+func TestValidateConfig_ValidOpenAIType(t *testing.T) {
+	cfg := validConfig()
+	cfg.Models[0].Type = BackendOpenAI
+	if err := validateConfig(cfg); err != nil {
+		t.Fatalf("expected no error for openai type, got: %v", err)
+	}
+}
+
+func TestValidateConfig_UnknownType(t *testing.T) {
+	cfg := validConfig()
+	cfg.Models[0].Type = "gemini"
+	err := validateConfig(cfg)
+	if err == nil || !strings.Contains(err.Error(), "unknown type") {
+		t.Fatalf("expected unknown type error, got: %v", err)
+	}
+}

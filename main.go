@@ -46,6 +46,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("GET /v1/models", RateLimitMiddleware(rl, AuthMiddleware(cs, models)))
 	mux.Handle("/v1/", RateLimitMiddleware(rl, AuthMiddleware(cs, proxy)))
+	mux.Handle("/anthropic/", RateLimitMiddleware(rl, AuthMiddleware(cs, proxy)))
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,

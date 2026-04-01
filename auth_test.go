@@ -89,26 +89,43 @@ func TestKeyAllowsModel_Denied(t *testing.T) {
 	}
 }
 
-func TestExtractBearer_Valid(t *testing.T) {
+func TestExtractToken_Bearer(t *testing.T) {
 	r := httptest.NewRequest("GET", "/", nil)
 	r.Header.Set("Authorization", "Bearer sk-test-123")
-	if got := extractBearer(r); got != "sk-test-123" {
+	if got := extractToken(r); got != "sk-test-123" {
 		t.Fatalf("expected sk-test-123, got: %q", got)
 	}
 }
 
-func TestExtractBearer_Missing(t *testing.T) {
+func TestExtractToken_XApiKey(t *testing.T) {
 	r := httptest.NewRequest("GET", "/", nil)
-	if got := extractBearer(r); got != "" {
+	r.Header.Set("X-Api-Key", "sk-ant-test-456")
+	if got := extractToken(r); got != "sk-ant-test-456" {
+		t.Fatalf("expected sk-ant-test-456, got: %q", got)
+	}
+}
+
+func TestExtractToken_BearerTakesPrecedence(t *testing.T) {
+	r := httptest.NewRequest("GET", "/", nil)
+	r.Header.Set("Authorization", "Bearer sk-bearer")
+	r.Header.Set("X-Api-Key", "sk-api-key")
+	if got := extractToken(r); got != "sk-bearer" {
+		t.Fatalf("expected Bearer to take precedence, got: %q", got)
+	}
+}
+
+func TestExtractToken_Missing(t *testing.T) {
+	r := httptest.NewRequest("GET", "/", nil)
+	if got := extractToken(r); got != "" {
 		t.Fatalf("expected empty, got: %q", got)
 	}
 }
 
-func TestExtractBearer_NonBearer(t *testing.T) {
+func TestExtractToken_NonBearer(t *testing.T) {
 	r := httptest.NewRequest("GET", "/", nil)
 	r.Header.Set("Authorization", "Basic dXNlcjpwYXNz")
-	if got := extractBearer(r); got != "" {
-		t.Fatalf("expected empty for Basic auth, got: %q", got)
+	if got := extractToken(r); got != "" {
+		t.Fatalf("expected empty for Basic auth with no x-api-key, got: %q", got)
 	}
 }
 
@@ -185,6 +202,27 @@ func TestAuthMiddleware_InvalidKey(t *testing.T) {
 
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got: %d", w.Code)
+	}
+}
+
+func TestAuthMiddleware_ValidXApiKey(t *testing.T) {
+	cfg := &Config{
+		Keys: []KeyConfig{{Key: "sk-valid", Name: "admin"}},
+	}
+	cs := &ConfigStore{config: cfg}
+
+	var gotKey *KeyConfig
+	handler := AuthMiddleware(cs, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKey = keyFromContext(r.Context())
+	}))
+
+	r := httptest.NewRequest("GET", "/", nil)
+	r.Header.Set("X-Api-Key", "sk-valid")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+
+	if gotKey == nil || gotKey.Name != "admin" {
+		t.Fatalf("expected admin key via x-api-key, got: %v", gotKey)
 	}
 }
 

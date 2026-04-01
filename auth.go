@@ -21,7 +21,8 @@ func keyFromContext(ctx context.Context) *KeyConfig {
 	return key
 }
 
-// AuthMiddleware validates Bearer tokens against configured keys.
+// AuthMiddleware validates API tokens against configured keys.
+// Accepts both OpenAI-style (Authorization: Bearer) and Anthropic-style (x-api-key) headers.
 func AuthMiddleware(cs *ConfigStore, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg := cs.Get()
@@ -32,7 +33,7 @@ func AuthMiddleware(cs *ConfigStore, next http.Handler) http.Handler {
 			return
 		}
 
-		token := extractBearer(r)
+		token := extractToken(r)
 		if token == "" {
 			writeError(w, http.StatusUnauthorized, "missing or invalid Authorization header")
 			return
@@ -49,12 +50,12 @@ func AuthMiddleware(cs *ConfigStore, next http.Handler) http.Handler {
 	})
 }
 
-func extractBearer(r *http.Request) string {
-	auth := r.Header.Get("Authorization")
-	if strings.HasPrefix(auth, "Bearer ") {
+// extractToken checks Authorization: Bearer first, then falls back to x-api-key.
+func extractToken(r *http.Request) string {
+	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
 		return auth[7:]
 	}
-	return ""
+	return r.Header.Get("X-Api-Key")
 }
 
 func findKey(cfg *Config, token string) *KeyConfig {

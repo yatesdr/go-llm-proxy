@@ -17,12 +17,18 @@ type Config struct {
 	TrustedProxies []string      `yaml:"trusted_proxies"` // CIDR or IPs allowed to set X-Real-IP
 }
 
+const (
+	BackendOpenAI    = "openai"
+	BackendAnthropic = "anthropic"
+)
+
 type ModelConfig struct {
 	Name    string `yaml:"name"`
 	Backend string `yaml:"backend"`  // upstream URL e.g. http://192.168.100.10:8000/v1
 	APIKey  string `yaml:"api_key"`  // key to send to the backend (if required)
 	Model   string `yaml:"model"`    // model name to send to the backend (if different from Name)
 	Timeout int    `yaml:"timeout"`  // request timeout in seconds (default 300)
+	Type    string `yaml:"type"`     // backend type: "" or "openai" (default), "anthropic"
 }
 
 type KeyConfig struct {
@@ -115,6 +121,12 @@ func validateConfig(cfg *Config) error {
 		}
 		if u.User != nil {
 			return fmt.Errorf("model %q backend must not contain credentials in URL", m.Name)
+		}
+
+		switch m.Type {
+		case "", BackendOpenAI, BackendAnthropic:
+		default:
+			return fmt.Errorf("model %q has unknown type %q (must be %q or %q)", m.Name, m.Type, BackendOpenAI, BackendAnthropic)
 		}
 
 		if names[m.Name] {

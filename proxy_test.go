@@ -2,6 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -120,6 +124,7 @@ func TestAllowedPaths(t *testing.T) {
 		"/v1/audio/transcriptions",
 		"/v1/audio/translations",
 		"/v1/audio/speech",
+		"/v1/messages",
 	}
 	for _, p := range allowed {
 		if !allowedPaths.MatchString(p) {
@@ -139,5 +144,199 @@ func TestAllowedPaths(t *testing.T) {
 		if allowedPaths.MatchString(p) {
 			t.Errorf("expected %q to be denied", p)
 		}
+	}
+}
+
+// newTestProxyHandler creates a ProxyHandler backed by a fake upstream server.
+// The upstream handler receives the proxied request for assertions.
+// OpenAI backends get /v1 in the base URL; Anthropic backends do not (matching real conventions).
+func newTestProxyHandler(t *testing.T, modelType string, upstream http.HandlerFunc) (*ProxyHandler, *httptest.Server) {
+	t.Helper()
+	ts := httptest.NewServer(upstream)
+
+	backend := ts.URL + "/v1"
+	if modelType == BackendAnthropic {
+		backend = ts.URL
+	}
+
+	cfg := &Config{
+		Models: []ModelConfig{
+			{
+				Name:    "test-model",
+				Backend: backend,
+				APIKey:  "backend-secret",
+				Model:   "test-model",
+				Timeout: 10,
+				Type:    modelType,
+			},
+		},
+	}
+	cs := &ConfigStore{config: cfg}
+	return NewProxyHandler(cs), ts
+}
+
+func TestProxyHandler_OpenAIAuthHeader(t *testing.T) {
+	var gotAuth string
+	proxy, ts := newTestProxyHandler(t, "", func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	})
+	defer ts.Close()
+
+	body := strings.NewReader(`{"model":"test-model","messages":[]}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	proxy.ServeHTTP(w, req)
+
+	if gotAuth != "Bearer backend-secret" {
+		t.Fatalf("expected Bearer auth, got: %q", gotAuth)
+	}
+}
+
+func TestProxyHandler_AnthropicAuthHeader(t *testing.T) {
+	var gotAPIKey, gotAuth string
+	proxy, ts := newTestProxyHandler(t, BackendAnthropic, func(w http.ResponseWriter, r *http.Request) {
+		gotAPIKey = r.Header.Get("X-Api-Key")
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	})
+	defer ts.Close()
+
+	body := strings.NewReader(`{"model":"test-model","max_tokens":100,"messages":[]}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	proxy.ServeHTTP(w, req)
+
+	if gotAPIKey != "backend-secret" {
+		t.Fatalf("expected x-api-key=backend-secret, got: %q", gotAPIKey)
+	}
+	if gotAuth != "" {
+		t.Fatalf("expected no Authorization header for anthropic, got: %q", gotAuth)
+	}
+}
+
+func TestProxyHandler_AnthropicHeadersForwarded(t *testing.T) {
+	var gotVersion, gotBeta string
+	proxy, ts := newTestProxyHandler(t, BackendAnthropic, func(w http.ResponseWriter, r *http.Request) {
+		gotVersion = r.Header.Get("Anthropic-Version")
+		gotBeta = r.Header.Get("Anthropic-Beta")
+		w.WriteHeader(http.StatusOK)
+	})
+	defer ts.Close()
+
+	body := strings.NewReader(`{"model":"test-model","max_tokens":100,"messages":[]}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Anthropic-Version", "2023-06-01")
+	req.Header.Set("Anthropic-Beta", "prompt-caching-2024-07-31")
+	w := httptest.NewRecorder()
+	proxy.ServeHTTP(w, req)
+
+	if gotVersion != "2023-06-01" {
+		t.Fatalf("expected anthropic-version forwarded, got: %q", gotVersion)
+	}
+	if gotBeta != "prompt-caching-2024-07-31" {
+		t.Fatalf("expected anthropic-beta forwarded, got: %q", gotBeta)
+	}
+}
+
+func TestProxyHandler_AnthropicResponseHeaders(t *testing.T) {
+	proxy, ts := newTestProxyHandler(t, BackendAnthropic, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Request-Id", "req_abc123")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, `{"id":"msg_123"}`)
+	})
+	defer ts.Close()
+
+	body := strings.NewReader(`{"model":"test-model","max_tokens":100,"messages":[]}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	proxy.ServeHTTP(w, req)
+
+	if got := w.Header().Get("Request-Id"); got != "req_abc123" {
+		t.Fatalf("expected Request-Id header forwarded, got: %q", got)
+	}
+}
+
+func TestProxyHandler_OpenAIUpstreamPath(t *testing.T) {
+	var gotPath string
+	proxy, ts := newTestProxyHandler(t, "", func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	})
+	defer ts.Close()
+
+	body := strings.NewReader(`{"model":"test-model","messages":[]}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	proxy.ServeHTTP(w, req)
+
+	// OpenAI backend has /v1 in base URL, proxy strips /v1 → upstream sees /v1/chat/completions
+	if gotPath != "/v1/chat/completions" {
+		t.Fatalf("expected upstream path /v1/chat/completions, got: %q", gotPath)
+	}
+}
+
+func TestProxyHandler_AnthropicUpstreamPath(t *testing.T) {
+	var gotPath string
+	proxy, ts := newTestProxyHandler(t, BackendAnthropic, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	})
+	defer ts.Close()
+
+	body := strings.NewReader(`{"model":"test-model","max_tokens":100,"messages":[]}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	proxy.ServeHTTP(w, req)
+
+	// Anthropic backend has no /v1 in base URL, proxy keeps full path → upstream sees /v1/messages
+	if gotPath != "/v1/messages" {
+		t.Fatalf("expected upstream path /v1/messages, got: %q", gotPath)
+	}
+}
+
+func TestProxyHandler_AnthropicPrefixPath(t *testing.T) {
+	var gotPath string
+	proxy, ts := newTestProxyHandler(t, BackendAnthropic, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	})
+	defer ts.Close()
+
+	body := strings.NewReader(`{"model":"test-model","max_tokens":100,"messages":[]}`)
+	req := httptest.NewRequest(http.MethodPost, "/anthropic/v1/messages", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	proxy.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got: %d", w.Code)
+	}
+	if gotPath != "/v1/messages" {
+		t.Fatalf("expected upstream path /v1/messages, got: %q", gotPath)
+	}
+}
+
+func TestProxyHandler_AnthropicPrefixRejectsOpenAI(t *testing.T) {
+	proxy, ts := newTestProxyHandler(t, "", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	defer ts.Close()
+
+	body := strings.NewReader(`{"model":"test-model","messages":[]}`)
+	req := httptest.NewRequest(http.MethodPost, "/anthropic/v1/messages", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	proxy.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for openai model on /anthropic path, got: %d", w.Code)
 	}
 }
