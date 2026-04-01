@@ -304,7 +304,7 @@ select:focus,input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 
       </div>
     </div>
 
-    <!-- OpenCode model selectors (build/plan) -->
+    <!-- OpenCode model selectors (build/plan + model list) -->
     <div id="openCodeSelectors" class="hidden">
       <div class="field-row">
         <div class="field">
@@ -315,6 +315,10 @@ select:focus,input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 
           <label for="planModel">Plan Agent <span style="font-weight:400;text-transform:none">(reasoning)</span></label>
           <select id="planModel"></select>
         </div>
+      </div>
+      <div class="field" style="margin-top:12px">
+        <label>Available Models <span style="font-weight:400;text-transform:none">(included in config)</span></label>
+        <div class="checkbox-group" id="ocAdditionalModels"></div>
       </div>
     </div>
 
@@ -460,6 +464,22 @@ function populateOpenCodeSelects(){
   populateSelects(["buildModel","planModel"], {
     buildModel: "MiniMax-M2.5",
     planModel: "qwen-3.5"
+  });
+  const container = document.getElementById("ocAdditionalModels");
+  container.innerHTML="";
+  chatModels().forEach(m=>{
+    const label=document.createElement("label");
+    const cb=document.createElement("input"); cb.type="checkbox"; cb.value=m.id; cb.checked=true;
+    label.appendChild(cb);
+    const safety = m.local
+      ? ' <span class="badge badge-safe" style="margin-left:4px">Safe</span>'
+      : ' <span class="badge badge-warn" style="margin-left:4px">3rd party</span>';
+    const proto = m.protocol==="anthropic"
+      ? ' <span class="badge badge-proto-ant" style="margin-left:4px">Anthropic</span>' : '';
+    const span=document.createElement("span");
+    span.innerHTML = esc(m.id) + safety + proto;
+    label.appendChild(span);
+    container.appendChild(label);
   });
 }
 
@@ -822,9 +842,15 @@ function genOpenCode(apiKey, tavily){
   const agentId = document.getElementById("buildModel").value;
   const plannerId = document.getElementById("planModel").value;
 
-  // Split models by protocol — OpenAI-compatible and Anthropic need separate providers.
-  const oaiModels = chatModels().filter(m=>m.protocol!=="anthropic");
-  const antModels = chatModels().filter(m=>m.protocol==="anthropic");
+  // Only include models the user selected
+  const selectedOC = new Set(Array.from(document.querySelectorAll("#ocAdditionalModels input:checked")).map(c=>c.value));
+  // Always include build/plan models even if unchecked
+  selectedOC.add(agentId);
+  selectedOC.add(plannerId);
+
+  // Split selected models by protocol — OpenAI-compatible and Anthropic need separate providers.
+  const oaiModels = chatModels().filter(m=>selectedOC.has(m.id) && m.protocol!=="anthropic");
+  const antModels = chatModels().filter(m=>selectedOC.has(m.id) && m.protocol==="anthropic");
 
   const oaiModelsObj = {};
   oaiModels.forEach(m=>{ oaiModelsObj[m.id] = { name: displayName(m.id) }; });
