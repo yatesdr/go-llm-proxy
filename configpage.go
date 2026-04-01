@@ -799,7 +799,16 @@ function genOpenCode(apiKey, tavily){
     env: { PROXY_API_KEY: apiKey }
   };
 
-  if(tavily) obj.env.TAVILY_API_KEY = tavily;
+  if(tavily){
+    obj.env.TAVILY_API_KEY = tavily;
+    obj.mcp = {
+      tavily: {
+        type: "remote",
+        url: "https://mcp.tavily.com/mcp?tavilyApiKey={env:TAVILY_API_KEY}",
+        enabled: true
+      }
+    };
+  }
 
   const unixSteps = ol([
     'Save <code>opencode.json</code> to your project root, or globally:<br><code>mkdir -p ~/.config/opencode &amp;&amp; cp opencode.json ~/.config/opencode/opencode.json</code>',
