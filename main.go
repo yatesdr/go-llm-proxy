@@ -27,7 +27,14 @@ func main() {
 
 	cfg := cs.Get()
 
-	// Reload config on SIGHUP.
+	// Watch config file for changes (auto-reload on save).
+	stopWatch, err := cs.Watch()
+	if err != nil {
+		slog.Error("failed to watch config file", "error", err)
+		// Non-fatal: SIGHUP still works as a fallback.
+	}
+
+	// Reload config on SIGHUP (manual trigger, systemd ExecReload).
 	go func() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGHUP)
@@ -74,6 +81,9 @@ func main() {
 			slog.Error("shutdown error", "error", err)
 		}
 		rl.Close()
+		if stopWatch != nil {
+			stopWatch()
+		}
 	}()
 
 	slog.Info("starting server", "listen", cfg.Listen)

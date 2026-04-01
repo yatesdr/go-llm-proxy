@@ -6,7 +6,9 @@ import (
 	"net/url"
 	"os"
 	"sync"
+	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"gopkg.in/yaml.v3"
 )
 
@@ -92,6 +94,54 @@ func (cs *ConfigStore) Get() *Config {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 	return cs.config
+}
+
+// Watch starts a goroutine that reloads config when the file changes on disk.
+// Errors are logged but do not stop the watcher. Returns a stop function.
+func (cs *ConfigStore) Watch() (stop func(), err error) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return nil, fmt.Errorf("creating file watcher: %w", err)
+	}
+
+	if err := watcher.Add(cs.path); err != nil {
+		watcher.Close()
+		return nil, fmt.Errorf("watching %s: %w", cs.path, err)
+	}
+
+	go func() {
+		// Debounce: editors often write a temp file then rename, producing
+		// multiple events in quick succession. Wait briefly before reloading.
+		var debounce *time.Timer
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) == 0 {
+					continue
+				}
+				if debounce != nil {
+					debounce.Stop()
+				}
+				debounce = time.AfterFunc(500*time.Millisecond, func() {
+					slog.Info("config file changed, reloading")
+					if err := cs.Load(); err != nil {
+						slog.Error("failed to reload config", "error", err)
+					}
+				})
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				slog.Error("file watcher error", "error", err)
+			}
+		}
+	}()
+
+	slog.Info("watching config file for changes", "path", cs.path)
+	return func() { watcher.Close() }, nil
 }
 
 func validateConfig(cfg *Config) error {
