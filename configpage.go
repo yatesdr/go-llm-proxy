@@ -457,10 +457,18 @@ function populateClaudeSelects(){
 }
 
 function populateOpenCodeSelects(){
-  populateSelects(["buildModel","planModel"], {
-    buildModel: "MiniMax-M2.5",
-    planModel: "qwen-3.5"
+  // Only OpenAI-protocol models work with OpenCode's openai-compatible provider
+  const oai = chatModels().filter(m=>m.protocol!=="anthropic");
+  ["buildModel","planModel"].forEach(id=>{
+    const sel=document.getElementById(id);
+    sel.innerHTML="";
+    oai.forEach(m=>{
+      const o=document.createElement("option"); o.value=m.id; o.textContent=optionText(m);
+      sel.appendChild(o);
+    });
   });
+  setDefault("buildModel","MiniMax-M2.5");
+  setDefault("planModel","qwen-3.5");
 }
 
 function populateMultiSelects(){
@@ -822,8 +830,11 @@ function genOpenCode(apiKey, tavily){
   const agentId = document.getElementById("buildModel").value;
   const plannerId = document.getElementById("planModel").value;
 
+  // OpenCode uses @ai-sdk/openai-compatible which sends OpenAI-format requests.
+  // Anthropic-protocol models won't work through this provider.
+  const oaiChatModels = chatModels().filter(m=>m.protocol!=="anthropic");
   const modelsObj = {};
-  chatModels().forEach(m=>{
+  oaiChatModels.forEach(m=>{
     modelsObj[m.id] = { name: displayName(m.id) };
   });
 
