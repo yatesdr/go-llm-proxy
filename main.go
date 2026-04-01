@@ -43,7 +43,10 @@ func main() {
 	models := NewModelsHandler(cs)
 	rl := NewRateLimiter(cfg.TrustedProxies)
 
+	configPage := NewConfigPageHandler(cs)
+
 	mux := http.NewServeMux()
+	mux.Handle("GET /{$}", configPage)
 	mux.Handle("GET /v1/models", RateLimitMiddleware(rl, AuthMiddleware(cs, models)))
 	mux.Handle("/v1/", RateLimitMiddleware(rl, AuthMiddleware(cs, proxy)))
 	mux.Handle("/anthropic/", RateLimitMiddleware(rl, AuthMiddleware(cs, proxy)))
