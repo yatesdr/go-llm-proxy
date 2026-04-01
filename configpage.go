@@ -833,7 +833,7 @@ function genOpenCode(apiKey, tavily){
       "go-llm-proxy": {
         npm: "@ai-sdk/openai-compatible",
         name: "go-llm-proxy",
-        options: { baseURL: PROXY_URL, apiKey: "{env:PROXY_API_KEY}" },
+        options: { baseURL: PROXY_URL, apiKey: apiKey },
         models: modelsObj
       }
     },
@@ -842,8 +842,7 @@ function genOpenCode(apiKey, tavily){
     agent: {
       build: { model: "go-llm-proxy/" + agentId, description: "Coding agent" },
       plan:  { model: "go-llm-proxy/" + plannerId, description: "Planning agent" }
-    },
-    env: { PROXY_API_KEY: apiKey }
+    }
   };
 
   if(tavily){
