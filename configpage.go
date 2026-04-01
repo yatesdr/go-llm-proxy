@@ -283,19 +283,39 @@ select:focus,input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 
       </div>
     </div>
 
-    <!-- Role-based selectors (claude-code, opencode) -->
-    <div id="roleSelectors" class="hidden">
+    <!-- Claude Code model selectors (Sonnet/Opus/Haiku) -->
+    <div id="claudeSelectors" class="hidden">
       <div class="field-row">
         <div class="field">
-          <label for="agentModel">Agent Model <span style="font-weight:400;text-transform:none">(coding)</span></label>
-          <select id="agentModel"></select>
+          <label for="sonnetModel">Sonnet <span style="font-weight:400;text-transform:none">(default model)</span></label>
+          <select id="sonnetModel"></select>
+          <div class="hint">Primary model for all tasks</div>
         </div>
         <div class="field">
-          <label for="plannerModel">Planner Model <span style="font-weight:400;text-transform:none">(reasoning)</span></label>
-          <select id="plannerModel"></select>
+          <label for="opusModel">Opus <span style="font-weight:400;text-transform:none">(large model)</span></label>
+          <select id="opusModel"></select>
+          <div class="hint">Complex reasoning via /model opus</div>
+        </div>
+        <div class="field">
+          <label for="haikuModel">Haiku <span style="font-weight:400;text-transform:none">(fast model)</span></label>
+          <select id="haikuModel"></select>
+          <div class="hint">Background tasks (titles, summaries)</div>
         </div>
       </div>
-      <div id="protocolWarning"></div>
+    </div>
+
+    <!-- OpenCode model selectors (build/plan) -->
+    <div id="openCodeSelectors" class="hidden">
+      <div class="field-row">
+        <div class="field">
+          <label for="buildModel">Build Agent <span style="font-weight:400;text-transform:none">(coding)</span></label>
+          <select id="buildModel"></select>
+        </div>
+        <div class="field">
+          <label for="planModel">Plan Agent <span style="font-weight:400;text-transform:none">(reasoning)</span></label>
+          <select id="planModel"></select>
+        </div>
+      </div>
     </div>
 
     <!-- Multi-select (qwen-code) -->
@@ -386,21 +406,23 @@ function getModel(id){ return MODELS.find(m=>m.id===id); }
 
 // ---- Harness change ----
 const harnessEl    = document.getElementById("harness");
-const roleSel      = document.getElementById("roleSelectors");
+const claudeSel    = document.getElementById("claudeSelectors");
+const openCodeSel  = document.getElementById("openCodeSelectors");
 const multiSel     = document.getElementById("multiSelectors");
 const tavilyField  = document.getElementById("tavilyField");
 const generateBtn  = document.getElementById("generateBtn");
 
 harnessEl.addEventListener("change", function(){
   const h = this.value;
-  roleSel.classList.toggle("hidden", h!=="claude-code" && h!=="opencode");
+  claudeSel.classList.toggle("hidden", h!=="claude-code");
+  openCodeSel.classList.toggle("hidden", h!=="opencode");
   multiSel.classList.toggle("hidden", h!=="qwen-code");
-  // Tavily: supported by all three harnesses
   tavilyField.classList.toggle("hidden", !h);
   document.getElementById("outputFormatField").classList.toggle("hidden", h!=="claude-code");
   generateBtn.disabled = !h;
   document.getElementById("outputArea").classList.remove("visible");
-  if(h==="claude-code"||h==="opencode") populateRoleSelects();
+  if(h==="claude-code") populateClaudeSelects();
+  if(h==="opencode") populateOpenCodeSelects();
   if(h==="qwen-code") populateMultiSelects();
 });
 
@@ -413,9 +435,9 @@ function optionText(m){
   return m.id + (tags.length ? "  ["+tags.join(", ")+"]" : "");
 }
 
-function populateRoleSelects(){
+function populateSelects(ids, defaults){
   const cms = chatModels();
-  ["agentModel","plannerModel"].forEach(id=>{
+  ids.forEach(id=>{
     const sel=document.getElementById(id);
     sel.innerHTML="";
     cms.forEach(m=>{
@@ -423,32 +445,22 @@ function populateRoleSelects(){
       sel.appendChild(o);
     });
   });
-  setDefault("agentModel","MiniMax-M2.5");
-  setDefault("plannerModel","qwen-3.5");
-  checkProtocolCompat();
-  document.getElementById("agentModel").onchange = checkProtocolCompat;
-  document.getElementById("plannerModel").onchange = checkProtocolCompat;
+  Object.entries(defaults).forEach(([id,val])=>setDefault(id,val));
 }
 
-function checkProtocolCompat(){
-  const warn = document.getElementById("protocolWarning");
-  const harness = harnessEl.value;
-  if(harness !== "claude-code"){ warn.innerHTML=""; return; }
+function populateClaudeSelects(){
+  populateSelects(["sonnetModel","opusModel","haikuModel"], {
+    sonnetModel: "MiniMax-M2.5",
+    opusModel: "qwen-3.5",
+    haikuModel: "MiniMax-M2.5"
+  });
+}
 
-  const agent = getModel(document.getElementById("agentModel").value);
-  const planner = getModel(document.getElementById("plannerModel").value);
-  if(!agent||!planner){ warn.innerHTML=""; return; }
-
-  // Claude Code speaks Anthropic protocol. Models with openai backends need
-  // the proxy or upstream to accept Anthropic Messages API format.
-  const oaiModels = [agent,planner].filter(m=>m.protocol==="openai");
-  if(oaiModels.length>0 && [agent,planner].some(m=>m.protocol==="anthropic")){
-    warn.innerHTML = '<div class="alert alert-warn">Mixed protocols detected. Claude Code uses the Anthropic Messages API. ' +
-      'Models with OpenAI backends (' + oaiModels.map(m=>esc(m.id)).join(", ") + ') must support the Messages API format on their upstream, ' +
-      'or results may be unpredictable. Consider selecting models of the same protocol.</div>';
-  } else {
-    warn.innerHTML="";
-  }
+function populateOpenCodeSelects(){
+  populateSelects(["buildModel","planModel"], {
+    buildModel: "MiniMax-M2.5",
+    planModel: "qwen-3.5"
+  });
 }
 
 function populateMultiSelects(){
@@ -559,27 +571,25 @@ function renderOutput(r){
 
 // ---- Claude Code ----
 function genClaudeCode(apiKey, tavily){
-  const agentId = document.getElementById("agentModel").value;
-  const plannerId = document.getElementById("plannerModel").value;
-  const agent = getModel(agentId);
-  const planner = getModel(plannerId);
+  const sonnetId = document.getElementById("sonnetModel").value;
+  const opusId = document.getElementById("opusModel").value;
+  const haikuId = document.getElementById("haikuModel").value;
 
   // Claude Code uses the Anthropic SDK which appends /v1/messages to the base URL.
-  // So base URL must NOT include /v1 — just the origin.
   const env = {
     "ANTHROPIC_BASE_URL": PROXY_ORIGIN,
     "ANTHROPIC_API_KEY": apiKey,
 
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": agentId,
-    "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME": displayName(agentId),
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": sonnetId,
+    "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME": displayName(sonnetId),
     "ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES": "thinking,interleaved_thinking",
 
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": plannerId,
-    "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME": displayName(plannerId),
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": opusId,
+    "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME": displayName(opusId),
     "ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES": "thinking,interleaved_thinking",
 
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": agentId,
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME": displayName(agentId),
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": haikuId,
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME": displayName(haikuId),
     "ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES": "thinking,interleaved_thinking",
 
     "DISABLE_PROMPT_CACHING": "1",
@@ -631,23 +641,22 @@ function genClaudeCode(apiKey, tavily){
 
 // ---- Claude Code (start command) ----
 function genClaudeCodeCommand(apiKey, tavily){
-  const agentId = document.getElementById("agentModel").value;
-  const plannerId = document.getElementById("plannerModel").value;
-  const agent = getModel(agentId);
-  const planner = getModel(plannerId);
+  const sonnetId = document.getElementById("sonnetModel").value;
+  const opusId = document.getElementById("opusModel").value;
+  const haikuId = document.getElementById("haikuModel").value;
 
   // Claude Code uses the Anthropic SDK which appends /v1/messages to the base URL.
   const vars = [
     ["ANTHROPIC_BASE_URL", PROXY_ORIGIN],
     ["ANTHROPIC_API_KEY", apiKey],
-    ["ANTHROPIC_DEFAULT_SONNET_MODEL", agentId],
-    ["ANTHROPIC_DEFAULT_SONNET_MODEL_NAME", displayName(agentId)],
+    ["ANTHROPIC_DEFAULT_SONNET_MODEL", sonnetId],
+    ["ANTHROPIC_DEFAULT_SONNET_MODEL_NAME", displayName(sonnetId)],
     ["ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES", "thinking,interleaved_thinking"],
-    ["ANTHROPIC_DEFAULT_OPUS_MODEL", plannerId],
-    ["ANTHROPIC_DEFAULT_OPUS_MODEL_NAME", displayName(plannerId)],
+    ["ANTHROPIC_DEFAULT_OPUS_MODEL", opusId],
+    ["ANTHROPIC_DEFAULT_OPUS_MODEL_NAME", displayName(opusId)],
     ["ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES", "thinking,interleaved_thinking"],
-    ["ANTHROPIC_DEFAULT_HAIKU_MODEL", agentId],
-    ["ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME", displayName(agentId)],
+    ["ANTHROPIC_DEFAULT_HAIKU_MODEL", haikuId],
+    ["ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME", displayName(haikuId)],
     ["ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES", "thinking,interleaved_thinking"],
     ["DISABLE_PROMPT_CACHING", "1"],
     ["CLAUDE_CODE_DISABLE_1M_CONTEXT", "1"],
@@ -799,8 +808,8 @@ function genQwenCode(apiKey, tavily){
 
 // ---- OpenCode ----
 function genOpenCode(apiKey, tavily){
-  const agentId = document.getElementById("agentModel").value;
-  const plannerId = document.getElementById("plannerModel").value;
+  const agentId = document.getElementById("buildModel").value;
+  const plannerId = document.getElementById("planModel").value;
 
   const modelsObj = {};
   chatModels().forEach(m=>{
