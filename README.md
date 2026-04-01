@@ -157,10 +157,20 @@ models:
 
 Remove the `keys` section entirely to disable authentication (not recommended for public exposure).
 
+## Config Generator
+
+The proxy serves an interactive config generator at `GET /`. It helps users create ready-to-use configuration files for:
+
+- **Claude Code** — `settings.json` or downloadable start scripts (`.sh`, `.bat`, `.ps1`)
+- **Qwen Code** — `settings.json` with protocol-aware model providers
+- **OpenCode** — `opencode.json` with dual OpenAI/Anthropic providers
+
+The page reads model metadata from the running config (names, protocols, and whether backends are self-hosted or third-party) and generates configs with the correct base URLs, API key placement, and web search integration (Tavily) for each tool. No sensitive information (backend URLs, backend API keys) is exposed.
+
 ## More Docs
 
-- Docker: [doc/docker.md](/Users/derek/Library/Mobile%20Documents/com~apple~CloudDocs/Code/go-llm/doc/docker.md)
-- Deployment, systemd, and nginx: [doc/deployment.md](/Users/derek/Library/Mobile%20Documents/com~apple~CloudDocs/Code/go-llm/doc/deployment.md)
+- Docker: [doc/docker.md](doc/docker.md)
+- Deployment, systemd, and nginx: [doc/deployment.md](doc/deployment.md)
 - Build from source:
 
 ```bash
@@ -173,6 +183,7 @@ All endpoints are proxied transparently to the backend identified by the `model`
 
 | Endpoint | Description |
 |----------|-------------|
+| `GET /` | Config generator page (no auth required) |
 | `GET /v1/models` | Aggregated model list from config |
 | `POST /v1/chat/completions` | Chat completions (streaming supported) |
 | `POST /v1/completions` | Text completions |

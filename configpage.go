@@ -203,11 +203,6 @@ select:focus,input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 
 .install-steps li{margin-bottom:8px}
 .install-steps code{background:#f1f5f9;padding:1px 6px;border-radius:3px;font-family:"SF Mono",Consolas,monospace;font-size:.8rem}
 
-/* ---- Alerts ---- */
-.alert{padding:10px 14px;border-radius:6px;font-size:.85rem;margin-top:10px;line-height:1.5}
-.alert-warn{background:var(--amber-bg);color:var(--amber);border:1px solid #fde68a}
-.alert-info{background:var(--blue-light);color:var(--blue);border:1px solid #bfdbfe}
-
 .dl-btn{display:inline-flex;align-items:center;gap:5px;padding:6px 14px;font-size:.82rem;font-weight:600;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--blue);cursor:pointer;font-family:inherit;transition:background .15s;text-decoration:none;margin-top:8px;margin-right:6px}
 .dl-btn:hover{background:#f1f5f9}
 .dl-btn svg{width:14px;height:14px;fill:currentColor}
@@ -363,11 +358,6 @@ select:focus,input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 
       <div id="configOutput"></div>
     </div>
 
-    <div class="card hidden" id="envCard">
-      <h2>Environment Variables</h2>
-      <div id="envOutput"></div>
-    </div>
-
     <div class="card">
       <h2>Installation Instructions</h2>
       <div class="tabs" id="osTabs">
@@ -473,12 +463,8 @@ function syncCheckboxes(containerId, selectIds){
   });
 }
 
-function populateOpenCodeSelects(){
-  populateSelects(["buildModel","planModel"], {
-    buildModel: "MiniMax-M2.5",
-    planModel: "qwen-3.5"
-  });
-  const container = document.getElementById("ocAdditionalModels");
+function buildCheckboxGroup(containerId, selectIds){
+  const container = document.getElementById(containerId);
   container.innerHTML="";
   chatModels().forEach(m=>{
     const label=document.createElement("label");
@@ -494,10 +480,17 @@ function populateOpenCodeSelects(){
     label.appendChild(span);
     container.appendChild(label);
   });
-  const sync = ()=>syncCheckboxes("ocAdditionalModels",["buildModel","planModel"]);
+  const sync = ()=>syncCheckboxes(containerId, selectIds);
   sync();
-  document.getElementById("buildModel").onchange = sync;
-  document.getElementById("planModel").onchange = sync;
+  selectIds.forEach(id=>{ document.getElementById(id).onchange = sync; });
+}
+
+function populateOpenCodeSelects(){
+  populateSelects(["buildModel","planModel"], {
+    buildModel: "MiniMax-M2.5",
+    planModel: "qwen-3.5"
+  });
+  buildCheckboxGroup("ocAdditionalModels", ["buildModel","planModel"]);
 }
 
 function populateMultiSelects(){
@@ -509,26 +502,7 @@ function populateMultiSelects(){
     defSel.appendChild(o);
   });
   setDefault("defaultModel","MiniMax-M2.5");
-
-  const container = document.getElementById("additionalModels");
-  container.innerHTML="";
-  cms.forEach(m=>{
-    const label=document.createElement("label");
-    const cb=document.createElement("input"); cb.type="checkbox"; cb.value=m.id; cb.checked=true;
-    label.appendChild(cb);
-    const safety = m.local
-      ? ' <span class="badge badge-safe" style="margin-left:4px">Safe</span>'
-      : ' <span class="badge badge-warn" style="margin-left:4px">3rd party</span>';
-    const proto = m.protocol==="anthropic"
-      ? ' <span class="badge badge-proto-ant" style="margin-left:4px">Anthropic</span>' : '';
-    const span=document.createElement("span");
-    span.innerHTML = esc(m.id) + safety + proto;
-    label.appendChild(span);
-    container.appendChild(label);
-  });
-  const sync = ()=>syncCheckboxes("additionalModels",["defaultModel"]);
-  sync();
-  defSel.onchange = sync;
+  buildCheckboxGroup("additionalModels", ["defaultModel"]);
 }
 
 function setDefault(id,val){ const s=document.getElementById(id); for(const o of s.options) if(o.value===val){s.value=val;return;} }
@@ -593,16 +567,6 @@ function renderOutput(r){
     co.innerHTML += dlHtml;
   }
 
-  const envCard = document.getElementById("envCard");
-  const envOut = document.getElementById("envOutput");
-  if(r.envBlock){
-    envCard.classList.remove("hidden");
-    envOut.innerHTML = '<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button>' + esc(r.envBlock) + '</div>';
-  } else {
-    envCard.classList.add("hidden");
-    envOut.innerHTML = "";
-  }
-
   ["macos","linux","windows"].forEach(os=>{
     document.getElementById("os-"+os).innerHTML = '<div class="install-steps">' + r.install[os] + '</div>';
   });
@@ -614,33 +578,33 @@ function thinkingCaps(checkboxId){
   return document.getElementById(checkboxId).checked ? "thinking,interleaved_thinking" : "";
 }
 
-function genClaudeCode(apiKey, tavily){
+// Shared env var builder for both config-file and start-command modes.
+function claudeEnvVars(apiKey){
   const sonnetId = document.getElementById("sonnetModel").value;
   const opusId = document.getElementById("opusModel").value;
   const haikuId = document.getElementById("haikuModel").value;
+  return [
+    ["ANTHROPIC_BASE_URL", PROXY_ORIGIN],
+    ["ANTHROPIC_API_KEY", apiKey],
+    ["ANTHROPIC_DEFAULT_SONNET_MODEL", sonnetId],
+    ["ANTHROPIC_DEFAULT_SONNET_MODEL_NAME", displayName(sonnetId)],
+    ["ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES", thinkingCaps("sonnetThinking")],
+    ["ANTHROPIC_DEFAULT_OPUS_MODEL", opusId],
+    ["ANTHROPIC_DEFAULT_OPUS_MODEL_NAME", displayName(opusId)],
+    ["ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES", thinkingCaps("opusThinking")],
+    ["ANTHROPIC_DEFAULT_HAIKU_MODEL", haikuId],
+    ["ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME", displayName(haikuId)],
+    ["ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES", thinkingCaps("haikuThinking")],
+    ["DISABLE_PROMPT_CACHING", "1"],
+    ["CLAUDE_CODE_DISABLE_1M_CONTEXT", "1"],
+    ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"],
+    ["API_TIMEOUT_MS", "900000"]
+  ];
+}
 
-  // Claude Code uses the Anthropic SDK which appends /v1/messages to the base URL.
-  const env = {
-    "ANTHROPIC_BASE_URL": PROXY_ORIGIN,
-    "ANTHROPIC_API_KEY": apiKey,
-
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": sonnetId,
-    "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME": displayName(sonnetId),
-    "ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES": thinkingCaps("sonnetThinking"),
-
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": opusId,
-    "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME": displayName(opusId),
-    "ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES": thinkingCaps("opusThinking"),
-
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": haikuId,
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME": displayName(haikuId),
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES": thinkingCaps("haikuThinking"),
-
-    "DISABLE_PROMPT_CACHING": "1",
-    "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1",
-    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-    "API_TIMEOUT_MS": "900000"
-  };
+function genClaudeCode(apiKey, tavily){
+  const env = {};
+  claudeEnvVars(apiKey).forEach(([k,v])=>{ env[k]=v; });
 
   const settings = {
     attribution: { commit: "", pr: "" },
@@ -684,28 +648,7 @@ function genClaudeCode(apiKey, tavily){
 
 // ---- Claude Code (start command) ----
 function genClaudeCodeCommand(apiKey, tavily){
-  const sonnetId = document.getElementById("sonnetModel").value;
-  const opusId = document.getElementById("opusModel").value;
-  const haikuId = document.getElementById("haikuModel").value;
-
-  // Claude Code uses the Anthropic SDK which appends /v1/messages to the base URL.
-  const vars = [
-    ["ANTHROPIC_BASE_URL", PROXY_ORIGIN],
-    ["ANTHROPIC_API_KEY", apiKey],
-    ["ANTHROPIC_DEFAULT_SONNET_MODEL", sonnetId],
-    ["ANTHROPIC_DEFAULT_SONNET_MODEL_NAME", displayName(sonnetId)],
-    ["ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES", thinkingCaps("sonnetThinking")],
-    ["ANTHROPIC_DEFAULT_OPUS_MODEL", opusId],
-    ["ANTHROPIC_DEFAULT_OPUS_MODEL_NAME", displayName(opusId)],
-    ["ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES", thinkingCaps("opusThinking")],
-    ["ANTHROPIC_DEFAULT_HAIKU_MODEL", haikuId],
-    ["ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME", displayName(haikuId)],
-    ["ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES", thinkingCaps("haikuThinking")],
-    ["DISABLE_PROMPT_CACHING", "1"],
-    ["CLAUDE_CODE_DISABLE_1M_CONTEXT", "1"],
-    ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"],
-    ["API_TIMEOUT_MS", "900000"]
-  ];
+  const vars = claudeEnvVars(apiKey);
   // Settings JSON for non-env-var options (passed via --settings)
   const settingsJSON = JSON.stringify({attribution:{commit:"",pr:""}});
 
@@ -955,7 +898,9 @@ function ol(items){ return "<ol>"+items.map(i=>"<li>"+i+"</li>").join("")+"</ol>
 
 function downloadFile(name, el){
   const raw = atob(el.dataset.content);
-  const blob = new Blob([raw], {type:"application/octet-stream"});
+  const bytes = new Uint8Array(raw.length);
+  for(let i=0;i<raw.length;i++) bytes[i]=raw.charCodeAt(i);
+  const blob = new Blob([bytes], {type:"application/octet-stream"});
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url; a.download = name; a.click();
