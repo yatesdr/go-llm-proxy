@@ -50,15 +50,16 @@ func detectOne(client *http.Client, cs *ConfigStore, name, backend, modelID, api
 		return
 	}
 
-	// Update the config in-place. This is safe because we only write
-	// ContextWindow (an int) and the config is read-locked elsewhere.
-	cfg := cs.Get()
-	for i := range cfg.Models {
-		if cfg.Models[i].Name == name {
-			cfg.Models[i].ContextWindow = ctxWindow
+	// Update the config under the write lock so a concurrent reload
+	// doesn't discard our result.
+	cs.mu.Lock()
+	for i := range cs.config.Models {
+		if cs.config.Models[i].Name == name {
+			cs.config.Models[i].ContextWindow = ctxWindow
 			break
 		}
 	}
+	cs.mu.Unlock()
 
 	slog.Info("detected context window",
 		"model", name, "context_window", ctxWindow)

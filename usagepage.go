@@ -59,7 +59,7 @@ func (h *UsageDashboardHandler) ServeData(w http.ResponseWriter, r *http.Request
 	}
 	days := 30
 	if d := r.URL.Query().Get("days"); d != "" {
-		if v, err := strconv.Atoi(d); err == nil && v > 0 {
+		if v, err := strconv.Atoi(d); err == nil && v > 0 && v <= 365 {
 			days = v
 		}
 	}
