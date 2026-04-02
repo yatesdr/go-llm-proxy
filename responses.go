@@ -563,13 +563,14 @@ func buildChatRequest(req responsesRequest, backendModel string, messages []map[
 	if len(req.Tools) > 0 {
 		if tools := translateTools(req.Tools); len(tools) > 0 {
 			chatReq["tools"] = tools
+			// Only include tool_choice and parallel_tool_calls when tools are present.
+			if len(req.ToolChoice) > 0 && string(req.ToolChoice) != "null" {
+				chatReq["tool_choice"] = json.RawMessage(req.ToolChoice)
+			}
+			if req.ParallelToolCalls != nil {
+				chatReq["parallel_tool_calls"] = *req.ParallelToolCalls
+			}
 		}
-	}
-	if len(req.ToolChoice) > 0 && string(req.ToolChoice) != "null" {
-		chatReq["tool_choice"] = json.RawMessage(req.ToolChoice)
-	}
-	if req.ParallelToolCalls != nil {
-		chatReq["parallel_tool_calls"] = *req.ParallelToolCalls
 	}
 	if req.Temperature != nil {
 		chatReq["temperature"] = *req.Temperature
