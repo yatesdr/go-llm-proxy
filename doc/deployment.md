@@ -1,8 +1,19 @@
-# Deployment Notes
+# Deployment
 
-This document covers production deployment details that are intentionally kept out of the top-level README.
+Production deployment details for go-llm-proxy.
 
-## Binary Run
+## Production checklist
+
+1. Deploy behind nginx with TLS (see [nginx config](#nginx) below)
+2. Bind to localhost: `listen: "127.0.0.1:8080"`
+3. Configure `trusted_proxies` to your nginx IP(s)
+4. Use strong API keys (32+ characters) — generate with `./go-llm-proxy -adduser`
+5. Set appropriate `timeout` per model (default 300s)
+6. Enable usage logging: `log_metrics: true`
+7. Disable config generator after setup, or protect with nginx auth
+8. Set up systemd for automatic restart (see below)
+
+## Binary run
 
 ```bash
 ./go-llm-proxy -config /path/to/config.yaml
