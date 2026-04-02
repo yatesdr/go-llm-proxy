@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased
+## v0.2.0
 
 ### Added
 - **OpenAI Responses API support** (`POST /v1/responses`, `POST /v1/responses/compact`)
@@ -47,6 +47,11 @@ All notable changes to this project will be documented in this file.
 - Rate limiter comments clarified to match actual behavior
 - `/v1/models` response now includes `max_model_len` when available
 - `fsnotify` correctly listed as direct dependency in go.mod
+
+### Fixed
+- Context window detection now holds write lock during config update to prevent race with config reload
+- Usage dashboard `?days` parameter capped at 365 to prevent expensive queries
+- Responses API streaming handler enforces `maxResponseBodySize` (100 MB) matching the main proxy handler
 
 ## v1.0.0
 
