@@ -8,3 +8,15 @@ services:
       - "127.0.0.1:8080:8080"
     volumes:
       - ./config.yaml:/config/config.yaml:ro
+      - usage-data:/data
+    command:
+      - "-config"
+      - "/config/config.yaml"
+      - "-serve-config-generator"
+      - "-log-metrics"
+      - "-serve-dashboard"
+      - "-usage-db"
+      - "/data/usage.db"
+
+volumes:
+  usage-data:
