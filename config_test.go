@@ -140,3 +140,42 @@ func TestValidateConfig_UnknownType(t *testing.T) {
 		t.Fatalf("expected unknown type error, got: %v", err)
 	}
 }
+
+func TestValidateConfig_DashboardRequiresMetrics(t *testing.T) {
+	cfg := validConfig()
+	cfg.UsageDashboard = true
+	cfg.UsageDashboardPassword = "secret"
+	err := validateConfig(cfg)
+	if err == nil || !strings.Contains(err.Error(), "log_metrics") {
+		t.Fatalf("expected log_metrics requirement error, got: %v", err)
+	}
+}
+
+func TestValidateConfig_DashboardRequiresPassword(t *testing.T) {
+	cfg := validConfig()
+	cfg.LogMetrics = true
+	cfg.UsageDashboard = true
+	err := validateConfig(cfg)
+	if err == nil || !strings.Contains(err.Error(), "usage_dashboard_password") {
+		t.Fatalf("expected password requirement error, got: %v", err)
+	}
+}
+
+func TestValidateConfig_DashboardValid(t *testing.T) {
+	cfg := validConfig()
+	cfg.LogMetrics = true
+	cfg.UsageDashboard = true
+	cfg.UsageDashboardPassword = "a-strong-password"
+	if err := validateConfig(cfg); err != nil {
+		t.Fatalf("expected no error for valid dashboard config, got: %v", err)
+	}
+}
+
+func TestValidateConfig_DashboardDisabledNoValidation(t *testing.T) {
+	cfg := validConfig()
+	cfg.UsageDashboard = false
+	cfg.UsageDashboardPassword = ""
+	if err := validateConfig(cfg); err != nil {
+		t.Fatalf("expected no error when dashboard disabled, got: %v", err)
+	}
+}

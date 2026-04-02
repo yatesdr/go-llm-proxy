@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
+	"runtime/debug"
 )
 
 // setSecurityHeaders applies standard security headers to all responses.
@@ -23,5 +25,24 @@ func writeError(w http.ResponseWriter, status int, message string) {
 			"type":    "invalid_request_error",
 			"code":    http.StatusText(status),
 		},
+	})
+}
+
+// RecoveryMiddleware catches panics in handlers and returns a generic 500 error.
+// The stack trace is logged server-side but never exposed to the client.
+func RecoveryMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if err := recover(); err != nil {
+				slog.Error("panic recovered",
+					"error", err,
+					"method", r.Method,
+					"path", r.URL.Path,
+					"stack", string(debug.Stack()),
+				)
+				writeError(w, http.StatusInternalServerError, "internal server error")
+			}
+		}()
+		next.ServeHTTP(w, r)
 	})
 }

@@ -172,7 +172,7 @@ func newTestProxyHandler(t *testing.T, modelType string, upstream http.HandlerFu
 		},
 	}
 	cs := &ConfigStore{config: cfg}
-	return NewProxyHandler(cs), ts
+	return NewProxyHandler(cs, nil), ts
 }
 
 func TestProxyHandler_OpenAIAuthHeader(t *testing.T) {

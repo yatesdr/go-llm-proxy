@@ -1,6 +1,10 @@
 # Bind to localhost only — nginx handles external traffic.
 listen: "127.0.0.1:8080"
 
+# Serve the config generator UI at GET / (default: false).
+# Can also be enabled with the --serve-config-generator CLI flag.
+# serve_config_generator: true
+
 # IPs allowed to set X-Real-IP / X-Forwarded-For headers.
 # Only trust your nginx server. Without this, attackers can spoof IPs
 # to bypass rate limiting.
@@ -33,6 +37,27 @@ models:
     api_key: sk-ant-your-anthropic-key
     type: anthropic    # keeps /v1 in path; uses x-api-key header upstream
     timeout: 300
+
+  # Responses API mode: auto (default), native, or translate.
+  #   auto      — probe backend on first request; cache and fall back as needed
+  #   native    — always passthrough (for backends you know support /v1/responses)
+  #   translate — always translate to Chat Completions (skip probe entirely)
+  # - name: MiniMax-M2.5-local
+  #   backend: http://192.168.100.10:8000/v1
+  #   responses_mode: translate
+
+  # Context window: auto-detected from the backend at startup (via /models
+  # endpoint). Set context_window explicitly for backends that don't report it.
+  # Omit or set to 0 for auto-detection.
+  # - name: MiniMax-M2.7
+  #   backend: https://api.minimax.io/anthropic
+  #   type: anthropic
+  #   context_window: 1048576   # 1M tokens (manual override)
+
+# Usage metrics logging (off by default).
+# Can also be enabled with the --log-metrics CLI flag.
+# log_metrics: true
+# usage_db: /var/lib/go-llm/usage.db   # default: usage.db in working directory
 
 # API keys for clients. Remove this section entirely to disable auth.
 keys:

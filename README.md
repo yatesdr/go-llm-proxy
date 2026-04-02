@@ -11,13 +11,15 @@ If serving publicly, it's probably best to put an NGINX reverse proxy ahead of t
 ## Features
 
 - OpenAI and Anthropic API passthrough (completions, chat, embeddings, images, audio, messages)
+- OpenAI Responses API support — native passthrough or automatic Chat Completions translation ([details](doc/codex.md))
 - Anthropic Messages API support via `/v1/messages` and explicit `/anthropic/` route prefix
 - Model name routing — clients request by name, proxy routes to the right backend
 - Model name rewriting — expose friendly names while backends use internal identifiers
 - API key authentication with per-key model access control (supports both `Authorization: Bearer` and `x-api-key` headers)
 - IP-based rate limiting and throttling for failed auth attempts
 - Streaming (SSE) support with proper flush handling
-- Hot-reload config via `SIGHUP` — no downtime for model changes
+- Per-request usage logging to SQLite with web dashboard and CLI reports ([details](doc/usage.md))
+- Auto-reload config on file change, plus manual `SIGHUP` — no downtime for model changes
 - Graceful shutdown — active connections drain on restart
 - Hardened for public internet exposure
 
@@ -112,6 +114,8 @@ keys:
 | `model` | no | Model name sent to the backend (defaults to `name`) |
 | `timeout` | no | Request timeout in seconds (default: 300) |
 | `type` | no | Backend type: `"openai"` (default) or `"anthropic"` |
+| `responses_mode` | no | Responses API handling: `"auto"` (default — probe and cache), `"native"` (always passthrough), or `"translate"` (always translate to Chat Completions). See [Codex / Responses API](doc/codex.md). |
+| `context_window` | no | Max context tokens (0 or omit = auto-detect from backend at startup). See [Context window detection](doc/codex.md#context-window). |
 
 ### Backend URL examples
 
@@ -159,7 +163,19 @@ Remove the `keys` section entirely to disable authentication (not recommended fo
 
 ## Config Generator
 
-The proxy serves an interactive config generator at `GET /`. It helps users create ready-to-use configuration files for:
+The proxy includes an interactive config generator at `GET /`, disabled by default. Enable it via CLI flag or config:
+
+```bash
+./go-llm-proxy -config config.yaml -serve-config-generator
+```
+
+Or in `config.yaml`:
+
+```yaml
+serve_config_generator: true
+```
+
+It helps users create ready-to-use configuration files for:
 
 - **Claude Code** — `settings.json` or downloadable start scripts (`.sh`, `.bat`, `.ps1`)
 - **Qwen Code** — `settings.json` with protocol-aware model providers
@@ -183,7 +199,7 @@ All endpoints are proxied transparently to the backend identified by the `model`
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /` | Config generator page (no auth required) |
+| `GET /` | Config generator page (requires `--serve-config-generator` flag, no auth) |
 | `GET /v1/models` | Aggregated model list from config |
 | `POST /v1/chat/completions` | Chat completions (streaming supported) |
 | `POST /v1/completions` | Text completions |
@@ -192,6 +208,8 @@ All endpoints are proxied transparently to the backend identified by the `model`
 | `POST /v1/audio/transcriptions` | Speech-to-text |
 | `POST /v1/audio/translations` | Audio translation |
 | `POST /v1/audio/speech` | Text-to-speech |
+| `POST /v1/responses` | OpenAI Responses API (native passthrough or translated — see [Codex guide](doc/codex.md)) |
+| `POST /v1/responses/compact` | Responses API context compaction (native passthrough or model-based summarization) |
 | `POST /v1/messages` | Anthropic Messages API |
 | `POST /anthropic/v1/messages` | Anthropic Messages API (explicit prefix, validates backend type) |
 
@@ -270,10 +288,12 @@ Anthropic-style clients can also use `/v1/messages` directly without the prefix 
 ## Security
 
 - Path allowlist prevents access to arbitrary backend endpoints
-- Request body capped at 50 MB to prevent memory exhaustion
+- Request body capped at 50 MB; response body capped at 100 MB
 - Server timeouts protect against slowloris attacks
 - HTTP client does not follow redirects (prevents SSRF via backend redirects)
 - Backend URLs validated on config load (scheme, host, no embedded credentials)
 - Upstream response headers filtered through an allowlist
 - Constant-time API key comparison
+- Panic recovery prevents internal details from leaking to clients
+- Config generator page disabled by default
 - Graceful shutdown drains active connections

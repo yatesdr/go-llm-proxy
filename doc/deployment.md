@@ -10,7 +10,9 @@ This document covers production deployment details that are intentionally kept o
 
 ## Hot Reload
 
-After editing `config.yaml`, reload without restarting:
+The proxy automatically reloads `config.yaml` when the file changes on disk (via filesystem notifications). No manual action is needed — just save the file.
+
+You can also trigger a reload manually via `SIGHUP`:
 
 ```bash
 kill -HUP $(pidof go-llm-proxy)
@@ -64,6 +66,9 @@ sudo systemctl reload go-llm-proxy
 Add this inside your existing TLS-enabled server block, for example one managed by Certbot:
 
 ```nginx
+# Per-IP connection limiting (place in http block or a shared conf snippet).
+limit_conn_zone $binary_remote_addr zone=llm_conn:10m;
+
 server {
     server_name llm.example.com;
 
@@ -84,6 +89,9 @@ server {
         proxy_connect_timeout 10s;
 
         client_max_body_size 50m;
+
+        # Limit concurrent connections per IP to prevent resource exhaustion.
+        limit_conn llm_conn 20;
     }
 }
 ```

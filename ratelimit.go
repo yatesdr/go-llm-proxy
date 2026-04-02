@@ -30,14 +30,30 @@ type RateLimiter struct {
 	decayInterval time.Duration
 
 	// trustedProxies are CIDR ranges that are allowed to set X-Real-IP / X-Forwarded-For.
+	trustedMu      sync.RWMutex
 	trustedProxies []*net.IPNet
 
 	cancel context.CancelFunc
 }
 
 func NewRateLimiter(trustedProxies []string) *RateLimiter {
+	ctx, cancel := context.WithCancel(context.Background())
+	rl := &RateLimiter{
+		ips:           make(map[string]*ipRecord),
+		throttleAfter: defaultThrottleAfter,
+		decayInterval: defaultDecayInterval,
+		cancel:        cancel,
+	}
+	rl.SetTrustedProxies(trustedProxies)
+
+	go rl.cleanup(ctx)
+	return rl
+}
+
+// SetTrustedProxies updates the trusted proxy list. Safe for concurrent use.
+func (rl *RateLimiter) SetTrustedProxies(proxies []string) {
 	var nets []*net.IPNet
-	for _, entry := range trustedProxies {
+	for _, entry := range proxies {
 		// Normalize bare IPs to CIDR notation.
 		cidr := entry
 		if !strings.Contains(entry, "/") {
@@ -51,18 +67,9 @@ func NewRateLimiter(trustedProxies []string) *RateLimiter {
 			nets = append(nets, ipNet)
 		}
 	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	rl := &RateLimiter{
-		ips:            make(map[string]*ipRecord),
-		throttleAfter:  defaultThrottleAfter,
-		decayInterval:  defaultDecayInterval,
-		trustedProxies: nets,
-		cancel:         cancel,
-	}
-
-	go rl.cleanup(ctx)
-	return rl
+	rl.trustedMu.Lock()
+	rl.trustedProxies = nets
+	rl.trustedMu.Unlock()
 }
 
 // Close stops the background cleanup goroutine.
@@ -120,8 +127,8 @@ func (rl *RateLimiter) Check(ip string) (allowed bool) {
 		}
 	}
 
-	// If in throttle range, reject once exponential delay exceeds maxThrottleDelay.
-	// Delay is 1000ms * 2^exponent; exceeds 2000ms when exponent >= 2.
+	// Allow a grace window of 2 attempts after reaching the throttle threshold,
+	// then reject. At default settings: 1-4 failures = allowed, 5+ = rejected.
 	if rec.failures >= rl.throttleAfter {
 		if rec.failures-rl.throttleAfter >= 2 {
 			return false
@@ -186,13 +193,18 @@ func (rl *RateLimiter) clientIP(r *http.Request) string {
 	// Only honor proxy headers if the direct connection is from a trusted proxy.
 	if rl.isTrustedProxy(remoteHost) {
 		if ip := r.Header.Get("X-Real-IP"); ip != "" {
-			return ip
+			if net.ParseIP(ip) != nil {
+				return ip
+			}
 		}
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			raw := xff
 			if i := strings.IndexByte(xff, ','); i > 0 {
-				return strings.TrimSpace(xff[:i])
+				raw = xff[:i]
 			}
-			return strings.TrimSpace(xff)
+			if candidate := strings.TrimSpace(raw); net.ParseIP(candidate) != nil {
+				return candidate
+			}
 		}
 	}
 
@@ -200,14 +212,18 @@ func (rl *RateLimiter) clientIP(r *http.Request) string {
 }
 
 func (rl *RateLimiter) isTrustedProxy(host string) bool {
-	if len(rl.trustedProxies) == 0 {
+	rl.trustedMu.RLock()
+	proxies := rl.trustedProxies
+	rl.trustedMu.RUnlock()
+
+	if len(proxies) == 0 {
 		return false
 	}
 	ip := net.ParseIP(host)
 	if ip == nil {
 		return false
 	}
-	for _, cidr := range rl.trustedProxies {
+	for _, cidr := range proxies {
 		if cidr.Contains(ip) {
 			return true
 		}

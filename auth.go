@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"log/slog"
 	"net/http"
 	"strings"
 )
@@ -35,12 +36,14 @@ func AuthMiddleware(cs *ConfigStore, next http.Handler) http.Handler {
 
 		token := extractToken(r)
 		if token == "" {
+			slog.Warn("auth failed: missing token", "remote", r.RemoteAddr, "path", r.URL.Path)
 			writeError(w, http.StatusUnauthorized, "missing or invalid Authorization header")
 			return
 		}
 
 		key := findKey(cfg, token)
 		if key == nil {
+			slog.Warn("auth failed: invalid key", "remote", r.RemoteAddr, "path", r.URL.Path)
 			writeError(w, http.StatusUnauthorized, "invalid API key")
 			return
 		}

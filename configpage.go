@@ -13,9 +13,10 @@ import (
 // modelInfo is the public metadata exposed to the config page.
 // It intentionally omits backend URLs, API keys, and other sensitive fields.
 type modelInfo struct {
-	ID       string `json:"id"`
-	Local    bool   `json:"local"`
-	Protocol string `json:"protocol"` // "openai" or "anthropic"
+	ID            string `json:"id"`
+	Local         bool   `json:"local"`
+	Protocol      string `json:"protocol"`       // "openai" or "anthropic"
+	ContextWindow int    `json:"context_window"`  // max tokens (0 = unknown)
 }
 
 var privateRanges = []struct{ start, end net.IP }{
@@ -35,6 +36,12 @@ func isPrivateIP(host string) bool {
 	if ip == nil {
 		return false
 	}
+
+	// Check IPv6 loopback and private ranges.
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() {
+		return true
+	}
+
 	ip4 := ip.To4()
 	if ip4 == nil {
 		return false
@@ -68,7 +75,7 @@ func modelInfoFromConfig(cfg *Config) []modelInfo {
 		if m.Type == BackendAnthropic {
 			proto = "anthropic"
 		}
-		out = append(out, modelInfo{ID: m.Name, Local: local, Protocol: proto})
+		out = append(out, modelInfo{ID: m.Name, Local: local, Protocol: proto, ContextWindow: m.ContextWindow})
 	}
 	return out
 }
@@ -107,7 +114,9 @@ func (h *ConfigPageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-ancestors 'none'")
-	buf.WriteTo(w)
+	if _, err := buf.WriteTo(w); err != nil {
+		slog.Error("failed to write config page response", "error", err)
+	}
 }
 
 const configPageHTML = `<!DOCTYPE html>
@@ -262,6 +271,7 @@ select:focus,input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 
       <select id="harness">
         <option value="">Select a coding assistant&hellip;</option>
         <option value="claude-code">Claude Code</option>
+        <option value="codex">Codex</option>
         <option value="qwen-code">Qwen Code</option>
         <option value="opencode">OpenCode</option>
       </select>
@@ -329,7 +339,41 @@ select:focus,input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 
       </div>
     </div>
 
-    <!-- Output format (claude-code only) -->
+    <!-- Codex model selectors -->
+    <div id="codexSelectors" class="hidden">
+      <div class="field-row">
+        <div class="field">
+          <label for="codexModel">Model</label>
+          <select id="codexModel"></select>
+        </div>
+        <div class="field">
+          <label for="codexEffort">Reasoning Effort</label>
+          <select id="codexEffort">
+            <option value="high">High</option>
+            <option value="medium" selected>Medium</option>
+            <option value="low">Low</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="codexCtxWindow">Context Window</label>
+          <select id="codexCtxWindow">
+            <option value="auto" selected>Auto-detect</option>
+            <option value="8192">8K</option>
+            <option value="16384">16K</option>
+            <option value="32768">32K</option>
+            <option value="65536">64K</option>
+            <option value="131072">128K</option>
+            <option value="196608">192K</option>
+            <option value="262144">256K</option>
+            <option value="524288">512K</option>
+            <option value="1048576">1M</option>
+          </select>
+          <div class="hint" id="codexCtxHint"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Output format (claude-code + codex) -->
     <div id="outputFormatField" class="hidden">
       <div class="field">
         <label>Output Format</label>
@@ -403,6 +447,7 @@ const harnessEl    = document.getElementById("harness");
 const claudeSel    = document.getElementById("claudeSelectors");
 const openCodeSel  = document.getElementById("openCodeSelectors");
 const multiSel     = document.getElementById("multiSelectors");
+const codexSel     = document.getElementById("codexSelectors");
 const tavilyField  = document.getElementById("tavilyField");
 const generateBtn  = document.getElementById("generateBtn");
 
@@ -411,11 +456,13 @@ harnessEl.addEventListener("change", function(){
   claudeSel.classList.toggle("hidden", h!=="claude-code");
   openCodeSel.classList.toggle("hidden", h!=="opencode");
   multiSel.classList.toggle("hidden", h!=="qwen-code");
+  codexSel.classList.toggle("hidden", h!=="codex");
   tavilyField.classList.toggle("hidden", !h);
-  document.getElementById("outputFormatField").classList.toggle("hidden", h!=="claude-code");
+  document.getElementById("outputFormatField").classList.toggle("hidden", h!=="claude-code" && h!=="codex");
   generateBtn.disabled = !h;
   document.getElementById("outputArea").classList.remove("visible");
   if(h==="claude-code") populateClaudeSelects();
+  if(h==="codex") populateCodexSelects();
   if(h==="opencode") populateOpenCodeSelects();
   if(h==="qwen-code") populateMultiSelects();
 });
@@ -448,6 +495,45 @@ function populateClaudeSelects(){
     opusModel: "qwen-3.5",
     haikuModel: "MiniMax-M2.5"
   });
+}
+
+function populateCodexSelects(){
+  const cms = chatModels().filter(m => m.protocol !== "anthropic");
+  const sel = document.getElementById("codexModel");
+  sel.innerHTML="";
+  cms.forEach(m=>{
+    const o=document.createElement("option"); o.value=m.id; o.textContent=optionText(m);
+    sel.appendChild(o);
+  });
+  setDefault("codexModel","MiniMax-M2.5");
+  sel.addEventListener("change", updateCodexCtxHint);
+  updateCodexCtxHint();
+}
+
+function updateCodexCtxHint(){
+  const m = getModel(document.getElementById("codexModel").value);
+  const hint = document.getElementById("codexCtxHint");
+  const sel = document.getElementById("codexCtxWindow");
+  const detected = m && m.context_window > 0;
+  if(detected){
+    const label = m.context_window >= 1024 ? Math.round(m.context_window/1024)+"K" : m.context_window;
+    hint.textContent = "Detected: " + label + " tokens";
+    hint.style.color = "";
+    sel.style.borderColor = "";
+  } else {
+    hint.textContent = "Not detected \u2014 set manually for best results";
+    hint.style.color = "var(--amber)";
+    sel.style.borderColor = "var(--amber)";
+  }
+}
+
+function getCodexCtxWindow(){
+  const sel = document.getElementById("codexCtxWindow");
+  if(sel.value === "auto"){
+    const m = getModel(document.getElementById("codexModel").value);
+    return (m && m.context_window > 0) ? m.context_window : 0;
+  }
+  return parseInt(sel.value, 10);
 }
 
 // Sync checkboxes: check+disable models selected in dropdowns
@@ -523,6 +609,9 @@ function generate(){
   switch(harness){
     case "claude-code":
       result = fmt==="command" ? genClaudeCodeCommand(apiKey,tavily) : genClaudeCode(apiKey,tavily);
+      break;
+    case "codex":
+      result = fmt==="command" ? genCodexCommand(apiKey,tavily) : genCodex(apiKey,tavily);
       break;
     case "qwen-code":   result = genQwenCode(apiKey,tavily); break;
     case "opencode":    result = genOpenCode(apiKey,tavily); break;
@@ -655,19 +744,21 @@ function genClaudeCodeCommand(apiKey, tavily){
   // Tavily MCP setup commands (idempotent: remove then add-json)
   const tavilyMcpJSON = tavily ? JSON.stringify({type:"http",url:"https://mcp.tavily.com/mcp",headers:{"Authorization":"Bearer "+tavily}}) : "";
 
-  // Unix shell script (.sh)
+  // Unix shell script (.sh) — use env to avoid polluting the caller's shell
   const shLines = ["#!/usr/bin/env bash", "# go-llm-proxy: Claude Code start script", ""];
-  vars.forEach(([k,v]) => shLines.push('export ' + k + '="' + v + '"'));
   if(tavily){
-    shLines.push("", "# Configure Tavily web search");
+    shLines.push("# Configure Tavily web search");
     shLines.push("claude mcp remove tavily -s user 2>/dev/null");
     shLines.push("claude mcp add-json tavily '" + tavilyMcpJSON + "' -s user");
+    shLines.push("");
   }
-  shLines.push("", "claude --settings '" + settingsJSON + "' \"$@\"");
+  shLines.push("exec env \\");
+  vars.forEach(([k,v],i) => shLines.push('  ' + k + '="' + v + '" \\'));
+  shLines.push("  claude --settings '" + settingsJSON + "' \"$@\"");
   const shContent = shLines.join("\n") + "\n";
 
-  // Windows batch file (.bat)
-  const batLines = ["@echo off", "REM go-llm-proxy: Claude Code start script", ""];
+  // Windows batch file (.bat) — setlocal scopes env vars to this script
+  const batLines = ["@echo off", "setlocal", "REM go-llm-proxy: Claude Code start script", ""];
   vars.forEach(([k,v]) => batLines.push("set " + k + "=" + v));
   if(tavily){
     batLines.push("", "REM Configure Tavily web search");
@@ -677,7 +768,7 @@ function genClaudeCodeCommand(apiKey, tavily){
   batLines.push("", 'claude --settings "' + settingsJSON.replace(/"/g, '\\"') + '" %*');
   const batContent = batLines.join("\r\n") + "\r\n";
 
-  // PowerShell script (.ps1)
+  // PowerShell script (.ps1) — clean up env vars after claude exits
   const ps1Lines = ["# go-llm-proxy: Claude Code start script", ""];
   vars.forEach(([k,v]) => ps1Lines.push('$env:' + k + ' = "' + v + '"'));
   if(tavily){
@@ -685,7 +776,9 @@ function genClaudeCodeCommand(apiKey, tavily){
     ps1Lines.push("claude mcp remove tavily -s user 2>$null");
     ps1Lines.push("claude mcp add-json tavily '" + tavilyMcpJSON + "' -s user");
   }
-  ps1Lines.push("", "claude --settings '" + settingsJSON + "' @args");
+  ps1Lines.push("", "try {", "  claude --settings '" + settingsJSON + "' @args", "} finally {");
+  vars.forEach(([k]) => ps1Lines.push('  Remove-Item Env:' + k + ' -ErrorAction SilentlyContinue'));
+  ps1Lines.push("}");
   const ps1Content = ps1Lines.join("\r\n") + "\r\n";
 
   // Display versions per OS (show full script content, skip shebang/header)
@@ -724,6 +817,176 @@ function genClaudeCodeCommand(apiKey, tavily){
         'For <strong>.bat</strong>: Double-click the file, or run from Command Prompt:<br><code>claude-proxy.bat</code>',
         'For <strong>.ps1</strong>: Run from PowerShell:<br><code>.\\claude-proxy.ps1</code>',
         'Optional: move the script to a folder in your PATH for easy access.'
+      ])
+    }
+  };
+}
+
+// ---- Codex ----
+function codexToml(modelId, effort, apiKey, tavily){
+  const ctxWindow = getCodexCtxWindow();
+  let toml = 'model = "' + modelId + '"\n' +
+    'model_provider = "go-llm-proxy"\n' +
+    'model_reasoning_effort = "' + effort + '"\n' +
+    'web_search = "disabled"\n';
+  if(ctxWindow > 0){
+    toml += 'model_context_window = ' + ctxWindow + '\n';
+  }
+  toml += '\n[model_providers.go-llm-proxy]\n' +
+    'name = "Go-LLM-Proxy"\n' +
+    'base_url = "' + PROXY_URL + '"\n' +
+    'wire_api = "responses"\n' +
+    '# API key embedded directly (no env var needed):\n' +
+    'experimental_bearer_token = "' + apiKey + '"\n' +
+    '# Or use an environment variable instead:\n' +
+    '# env_key = "OPENAI_API_KEY"\n';
+
+  if(tavily){
+    toml += '\n[mcp_servers.tavily]\n' +
+      'url = "https://mcp.tavily.com/mcp"\n' +
+      '# Tavily key embedded directly:\n' +
+      'http_headers = { Authorization = "Bearer ' + tavily + '" }\n' +
+      '# Or use an environment variable instead:\n' +
+      '# bearer_token_env_var = "TAVILY_API_KEY"\n';
+  }
+  return toml;
+}
+
+function genCodex(apiKey, tavily){
+  const modelId = document.getElementById("codexModel").value;
+  const effort = document.getElementById("codexEffort").value;
+  const toml = codexToml(modelId, effort, apiKey, tavily);
+
+  const unixSteps = [
+    'Create the config directory:<br><code>mkdir -p ~/.codex</code>',
+    'Save the generated file as:<br><code>~/.codex/config.toml</code>',
+    'The API key' + (tavily ? 's are' : ' is') + ' embedded in the config. To use environment variables instead, ' +
+      'edit the file and swap the commented lines, then set:<br>' +
+      '<code>export OPENAI_API_KEY=' + esc(apiKey) + '</code>' +
+      (tavily ? '<br><code>export TAVILY_API_KEY=' + esc(tavily) + '</code>' : ''),
+    'Restart Codex for changes to take effect.'
+  ];
+
+  const winSteps = [
+    'Create the config directory:<br><code>mkdir %USERPROFILE%\\.codex</code>',
+    'Save the generated file as:<br><code>%USERPROFILE%\\.codex\\config.toml</code>',
+    'The API key' + (tavily ? 's are' : ' is') + ' embedded in the config. To use environment variables instead, ' +
+      'edit the file and swap the commented lines, then set:<br>' +
+      '<code>setx OPENAI_API_KEY ' + esc(apiKey) + '</code>' +
+      (tavily ? '<br><code>setx TAVILY_API_KEY ' + esc(tavily) + '</code>' : ''),
+    'Restart Codex for changes to take effect.'
+  ];
+
+  return {
+    config: toml,
+    filename: "config.toml",
+    install: {
+      macos: ol(unixSteps),
+      linux: ol(unixSteps),
+      windows: ol(winSteps)
+    }
+  };
+}
+
+function genCodexCommand(apiKey, tavily){
+  const modelId = document.getElementById("codexModel").value;
+  const effort = document.getElementById("codexEffort").value;
+
+  // Use -c overrides to pass all provider settings explicitly. This is the
+  // documented CLI mechanism and works reliably across all codex modes
+  // (interactive, exec, etc.) without touching any config files.
+  const ctxWindow = getCodexCtxWindow();
+  const cfgFlags = [
+    '-c \'model="' + modelId + '"\'',
+    '-c \'model_provider="go-llm-proxy"\'',
+    '-c \'model_reasoning_effort="' + effort + '"\'',
+    '-c \'web_search="disabled"\''
+  ];
+  if(ctxWindow > 0){
+    cfgFlags.push('-c \'model_context_window=' + ctxWindow + '\'');
+  }
+  cfgFlags.push(
+    '-c \'model_providers.go-llm-proxy.name="Go-LLM-Proxy"\'',
+    '-c \'model_providers.go-llm-proxy.base_url="' + PROXY_URL + '"\'',
+    '-c \'model_providers.go-llm-proxy.env_key="OPENAI_API_KEY"\'',
+    '-c \'model_providers.go-llm-proxy.wire_api="responses"\''
+  );
+  if(tavily){
+    cfgFlags.push('-c \'mcp_servers.tavily.url="https://mcp.tavily.com/mcp"\'');
+    cfgFlags.push('-c \'mcp_servers.tavily.bearer_token_env_var="TAVILY_API_KEY"\'');
+  }
+
+  // Build PowerShell array entries: each -c flag becomes two elements ('-c', 'value').
+  const ps1FlagPairs = cfgFlags.map(f => {
+    const val = f.replace(/^-c '/, "").replace(/'$/, "");
+    return "  '-c', '" + val + "'";
+  });
+
+  const shLines = [
+    "#!/usr/bin/env bash",
+    "# go-llm-proxy: Codex start script",
+    "",
+    'export OPENAI_API_KEY="' + apiKey + '"'
+  ];
+  if(tavily) shLines.push('export TAVILY_API_KEY="' + tavily + '"');
+  shLines.push("");
+  shLines.push("exec codex \\");
+  cfgFlags.forEach((f,i) => {
+    shLines.push("  " + f + " \\");
+  });
+  shLines.push('  "$@"');
+  const shContent = shLines.join("\n") + "\n";
+
+  const ps1Lines = [
+    "# go-llm-proxy: Codex start script",
+    "",
+    '$env:OPENAI_API_KEY = "' + apiKey + '"'
+  ];
+  if(tavily) ps1Lines.push('$env:TAVILY_API_KEY = "' + tavily + '"');
+  ps1Lines.push("");
+  ps1Lines.push("# Build argument list.");
+  ps1Lines.push("$codexArgs = @(");
+  ps1FlagPairs.forEach(p => ps1Lines.push(p));
+  ps1Lines.push(") + $args");
+  ps1Lines.push("");
+  ps1Lines.push("try {");
+  ps1Lines.push("  codex @codexArgs");
+  ps1Lines.push("} finally {");
+  ps1Lines.push("  Remove-Item Env:OPENAI_API_KEY -ErrorAction SilentlyContinue");
+  if(tavily) ps1Lines.push("  Remove-Item Env:TAVILY_API_KEY -ErrorAction SilentlyContinue");
+  ps1Lines.push("}");
+  const ps1Content = ps1Lines.join("\r\n") + "\r\n";
+
+  const shDisplay = shLines.slice(2).join("\n").trim();
+  const ps1Display = ps1Lines.slice(2).join("\n").trim();
+
+  return {
+    title: "Start Command",
+    configTabs: {
+      "macOS / Linux": shDisplay,
+      "PowerShell": ps1Display
+    },
+    downloads: [
+      { name: "codex-proxy.sh", label: "Download .sh (macOS/Linux)", content: shContent },
+      { name: "codex-proxy.ps1", label: "Download .ps1 (PowerShell)", content: ps1Content }
+    ],
+    install: {
+      macos: ol([
+        'Download <code>codex-proxy.sh</code> using the button above.',
+        'Make it executable:<br><code>chmod +x codex-proxy.sh</code>',
+        'Run it:<br><code>./codex-proxy.sh</code>',
+        'Optional: move it to your PATH:<br><code>mv codex-proxy.sh /usr/local/bin/codex-proxy</code>'
+      ]),
+      linux: ol([
+        'Download <code>codex-proxy.sh</code> using the button above.',
+        'Make it executable:<br><code>chmod +x codex-proxy.sh</code>',
+        'Run it:<br><code>./codex-proxy.sh</code>',
+        'Optional: move it to your PATH:<br><code>mv codex-proxy.sh ~/.local/bin/codex-proxy</code>'
+      ]),
+      windows: ol([
+        'Download <code>codex-proxy.ps1</code> using the button above.',
+        'Run from PowerShell:<br><code>.\\codex-proxy.ps1</code>',
+        'Optional: move the script to a folder in your PATH.'
       ])
     }
   };

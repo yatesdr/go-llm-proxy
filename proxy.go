@@ -18,6 +18,12 @@ import (
 // maxRequestBodySize limits request body to 50 MB (covers base64 images for vision).
 const maxRequestBodySize = 50 * 1024 * 1024
 
+// maxResponseBodySize limits total bytes proxied from upstream (100 MB).
+// Prevents a broken or malicious backend from consuming unbounded resources.
+// Normal LLM responses are well under this; even a very long streaming completion
+// at 100K tokens is roughly 400 KB.
+const maxResponseBodySize = 100 * 1024 * 1024
+
 // allowedPaths restricts which sub-paths can be proxied to backends.
 var allowedPaths = regexp.MustCompile(`^/v1/(chat/completions|completions|embeddings|images/generations|audio/(transcriptions|translations|speech)|messages)$`)
 
@@ -34,11 +40,13 @@ var allowedResponseHeaders = map[string]bool{
 type ProxyHandler struct {
 	config *ConfigStore
 	client *http.Client
+	usage  *UsageLogger // nil if logging disabled
 }
 
-func NewProxyHandler(cs *ConfigStore) *ProxyHandler {
+func NewProxyHandler(cs *ConfigStore, usage *UsageLogger) *ProxyHandler {
 	return &ProxyHandler{
 		config: cs,
+		usage:  usage,
 		client: &http.Client{
 			// Do not follow redirects — prevents SSRF via backend redirects.
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -155,14 +163,18 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	keyName := ""
+	keyHash := ""
 	if key != nil {
 		keyName = key.Name
+		keyHash = HashKey(key.Key)
 	}
 	slog.Info("proxying request",
 		"model", modelName,
 		"path", cleanPath,
 		"key", keyName,
 	)
+
+	startTime := time.Now()
 
 	resp, err := p.client.Do(upReq)
 	if err != nil {
@@ -176,6 +188,9 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
+	// Detect if this is a streaming response (SSE).
+	isStreaming := strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream")
+
 	// Copy only allowed response headers.
 	for k := range allowedResponseHeaders {
 		if v := resp.Header.Get(k); v != "" {
@@ -188,12 +203,27 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 
 	// Stream the response, flushing after each read for SSE support.
+	// If usage logging is enabled, tee the response into a buffer for token extraction.
 	flusher, canFlush := w.(http.Flusher)
 	buf := make([]byte, 4096)
+	var totalBytes int64
+	var responseBuf bytes.Buffer
+	captureResponse := p.usage != nil && resp.StatusCode >= 200 && resp.StatusCode < 300
 	for {
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
-			w.Write(buf[:n])
+			totalBytes += int64(n)
+			if totalBytes > maxResponseBodySize {
+				slog.Error("upstream response exceeded size limit", "model", modelName, "bytes", totalBytes)
+				captureResponse = false
+				break
+			}
+			if captureResponse {
+				responseBuf.Write(buf[:n])
+			}
+			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+				break
+			}
 			if canFlush {
 				flusher.Flush()
 			}
@@ -201,6 +231,35 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if readErr != nil {
 			break
 		}
+	}
+
+	duration := time.Since(startTime)
+
+	// Log usage metrics asynchronously if enabled.
+	if p.usage != nil {
+		backendType := ""
+		if model.Type == BackendAnthropic {
+			backendType = BackendAnthropic
+		}
+		var tokens TokenUsage
+		if captureResponse {
+			tokens = ExtractTokenUsage(responseBuf.Bytes(), backendType, isStreaming)
+		}
+		rec := UsageRecord{
+			Timestamp:     startTime,
+			KeyHash:       keyHash,
+			KeyName:       keyName,
+			Model:         modelName,
+			Endpoint:      cleanPath,
+			StatusCode:    resp.StatusCode,
+			RequestBytes:  int64(len(body)),
+			ResponseBytes: totalBytes,
+			InputTokens:   tokens.InputTokens,
+			OutputTokens:  tokens.OutputTokens,
+			TotalTokens:   tokens.TotalTokens,
+			DurationMS:    duration.Milliseconds(),
+		}
+		go p.usage.Log(rec)
 	}
 }
 
@@ -305,7 +364,10 @@ func rewriteModelInMultipart(body []byte, contentType string, newModel string) [
 				part.Close()
 				return body
 			}
-			fw.Write([]byte(newModel))
+			if _, err := fw.Write([]byte(newModel)); err != nil {
+				part.Close()
+				return body
+			}
 			part.Close()
 			continue
 		}
@@ -317,7 +379,10 @@ func rewriteModelInMultipart(body []byte, contentType string, newModel string) [
 			part.Close()
 			return body
 		}
-		io.Copy(pw, part)
+		if _, err := io.Copy(pw, part); err != nil {
+			part.Close()
+			return body
+		}
 		part.Close()
 	}
 	writer.Close()

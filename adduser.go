@@ -32,7 +32,11 @@ func runAddUser(configPath string) {
 
 	// Prompt for name.
 	fmt.Print("User name: ")
-	name, _ := reader.ReadString('\n')
+	name, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
+		os.Exit(1)
+	}
 	name = strings.TrimSpace(name)
 	if name == "" {
 		fmt.Fprintln(os.Stderr, "Name is required.")
@@ -51,7 +55,11 @@ func runAddUser(configPath string) {
 		fmt.Print("Model restrictions (comma-separated names, or Enter for all): ")
 	}
 
-	modelsInput, _ := reader.ReadString('\n')
+	modelsInput, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
+		os.Exit(1)
+	}
 	modelsInput = strings.TrimSpace(modelsInput)
 
 	var models []string

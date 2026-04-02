@@ -14,10 +14,40 @@ import (
 func main() {
 	configPath := flag.String("config", "config.yaml", "path to config file")
 	addUser := flag.Bool("adduser", false, "interactively add a new API key to the config")
+	serveConfigPage := flag.Bool("serve-config-generator", false, "serve the config generator UI at GET /")
+	serveDashboard := flag.Bool("serve-dashboard", false, "serve the usage dashboard at /usage")
+	logMetrics := flag.Bool("log-metrics", false, "enable per-request usage logging to SQLite")
+	usageReport := flag.Bool("usage-report", false, "print usage summary report and exit")
+	modelReport := flag.Bool("model-report", false, "print per-model usage report and exit")
+	reportDays := flag.Int("report-days", 30, "number of days to include in reports")
+	usageDBPath := flag.String("usage-db", "", "path to SQLite usage database (overrides config)")
 	flag.Parse()
 
 	if *addUser {
 		runAddUser(*configPath)
+		return
+	}
+
+	// Handle report modes: load config to find DB path, then print report and exit.
+	if *usageReport || *modelReport {
+		dbPath := *usageDBPath
+		if dbPath == "" {
+			cs, err := NewConfigStore(*configPath)
+			if err == nil {
+				if cfg := cs.Get(); cfg.UsageDB != "" {
+					dbPath = cfg.UsageDB
+				}
+			}
+		}
+		if dbPath == "" {
+			dbPath = "usage.db"
+		}
+		if *usageReport {
+			RunUsageReport(dbPath, *reportDays)
+		}
+		if *modelReport {
+			RunModelReport(dbPath, *reportDays)
+		}
 		return
 	}
 
@@ -32,6 +62,45 @@ func main() {
 	}
 
 	cfg := cs.Get()
+
+	// Initialize usage logger if enabled via CLI flag or config.
+	var usage *UsageLogger
+	if *logMetrics || cfg.LogMetrics {
+		dbPath := *usageDBPath
+		if dbPath == "" && cfg.UsageDB != "" {
+			dbPath = cfg.UsageDB
+		}
+		if dbPath == "" {
+			dbPath = "usage.db"
+		}
+		var err error
+		usage, err = NewUsageLogger(dbPath)
+		if err != nil {
+			slog.Error("failed to open usage database", "error", err, "path", dbPath)
+			os.Exit(1)
+		}
+		slog.Info("usage logging enabled", "db", dbPath)
+	}
+
+	// Auto-detect context window sizes from backends (async, non-blocking).
+	DetectContextWindows(cs)
+
+	proxy := NewProxyHandler(cs, usage)
+	responses := NewResponsesHandler(cs, usage)
+	models := NewModelsHandler(cs)
+	rl := NewRateLimiter(cfg.TrustedProxies)
+
+	var dashRl *RateLimiter
+	if (*serveDashboard || cfg.UsageDashboard) && usage != nil {
+		dashRl = NewRateLimiter(cfg.TrustedProxies)
+	}
+
+	cs.SetOnReload(func(newCfg *Config) {
+		rl.SetTrustedProxies(newCfg.TrustedProxies)
+		if dashRl != nil {
+			dashRl.SetTrustedProxies(newCfg.TrustedProxies)
+		}
+	})
 
 	// Watch config file for changes (auto-reload on save).
 	stopWatch, err := cs.Watch()
@@ -52,21 +121,30 @@ func main() {
 		}
 	}()
 
-	proxy := NewProxyHandler(cs)
-	models := NewModelsHandler(cs)
-	rl := NewRateLimiter(cfg.TrustedProxies)
-
-	configPage := NewConfigPageHandler(cs)
-
 	mux := http.NewServeMux()
-	mux.Handle("GET /{$}", configPage)
+	if *serveConfigPage || cfg.ServeConfigGenerator {
+		configPage := NewConfigPageHandler(cs)
+		mux.Handle("GET /{$}", configPage)
+		slog.Info("config generator page enabled at GET /")
+	}
+	if dashRl != nil {
+		dash := NewUsageDashboardHandler(cs, usage, dashRl)
+		mux.Handle("GET /usage", http.HandlerFunc(dash.LoginPage))
+		mux.Handle("POST /usage", http.HandlerFunc(dash.HandleLogin))
+		mux.Handle("GET /usage/data", http.HandlerFunc(dash.ServeData))
+		slog.Info("usage dashboard enabled at /usage")
+	}
 	mux.Handle("GET /v1/models", RateLimitMiddleware(rl, AuthMiddleware(cs, models)))
+	mux.Handle("POST /v1/responses", RateLimitMiddleware(rl, AuthMiddleware(cs, responses)))
+	mux.Handle("POST /v1/responses/compact", RateLimitMiddleware(rl, AuthMiddleware(cs,
+		http.HandlerFunc(responses.HandleCompact),
+	)))
 	mux.Handle("/v1/", RateLimitMiddleware(rl, AuthMiddleware(cs, proxy)))
 	mux.Handle("/anthropic/", RateLimitMiddleware(rl, AuthMiddleware(cs, proxy)))
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           mux,
+		Handler:           RecoveryMiddleware(mux),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       120 * time.Second,
@@ -87,6 +165,12 @@ func main() {
 			slog.Error("shutdown error", "error", err)
 		}
 		rl.Close()
+		if dashRl != nil {
+			dashRl.Close()
+		}
+		if usage != nil {
+			usage.Close()
+		}
 		if stopWatch != nil {
 			stopWatch()
 		}

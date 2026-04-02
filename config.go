@@ -13,24 +13,35 @@ import (
 )
 
 type Config struct {
-	Listen         string        `yaml:"listen"`
-	Models         []ModelConfig `yaml:"models"`
-	Keys           []KeyConfig   `yaml:"keys"`
-	TrustedProxies []string      `yaml:"trusted_proxies"` // CIDR or IPs allowed to set X-Real-IP
+	Listen                 string        `yaml:"listen"`
+	Models                 []ModelConfig `yaml:"models"`
+	Keys                   []KeyConfig   `yaml:"keys"`
+	TrustedProxies         []string      `yaml:"trusted_proxies"`          // CIDR or IPs allowed to set X-Real-IP
+	ServeConfigGenerator   bool          `yaml:"serve_config_generator"`   // enable the config generator page at GET /
+	LogMetrics             bool          `yaml:"log_metrics"`              // enable per-request usage logging to SQLite
+	UsageDB                string        `yaml:"usage_db"`                 // path to SQLite usage database (default: usage.db)
+	UsageDashboard         bool          `yaml:"usage_dashboard"`          // enable the usage dashboard at /usage
+	UsageDashboardPassword string        `yaml:"usage_dashboard_password"` // password for the usage dashboard
 }
 
 const (
 	BackendOpenAI    = "openai"
 	BackendAnthropic = "anthropic"
+
+	ResponsesModeAuto      = ""          // default: probe backend, cache result
+	ResponsesModeNative    = "native"    // always passthrough
+	ResponsesModeTranslate = "translate" // always translate to Chat Completions
 )
 
 type ModelConfig struct {
-	Name    string `yaml:"name"`
-	Backend string `yaml:"backend"`  // upstream URL e.g. http://192.168.100.10:8000/v1
-	APIKey  string `yaml:"api_key"`  // key to send to the backend (if required)
-	Model   string `yaml:"model"`    // model name to send to the backend (if different from Name)
-	Timeout int    `yaml:"timeout"`  // request timeout in seconds (default 300)
-	Type    string `yaml:"type"`     // backend type: "" or "openai" (default), "anthropic"
+	Name                 string `yaml:"name"`
+	Backend              string `yaml:"backend"`                // upstream URL e.g. http://192.168.100.10:8000/v1
+	APIKey               string `yaml:"api_key"`                // key to send to the backend (if required)
+	Model                string `yaml:"model"`                  // model name to send to the backend (if different from Name)
+	Timeout              int    `yaml:"timeout"`                // request timeout in seconds (default 300)
+	Type                 string `yaml:"type"`                   // backend type: "" or "openai" (default), "anthropic"
+	ResponsesMode        string `yaml:"responses_mode"`         // "auto" (default), "native", or "translate"
+	ContextWindow        int    `yaml:"context_window"`         // max context tokens (0 = auto-detect from backend)
 }
 
 type KeyConfig struct {
@@ -41,9 +52,10 @@ type KeyConfig struct {
 
 // ConfigStore provides thread-safe access to the current config.
 type ConfigStore struct {
-	mu     sync.RWMutex
-	config *Config
-	path   string
+	mu       sync.RWMutex
+	config   *Config
+	path     string
+	onReload func(*Config) // called after each successful reload (optional)
 }
 
 func NewConfigStore(path string) (*ConfigStore, error) {
@@ -87,7 +99,16 @@ func (cs *ConfigStore) Load() error {
 	cs.mu.Unlock()
 
 	slog.Info("config loaded", "models", len(cfg.Models), "keys", len(cfg.Keys))
+
+	if cs.onReload != nil {
+		cs.onReload(&cfg)
+	}
 	return nil
+}
+
+// SetOnReload registers a callback invoked after each successful config reload.
+func (cs *ConfigStore) SetOnReload(fn func(*Config)) {
+	cs.onReload = fn
 }
 
 func (cs *ConfigStore) Get() *Config {
@@ -149,6 +170,15 @@ func validateConfig(cfg *Config) error {
 		slog.Warn("no API keys configured — all requests will be unauthenticated")
 	}
 
+	if cfg.UsageDashboard {
+		if !cfg.LogMetrics {
+			return fmt.Errorf("usage_dashboard requires log_metrics to be enabled")
+		}
+		if cfg.UsageDashboardPassword == "" {
+			return fmt.Errorf("usage_dashboard requires usage_dashboard_password to be set")
+		}
+	}
+
 	names := make(map[string]bool)
 	for _, m := range cfg.Models {
 		if m.Name == "" {
@@ -177,6 +207,12 @@ func validateConfig(cfg *Config) error {
 		case "", BackendOpenAI, BackendAnthropic:
 		default:
 			return fmt.Errorf("model %q has unknown type %q (must be %q or %q)", m.Name, m.Type, BackendOpenAI, BackendAnthropic)
+		}
+
+		switch m.ResponsesMode {
+		case "", "auto", ResponsesModeNative, ResponsesModeTranslate:
+		default:
+			return fmt.Errorf("model %q has unknown responses_mode %q (must be %q, %q, or omitted)", m.Name, m.ResponsesMode, ResponsesModeNative, ResponsesModeTranslate)
 		}
 
 		if names[m.Name] {
