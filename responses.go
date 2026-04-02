@@ -1056,6 +1056,10 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 	for scanner.Scan() {
 		line := scanner.Text()
 		responseBytes += int64(len(line)) + 1
+		if responseBytes > maxResponseBodySize {
+			slog.Error("upstream streaming response exceeded size limit", "model", req.Model, "bytes", responseBytes)
+			break
+		}
 		rawLines++
 
 		// Log the first few lines from the backend at debug level for diagnostics.
