@@ -9,6 +9,8 @@ The easiest path is the built-in config generator (`--serve-config-generator` fl
 - **Configuration file** — a `config.toml` to save as `~/.codex/config.toml`
 - **Start command** — a shell script that passes all settings via `codex -c` overrides, requiring no config file changes
 
+![Config generator form for Codex](img/config-generator-form.svg)
+
 For manual setup, see [Manual configuration](#manual-configuration) below.
 
 ## How it works

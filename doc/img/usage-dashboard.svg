@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 360" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif">
+  <rect width="680" height="360" rx="8" fill="#f4f6f9"/>
+  <!-- Header -->
+  <rect width="680" height="44" rx="8" fill="#0f172a"/>
+  <rect y="36" width="680" height="8" fill="#0f172a"/>
+  <text x="24" y="28" fill="#f1f5f9" font-size="14" font-weight="700">Usage Dashboard</text>
+  <text x="580" y="28" fill="#94a3b8" font-size="11">Last 30 days</text>
+  <!-- Stat cards -->
+  <rect x="24" y="56" width="150" height="64" rx="6" fill="#fff" stroke="#d8dde5" stroke-width="1"/>
+  <text x="36" y="76" fill="#5c6377" font-size="10" font-weight="600">REQUESTS</text>
+  <text x="36" y="104" fill="#1b2033" font-size="22" font-weight="700">12,847</text>
+  <rect x="190" y="56" width="150" height="64" rx="6" fill="#fff" stroke="#d8dde5" stroke-width="1"/>
+  <text x="202" y="76" fill="#5c6377" font-size="10" font-weight="600">TOTAL TOKENS</text>
+  <text x="202" y="104" fill="#1b2033" font-size="22" font-weight="700">48.2M</text>
+  <rect x="356" y="56" width="150" height="64" rx="6" fill="#fff" stroke="#d8dde5" stroke-width="1"/>
+  <text x="368" y="76" fill="#5c6377" font-size="10" font-weight="600">ACTIVE USERS</text>
+  <text x="368" y="104" fill="#1b2033" font-size="22" font-weight="700">5</text>
+  <rect x="522" y="56" width="134" height="64" rx="6" fill="#fff" stroke="#d8dde5" stroke-width="1"/>
+  <text x="534" y="76" fill="#5c6377" font-size="10" font-weight="600">ERROR RATE</text>
+  <text x="534" y="104" fill="#047857" font-size="22" font-weight="700">0.3%</text>
+  <!-- Chart area -->
+  <rect x="24" y="132" width="632" height="100" rx="6" fill="#fff" stroke="#d8dde5" stroke-width="1"/>
+  <text x="36" y="152" fill="#5c6377" font-size="10" font-weight="600">DAILY REQUESTS</text>
+  <!-- Bar chart -->
+  <rect x="52" y="190" width="16" height="30" rx="2" fill="#93c5fd" opacity="0.7"/>
+  <rect x="76" y="180" width="16" height="40" rx="2" fill="#93c5fd" opacity="0.7"/>
+  <rect x="100" y="170" width="16" height="50" rx="2" fill="#93c5fd" opacity="0.7"/>
+  <rect x="124" y="175" width="16" height="45" rx="2" fill="#93c5fd" opacity="0.7"/>
+  <rect x="148" y="185" width="16" height="35" rx="2" fill="#93c5fd" opacity="0.7"/>
+  <rect x="172" y="168" width="16" height="52" rx="2" fill="#93c5fd" opacity="0.7"/>
+  <rect x="196" y="172" width="16" height="48" rx="2" fill="#93c5fd" opacity="0.7"/>
+  <rect x="220" y="195" width="16" height="25" rx="2" fill="#93c5fd" opacity="0.4"/>
+  <rect x="244" y="198" width="16" height="22" rx="2" fill="#93c5fd" opacity="0.4"/>
+  <rect x="268" y="165" width="16" height="55" rx="2" fill="#93c5fd" opacity="0.7"/>
+  <rect x="292" y="160" width="16" height="60" rx="2" fill="#93c5fd" opacity="0.7"/>
+  <rect x="316" y="168" width="16" height="52" rx="2" fill="#93c5fd" opacity="0.7"/>
+  <rect x="340" y="170" width="16" height="50" rx="2" fill="#93c5fd" opacity="0.7"/>
+  <rect x="364" y="162" width="16" height="58" rx="2" fill="#93c5fd" opacity="0.7"/>
+  <rect x="388" y="158" width="16" height="62" rx="2" fill="#1a56db"/>
+  <!-- Models table -->
+  <rect x="24" y="244" width="632" height="104" rx="6" fill="#fff" stroke="#d8dde5" stroke-width="1"/>
+  <text x="36" y="264" fill="#5c6377" font-size="10" font-weight="600">MODELS</text>
+  <line x1="36" y1="272" x2="644" y2="272" stroke="#d8dde5" stroke-width="1"/>
+  <text x="44" y="288" fill="#5c6377" font-size="9" font-weight="600">MODEL</text>
+  <text x="220" y="288" fill="#5c6377" font-size="9" font-weight="600">REQUESTS</text>
+  <text x="320" y="288" fill="#5c6377" font-size="9" font-weight="600">USERS</text>
+  <text x="400" y="288" fill="#5c6377" font-size="9" font-weight="600">TOKENS</text>
+  <text x="520" y="288" fill="#5c6377" font-size="9" font-weight="600">AVG LATENCY</text>
+  <line x1="36" y1="294" x2="644" y2="294" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="44" y="312" fill="#1b2033" font-size="11" font-weight="500">MiniMax-M2.5</text>
+  <text x="220" y="312" fill="#1b2033" font-size="11">8,234</text>
+  <text x="320" y="312" fill="#1b2033" font-size="11">4</text>
+  <text x="400" y="312" fill="#1b2033" font-size="11">32.1M</text>
+  <text x="520" y="312" fill="#1b2033" font-size="11">1,523ms</text>
+  <line x1="36" y1="320" x2="644" y2="320" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="44" y="338" fill="#1b2033" font-size="11" font-weight="500">qwen-3.5</text>
+  <text x="220" y="338" fill="#1b2033" font-size="11">3,412</text>
+  <text x="320" y="338" fill="#1b2033" font-size="11">3</text>
+  <text x="400" y="338" fill="#1b2033" font-size="11">12.8M</text>
+  <text x="520" y="338" fill="#1b2033" font-size="11">2,341ms</text>
+</svg>

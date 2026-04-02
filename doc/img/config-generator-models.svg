@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 320" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif">
+  <defs>
+    <linearGradient id="hdr" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+  </defs>
+  <!-- Background -->
+  <rect width="680" height="320" rx="8" fill="#f4f6f9"/>
+  <!-- Header bar -->
+  <rect width="680" height="52" rx="8" fill="url(#hdr)"/>
+  <rect y="44" width="680" height="8" fill="url(#hdr)"/>
+  <text x="340" y="32" text-anchor="middle" fill="#f1f5f9" font-size="15" font-weight="700">Go-LLM-Proxy Config Generator</text>
+  <!-- Card -->
+  <rect x="24" y="68" width="632" height="236" rx="6" fill="#fff" stroke="#d8dde5" stroke-width="1"/>
+  <text x="40" y="92" fill="#1b2033" font-size="13" font-weight="600">Available Models</text>
+  <line x1="40" y1="100" x2="640" y2="100" stroke="#d8dde5" stroke-width="1"/>
+  <!-- Table header -->
+  <text x="48" y="120" fill="#5c6377" font-size="10" font-weight="600" letter-spacing="0.5">MODEL</text>
+  <text x="280" y="120" fill="#5c6377" font-size="10" font-weight="600" letter-spacing="0.5">PROTOCOL</text>
+  <text x="440" y="120" fill="#5c6377" font-size="10" font-weight="600" letter-spacing="0.5">DATA SAFETY</text>
+  <line x1="40" y1="128" x2="640" y2="128" stroke="#d8dde5" stroke-width="1"/>
+  <!-- Row 1 -->
+  <text x="48" y="150" fill="#1b2033" font-size="12" font-weight="600">MiniMax-M2.5</text>
+  <rect x="272" y="138" width="56" height="18" rx="9" fill="#f0fdf4"/>
+  <text x="300" y="151" text-anchor="middle" fill="#166534" font-size="9" font-weight="600">OpenAI</text>
+  <rect x="432" y="138" width="100" height="18" rx="9" fill="#ecfdf5"/>
+  <text x="482" y="151" text-anchor="middle" fill="#047857" font-size="9" font-weight="600">Safe for data</text>
+  <line x1="40" y1="162" x2="640" y2="162" stroke="#f1f5f9" stroke-width="1"/>
+  <!-- Row 2 -->
+  <text x="48" y="182" fill="#1b2033" font-size="12" font-weight="600">qwen-3.5</text>
+  <rect x="272" y="170" width="56" height="18" rx="9" fill="#f0fdf4"/>
+  <text x="300" y="183" text-anchor="middle" fill="#166534" font-size="9" font-weight="600">OpenAI</text>
+  <rect x="432" y="170" width="100" height="18" rx="9" fill="#ecfdf5"/>
+  <text x="482" y="183" text-anchor="middle" fill="#047857" font-size="9" font-weight="600">Safe for data</text>
+  <line x1="40" y1="194" x2="640" y2="194" stroke="#f1f5f9" stroke-width="1"/>
+  <!-- Row 3 -->
+  <text x="48" y="214" fill="#1b2033" font-size="12" font-weight="600">glm-5.1</text>
+  <rect x="272" y="202" width="56" height="18" rx="9" fill="#f0fdf4"/>
+  <text x="300" y="215" text-anchor="middle" fill="#166534" font-size="9" font-weight="600">OpenAI</text>
+  <rect x="432" y="202" width="120" height="18" rx="9" fill="#fffbeb"/>
+  <text x="492" y="215" text-anchor="middle" fill="#b45309" font-size="9" font-weight="600">Warning — 3rd party</text>
+  <line x1="40" y1="226" x2="640" y2="226" stroke="#f1f5f9" stroke-width="1"/>
+  <!-- Row 4 -->
+  <text x="48" y="246" fill="#1b2033" font-size="12" font-weight="600">claude-sonnet-4</text>
+  <rect x="272" y="234" width="68" height="18" rx="9" fill="#eef2ff"/>
+  <text x="306" y="247" text-anchor="middle" fill="#4338ca" font-size="9" font-weight="600">Anthropic</text>
+  <rect x="432" y="234" width="120" height="18" rx="9" fill="#fffbeb"/>
+  <text x="492" y="247" text-anchor="middle" fill="#b45309" font-size="9" font-weight="600">Warning — 3rd party</text>
+  <!-- Row 5 -->
+  <line x1="40" y1="258" x2="640" y2="258" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="48" y="278" fill="#1b2033" font-size="12" font-weight="600">MiniMax-M2.7</text>
+  <rect x="272" y="266" width="68" height="18" rx="9" fill="#eef2ff"/>
+  <text x="306" y="279" text-anchor="middle" fill="#4338ca" font-size="9" font-weight="600">Anthropic</text>
+  <rect x="432" y="266" width="120" height="18" rx="9" fill="#fffbeb"/>
+  <text x="492" y="279" text-anchor="middle" fill="#b45309" font-size="9" font-weight="600">Warning — 3rd party</text>
+</svg>

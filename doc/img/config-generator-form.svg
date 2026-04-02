@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 340" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif">
+  <rect width="680" height="340" rx="8" fill="#f4f6f9"/>
+  <!-- Card -->
+  <rect x="24" y="16" width="632" height="308" rx="6" fill="#fff" stroke="#d8dde5" stroke-width="1"/>
+  <text x="40" y="40" fill="#1b2033" font-size="13" font-weight="600">Generate Configuration</text>
+  <line x1="40" y1="48" x2="640" y2="48" stroke="#d8dde5" stroke-width="1"/>
+  <!-- Harness select -->
+  <text x="40" y="72" fill="#5c6377" font-size="10" font-weight="600" letter-spacing="0.5" text-transform="uppercase">CODING ASSISTANT</text>
+  <rect x="40" y="78" width="280" height="32" rx="4" fill="#fff" stroke="#d8dde5" stroke-width="1"/>
+  <text x="52" y="98" fill="#1b2033" font-size="12">Codex</text>
+  <text x="300" y="98" fill="#5c6377" font-size="10">&#9662;</text>
+  <!-- API Key -->
+  <text x="344" y="72" fill="#5c6377" font-size="10" font-weight="600" letter-spacing="0.5">PROXY API KEY</text>
+  <rect x="344" y="78" width="280" height="32" rx="4" fill="#fff" stroke="#d8dde5" stroke-width="1"/>
+  <text x="356" y="98" fill="#94a3b8" font-size="12">&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;</text>
+  <!-- Model row -->
+  <text x="40" y="134" fill="#5c6377" font-size="10" font-weight="600" letter-spacing="0.5">MODEL</text>
+  <rect x="40" y="140" width="180" height="32" rx="4" fill="#fff" stroke="#d8dde5" stroke-width="1"/>
+  <text x="52" y="160" fill="#1b2033" font-size="12">MiniMax-M2.5</text>
+  <text x="200" y="160" fill="#5c6377" font-size="10">&#9662;</text>
+  <!-- Reasoning -->
+  <text x="240" y="134" fill="#5c6377" font-size="10" font-weight="600" letter-spacing="0.5">REASONING EFFORT</text>
+  <rect x="240" y="140" width="140" height="32" rx="4" fill="#fff" stroke="#d8dde5" stroke-width="1"/>
+  <text x="252" y="160" fill="#1b2033" font-size="12">Medium</text>
+  <text x="360" y="160" fill="#5c6377" font-size="10">&#9662;</text>
+  <!-- Context Window -->
+  <text x="400" y="134" fill="#5c6377" font-size="10" font-weight="600" letter-spacing="0.5">CONTEXT WINDOW</text>
+  <rect x="400" y="140" width="140" height="32" rx="4" fill="#fff" stroke="#d8dde5" stroke-width="1"/>
+  <text x="412" y="160" fill="#1b2033" font-size="12">Auto-detect</text>
+  <text x="520" y="160" fill="#5c6377" font-size="10">&#9662;</text>
+  <text x="400" y="184" fill="#047857" font-size="10">Detected: 192K tokens</text>
+  <!-- Output format -->
+  <text x="40" y="204" fill="#5c6377" font-size="10" font-weight="600" letter-spacing="0.5">OUTPUT FORMAT</text>
+  <!-- Radio 1 -->
+  <circle cx="52" cy="220" r="7" fill="none" stroke="#1a56db" stroke-width="2"/>
+  <circle cx="52" cy="220" r="4" fill="#1a56db"/>
+  <text x="66" y="224" fill="#1b2033" font-size="12">Configuration file</text>
+  <!-- Radio 2 -->
+  <circle cx="212" cy="220" r="7" fill="none" stroke="#d8dde5" stroke-width="2"/>
+  <text x="226" y="224" fill="#1b2033" font-size="12">Start command (shell script)</text>
+  <!-- Tavily -->
+  <text x="40" y="256" fill="#5c6377" font-size="10" font-weight="600" letter-spacing="0.5">TAVILY API KEY <tspan font-weight="400">(optional — web search)</tspan></text>
+  <rect x="40" y="262" width="280" height="32" rx="4" fill="#fff" stroke="#d8dde5" stroke-width="1"/>
+  <text x="52" y="282" fill="#94a3b8" font-size="12">tvly-...</text>
+  <!-- Generate button -->
+  <rect x="40" y="304" width="140" height="36" rx="6" fill="#1a56db"/>
+  <text x="110" y="326" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">Generate Config</text>
+</svg>

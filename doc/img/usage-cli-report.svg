@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 260" font-family="SF Mono,Cascadia Code,Consolas,monospace">
+  <rect width="720" height="260" rx="6" fill="#0f172a"/>
+  <!-- Prompt -->
+  <text x="16" y="24" fill="#94a3b8" font-size="11">$ ./go-llm-proxy -usage-report -report-days 7</text>
+  <!-- Header -->
+  <text x="16" y="52" fill="#e2e8f0" font-size="10.5" font-weight="700">DATE        USER      KEY       REQUESTS  OK   ERR  INPUT TOK   OUTPUT TOK  TOTAL TOK   AVG MS</text>
+  <text x="16" y="66" fill="#475569" font-size="10.5">----        ----      ---       --------  --   ---  ---------   ----------  ---------   ------</text>
+  <!-- Data rows -->
+  <text x="16" y="82" fill="#e2e8f0" font-size="10.5">2026-04-02  admin     a1b2c3d4  342       340  2    1,245,000   312,000     1,557,000   1842</text>
+  <text x="16" y="96" fill="#e2e8f0" font-size="10.5">2026-04-02  derek     e5f6g7h8  128       128  0    489,000     122,000     611,000     956</text>
+  <text x="16" y="110" fill="#e2e8f0" font-size="10.5">2026-04-01  admin     a1b2c3d4  456       452  4    1,890,000   478,000     2,368,000   2103</text>
+  <text x="16" y="124" fill="#e2e8f0" font-size="10.5">2026-04-01  derek     e5f6g7h8  89        89   0    312,000     78,000      390,000     1204</text>
+  <text x="16" y="138" fill="#e2e8f0" font-size="10.5">2026-03-31  admin     a1b2c3d4  523       518  5    2,100,000   534,000     2,634,000   1756</text>
+  <!-- Summary section -->
+  <text x="16" y="168" fill="#e2e8f0" font-size="10.5" font-weight="700">=== User Summary ===</text>
+  <text x="16" y="186" fill="#e2e8f0" font-size="10.5" font-weight="700">USER      KEY       REQUESTS  INPUT TOK   OUTPUT TOK  TOTAL TOK   DAYS  FIRST SEEN  LAST SEEN</text>
+  <text x="16" y="200" fill="#475569" font-size="10.5">----      ---       --------  ---------   ----------  ---------   ----  ----------  ---------</text>
+  <text x="16" y="216" fill="#e2e8f0" font-size="10.5">admin     a1b2c3d4  4,892     18,234,000  4,567,000   22,801,000  7     2026-03-26  2026-04-02</text>
+  <text x="16" y="232" fill="#e2e8f0" font-size="10.5">derek     e5f6g7h8  1,234     3,612,000   903,000     4,515,000   6     2026-03-27  2026-04-02</text>
+  <text x="16" y="248" fill="#94a3b8" font-size="10.5">$</text>
+  <rect x="22" y="240" width="6" height="12" fill="#94a3b8" opacity="0.6"/>
+</svg>

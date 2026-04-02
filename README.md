@@ -67,9 +67,13 @@ That's it — one model, one key. See [config reference](doc/config-reference.md
 | `POST /v1/messages` | Anthropic Messages API |
 | `POST /anthropic/v1/messages` | Anthropic Messages (explicit prefix) |
 
-## Connecting coding assistants
+## Config generator
 
-The built-in config generator (`--serve-config-generator`) creates ready-to-use configs:
+The built-in config generator (`--serve-config-generator`) creates ready-to-use configs for popular coding assistants.
+
+![Config generator — model overview](doc/img/config-generator-models.svg)
+
+Select a tool, choose your models, and generate a config file or start script:
 
 | Tool | Guide |
 |------|-------|
@@ -77,6 +81,14 @@ The built-in config generator (`--serve-config-generator`) creates ready-to-use 
 | Claude Code | [doc/claude-code.md](doc/claude-code.md) |
 | OpenCode | [doc/opencode.md](doc/opencode.md) |
 | Qwen Code | [doc/qwen-code.md](doc/qwen-code.md) |
+
+## Usage monitoring
+
+Track requests, tokens, and latency per user and model with built-in logging and a web dashboard.
+
+![Usage dashboard](doc/img/usage-dashboard.svg)
+
+Enable with `log_metrics: true` and `usage_dashboard: true` in config. See [usage docs](doc/usage.md) for details.
 
 ## Documentation
 

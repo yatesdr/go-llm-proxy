@@ -2,6 +2,8 @@
 
 go-llm-proxy can log per-request metrics to a local SQLite database and serve an interactive dashboard for monitoring usage across users, models, and time periods.
 
+![Usage dashboard overview](img/usage-dashboard.svg)
+
 ## Enabling usage logging
 
 Usage logging is off by default. Enable it with a CLI flag or config setting:
@@ -115,6 +117,8 @@ The default time range is 30 days. Use the `?days=N` query parameter on `/usage/
 ## CLI reports
 
 For quick terminal-based reporting without starting the server, use the report flags:
+
+![CLI usage report](img/usage-cli-report.svg)
 
 ### Usage report (per-user daily breakdown)
 
