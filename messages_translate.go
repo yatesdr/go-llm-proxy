@@ -438,6 +438,29 @@ func buildChatRequestFromAnthropic(req messagesRequest, backendModel string) (ma
 	return chatReq, nil
 }
 
+// requestContainsImages checks if the translated Chat Completions messages
+// contain any image_url content parts.
+func requestContainsImages(chatReq map[string]any) bool {
+	msgs, ok := chatReq["messages"].([]map[string]any)
+	if !ok {
+		return false
+	}
+	for _, msg := range msgs {
+		content := msg["content"]
+		parts, ok := content.([]any)
+		if !ok {
+			continue
+		}
+		for _, part := range parts {
+			p, ok := part.(map[string]any)
+			if ok && p["type"] == "image_url" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // mapFinishToStopReason maps OpenAI finish_reason to Anthropic stop_reason.
 func mapFinishToStopReason(finishReason string) string {
 	switch finishReason {

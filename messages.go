@@ -174,6 +174,14 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		slog.Error("upstream returned error for translated messages request",
 			"model", req.Model, "status", resp.StatusCode, "body", string(errBody))
 
+		// Provide a friendly error when the backend rejects a request containing images.
+		errMsg := fmt.Sprintf("backend returned %d: %s", resp.StatusCode, string(errBody))
+		if resp.StatusCode == http.StatusBadRequest && requestContainsImages(chatReq) {
+			errMsg = fmt.Sprintf("The backend model (%s) does not appear to support image inputs. "+
+				"Remove images from the conversation or use a vision-capable model. "+
+				"Original error: %s", req.Model, string(errBody))
+		}
+
 		if req.Stream {
 			setSecurityHeaders(w)
 			w.Header().Set("Content-Type", "text/event-stream")
@@ -183,7 +191,7 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"type": "error",
 				"error": map[string]any{
 					"type":    "api_error",
-					"message": fmt.Sprintf("backend returned %d: %s", resp.StatusCode, string(errBody)),
+					"message": errMsg,
 				},
 			})
 			fmt.Fprintf(w, "event: error\ndata: %s\n\n", errData)
@@ -193,8 +201,7 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		writeAnthropicError(w, resp.StatusCode, "api_error",
-			fmt.Sprintf("backend returned %d: %s", resp.StatusCode, string(errBody)))
+		writeAnthropicError(w, resp.StatusCode, "api_error", errMsg)
 		return
 	}
 
