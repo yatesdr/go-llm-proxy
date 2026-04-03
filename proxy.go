@@ -25,7 +25,7 @@ const maxRequestBodySize = 50 * 1024 * 1024
 const maxResponseBodySize = 100 * 1024 * 1024
 
 // allowedPaths restricts which sub-paths can be proxied to backends.
-var allowedPaths = regexp.MustCompile(`^/v1/(chat/completions|completions|embeddings|images/generations|audio/(transcriptions|translations|speech)|messages)$`)
+var allowedPaths = regexp.MustCompile(`^/v1/(chat/completions|completions|embeddings|images/generations|audio/(transcriptions|translations|speech))$`)
 
 // allowedResponseHeaders controls which upstream headers are forwarded to clients.
 var allowedResponseHeaders = map[string]bool{

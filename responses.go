@@ -270,6 +270,7 @@ type chatChoice struct {
 type chatChoiceMsg struct {
 	Role      string             `json:"role"`
 	Content   *string            `json:"content"`
+	Reasoning *string            `json:"reasoning,omitempty"`
 	ToolCalls []chatChoiceToolCall `json:"tool_calls,omitempty"`
 }
 

@@ -21,6 +21,7 @@ func main() {
 	modelReport := flag.Bool("model-report", false, "print per-model usage report and exit")
 	reportDays := flag.Int("report-days", 30, "number of days to include in reports")
 	usageDBPath := flag.String("usage-db", "", "path to SQLite usage database (overrides config)")
+	logDebug := flag.Bool("log-debug", false, "enable debug-level logging for translation troubleshooting")
 	flag.Parse()
 
 	if *addUser {
@@ -51,8 +52,12 @@ func main() {
 		return
 	}
 
+	logLevel := slog.LevelInfo
+	if *logDebug {
+		logLevel = slog.LevelDebug
+	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: logLevel,
 	})))
 
 	cs, err := NewConfigStore(*configPath)
@@ -87,6 +92,7 @@ func main() {
 
 	proxy := NewProxyHandler(cs, usage)
 	responses := NewResponsesHandler(cs, usage)
+	messages := NewMessagesHandler(cs, usage)
 	models := NewModelsHandler(cs)
 	rl := NewRateLimiter(cfg.TrustedProxies)
 
@@ -139,6 +145,8 @@ func main() {
 	mux.Handle("POST /v1/responses/compact", RateLimitMiddleware(rl, AuthMiddleware(cs,
 		http.HandlerFunc(responses.HandleCompact),
 	)))
+	mux.Handle("POST /v1/messages", RateLimitMiddleware(rl, AuthMiddleware(cs, messages)))
+	mux.Handle("POST /anthropic/v1/messages", RateLimitMiddleware(rl, AuthMiddleware(cs, messages)))
 	mux.Handle("/v1/", RateLimitMiddleware(rl, AuthMiddleware(cs, proxy)))
 	mux.Handle("/anthropic/", RateLimitMiddleware(rl, AuthMiddleware(cs, proxy)))
 

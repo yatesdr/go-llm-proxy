@@ -4,3 +4,4 @@ config.yaml
 .DS_Store
 claude-code-main/
 claude-api.md
+claude-proxy-plan.md

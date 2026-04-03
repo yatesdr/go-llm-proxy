@@ -31,6 +31,10 @@ const (
 	ResponsesModeAuto      = ""          // default: probe backend, cache result
 	ResponsesModeNative    = "native"    // always passthrough
 	ResponsesModeTranslate = "translate" // always translate to Chat Completions
+
+	MessagesModeAuto      = ""          // default: anthropic backends passthrough, others translate
+	MessagesModeNative    = "native"    // always passthrough (force Anthropic protocol to backend)
+	MessagesModeTranslate = "translate" // always translate Anthropic Messages to Chat Completions
 )
 
 type ModelConfig struct {
@@ -41,6 +45,7 @@ type ModelConfig struct {
 	Timeout              int    `yaml:"timeout"`                // request timeout in seconds (default 300)
 	Type                 string `yaml:"type"`                   // backend type: "" or "openai" (default), "anthropic"
 	ResponsesMode        string `yaml:"responses_mode"`         // "auto" (default), "native", or "translate"
+	MessagesMode         string `yaml:"messages_mode"`          // "auto" (default), "native", or "translate"
 	ContextWindow        int    `yaml:"context_window"`         // max context tokens (0 = auto-detect from backend)
 }
 
@@ -213,6 +218,12 @@ func validateConfig(cfg *Config) error {
 		case "", "auto", ResponsesModeNative, ResponsesModeTranslate:
 		default:
 			return fmt.Errorf("model %q has unknown responses_mode %q (must be %q, %q, or omitted)", m.Name, m.ResponsesMode, ResponsesModeNative, ResponsesModeTranslate)
+		}
+
+		switch m.MessagesMode {
+		case "", "auto", MessagesModeNative, MessagesModeTranslate:
+		default:
+			return fmt.Errorf("model %q has unknown messages_mode %q (must be %q, %q, or omitted)", m.Name, m.MessagesMode, MessagesModeNative, MessagesModeTranslate)
 		}
 
 		if names[m.Name] {

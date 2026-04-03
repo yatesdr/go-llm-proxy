@@ -28,6 +28,21 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	})
 }
 
+// writeAnthropicError sends an Anthropic-compatible error response.
+// Claude Code expects this format for all Messages API errors.
+func writeAnthropicError(w http.ResponseWriter, status int, errType, message string) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]any{
+		"type": "error",
+		"error": map[string]any{
+			"type":    errType,
+			"message": message,
+		},
+	})
+}
+
 // RecoveryMiddleware catches panics in handlers and returns a generic 500 error.
 // The stack trace is logged server-side but never exposed to the client.
 func RecoveryMiddleware(next http.Handler) http.Handler {
