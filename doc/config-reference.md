@@ -25,6 +25,7 @@ models:
     timeout: 300                  # optional
     type: openai                  # optional
     responses_mode: auto          # optional
+    messages_mode: auto           # optional
     context_window: 0             # optional
 ```
 
@@ -37,6 +38,7 @@ models:
 | `timeout` | no | `300` | Request timeout in seconds |
 | `type` | no | `"openai"` | Backend protocol: `"openai"` or `"anthropic"` |
 | `responses_mode` | no | `"auto"` | Responses API handling: `"auto"`, `"native"`, or `"translate"` (see [Responses mode](#responses-mode)) |
+| `messages_mode` | no | `"auto"` | Messages API handling: `"auto"`, `"native"`, or `"translate"` (see [Messages mode](#messages-mode)) |
 | `context_window` | no | `0` | Max context tokens. `0` = auto-detect from backend at startup |
 
 ## Key fields
@@ -111,6 +113,31 @@ Controls how the proxy handles Responses API requests (`POST /v1/responses`, `PO
 ```
 
 See [doc/codex.md](codex.md) for full details on the Responses API translation layer.
+
+## Messages mode
+
+Controls how the proxy handles Anthropic Messages API requests (`POST /v1/messages`) per model:
+
+| Value | Behavior |
+|---|---|
+| `auto` | Default. Anthropic backends (`type: anthropic`) passthrough natively; all others translate to Chat Completions automatically |
+| `native` | Force passthrough. Backend must speak the Anthropic Messages API |
+| `translate` | Force translation to Chat Completions. Skip auto-detection |
+
+In `auto` mode, the proxy determines the behavior from the model's `type` field — no probing needed since no standard OpenAI backend supports `/v1/messages`.
+
+```yaml
+# Auto (default): OpenAI backend → translates automatically
+- name: MiniMax-M2.5
+  backend: http://192.168.100.10:8000/v1
+
+# Auto: Anthropic backend → passthroughs natively
+- name: claude-sonnet-4
+  backend: https://api.anthropic.com
+  type: anthropic
+```
+
+The translation supports text, tool calling, reasoning tokens (emitted as thinking blocks), and streaming. See [doc/claude-code.md](claude-code.md) for full details.
 
 ## Context window detection
 

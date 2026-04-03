@@ -43,7 +43,8 @@ That's it — one model, one key. See [config reference](doc/config-reference.md
 ## Features
 
 - OpenAI and Anthropic API passthrough (chat, completions, embeddings, images, audio, messages)
-- OpenAI Responses API with automatic Chat Completions translation for Codex CLI
+- Anthropic Messages API translation — use Claude Code with any Chat Completions backend
+- OpenAI Responses API translation — use Codex CLI with any Chat Completions backend
 - Model name routing and rewriting across backends
 - API key auth with per-key model access control
 - Streaming (SSE) support with proper flush handling
@@ -64,8 +65,8 @@ That's it — one model, one key. See [config reference](doc/config-reference.md
 | `POST /v1/audio/*` | Speech-to-text, translation, TTS |
 | `POST /v1/responses` | Responses API (native or translated) |
 | `POST /v1/responses/compact` | Context compaction |
-| `POST /v1/messages` | Anthropic Messages API |
-| `POST /anthropic/v1/messages` | Anthropic Messages (explicit prefix) |
+| `POST /v1/messages` | Anthropic Messages API (native or translated — see [Claude Code guide](doc/claude-code.md)) |
+| `POST /anthropic/v1/messages` | Anthropic Messages (explicit prefix, validates backend type) |
 
 ## Config generator
 
