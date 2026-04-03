@@ -1,4 +1,4 @@
-package main
+package ratelimit
 
 import (
 	"net/http"
@@ -153,7 +153,7 @@ func TestClientIP_DirectConnection(t *testing.T) {
 	r := httptest.NewRequest("GET", "/", nil)
 	r.RemoteAddr = "10.0.0.1:12345"
 
-	if got := rl.clientIP(r); got != "10.0.0.1" {
+	if got := ClientIP(rl, r); got != "10.0.0.1" {
 		t.Fatalf("expected 10.0.0.1, got: %q", got)
 	}
 }
@@ -166,7 +166,7 @@ func TestClientIP_TrustedProxy_XRealIP(t *testing.T) {
 	r.RemoteAddr = "127.0.0.1:12345"
 	r.Header.Set("X-Real-IP", "203.0.113.50")
 
-	if got := rl.clientIP(r); got != "203.0.113.50" {
+	if got := ClientIP(rl, r); got != "203.0.113.50" {
 		t.Fatalf("expected 203.0.113.50, got: %q", got)
 	}
 }
@@ -179,7 +179,7 @@ func TestClientIP_TrustedProxy_XForwardedFor(t *testing.T) {
 	r.RemoteAddr = "127.0.0.1:12345"
 	r.Header.Set("X-Forwarded-For", "203.0.113.50, 10.0.0.1")
 
-	if got := rl.clientIP(r); got != "203.0.113.50" {
+	if got := ClientIP(rl, r); got != "203.0.113.50" {
 		t.Fatalf("expected 203.0.113.50 (first in chain), got: %q", got)
 	}
 }
@@ -192,7 +192,7 @@ func TestClientIP_UntrustedProxy_IgnoresHeaders(t *testing.T) {
 	r.RemoteAddr = "10.0.0.1:12345"
 	r.Header.Set("X-Real-IP", "spoofed")
 
-	if got := rl.clientIP(r); got != "10.0.0.1" {
+	if got := ClientIP(rl, r); got != "10.0.0.1" {
 		t.Fatalf("expected direct IP 10.0.0.1 (untrusted proxy), got: %q", got)
 	}
 }
@@ -205,7 +205,7 @@ func TestClientIP_NoTrustedProxies(t *testing.T) {
 	r.RemoteAddr = "10.0.0.1:12345"
 	r.Header.Set("X-Real-IP", "spoofed")
 
-	if got := rl.clientIP(r); got != "10.0.0.1" {
+	if got := ClientIP(rl, r); got != "10.0.0.1" {
 		t.Fatalf("expected direct IP when no proxies configured, got: %q", got)
 	}
 }
@@ -218,7 +218,7 @@ func TestClientIP_TrustedCIDR(t *testing.T) {
 	r.RemoteAddr = "172.17.0.1:12345"
 	r.Header.Set("X-Real-IP", "203.0.113.50")
 
-	if got := rl.clientIP(r); got != "203.0.113.50" {
+	if got := ClientIP(rl, r); got != "203.0.113.50" {
 		t.Fatalf("expected 203.0.113.50 from CIDR-trusted proxy, got: %q", got)
 	}
 }

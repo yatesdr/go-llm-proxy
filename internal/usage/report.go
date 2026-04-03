@@ -1,4 +1,4 @@
-package main
+package usage
 
 import (
 	"database/sql"
@@ -54,18 +54,18 @@ func RunUsageReport(dbPath string, days int) {
 	count := 0
 	for rows.Next() {
 		var (
-			day          string
-			keyName      string
-			keyHash      string
-			requests     int
-			successful   int
-			errors       int
-			inputTokens  int64
-			outputTokens int64
-			totalTokens  int64
-			requestBytes int64
+			day           string
+			keyName       string
+			keyHash       string
+			requests      int
+			successful    int
+			errors        int
+			inputTokens   int64
+			outputTokens  int64
+			totalTokens   int64
+			requestBytes  int64
 			responseBytes int64
-			avgDuration  int64
+			avgDuration   int64
 		)
 		if err := rows.Scan(&day, &keyName, &keyHash, &requests, &successful, &errors,
 			&inputTokens, &outputTokens, &totalTokens,
@@ -172,7 +172,7 @@ func printUserSummary(db *sql.DB, days int) {
 	w.Flush()
 }
 
-// printModelSummary prints a per-model breakdown.
+// RunModelReport prints a per-model breakdown.
 func RunModelReport(dbPath string, days int) {
 	db, err := sql.Open("sqlite", dbPath+"?mode=ro&_busy_timeout=5000")
 	if err != nil {

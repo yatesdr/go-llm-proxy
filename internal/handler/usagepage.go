@@ -1,4 +1,4 @@
-package main
+package handler
 
 import (
 	"crypto/hmac"
@@ -9,17 +9,22 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+
+	"go-llm-proxy/internal/config"
+	"go-llm-proxy/internal/httputil"
+	"go-llm-proxy/internal/ratelimit"
+	"go-llm-proxy/internal/usage"
 )
 
 const dashboardCookieName = "usage_auth"
 
 type UsageDashboardHandler struct {
-	config *ConfigStore
-	usage  *UsageLogger
-	rl     *RateLimiter
+	config *config.ConfigStore
+	usage  *usage.UsageLogger
+	rl     *ratelimit.RateLimiter
 }
 
-func NewUsageDashboardHandler(cs *ConfigStore, ul *UsageLogger, rl *RateLimiter) *UsageDashboardHandler {
+func NewUsageDashboardHandler(cs *config.ConfigStore, ul *usage.UsageLogger, rl *ratelimit.RateLimiter) *UsageDashboardHandler {
 	return &UsageDashboardHandler{config: cs, usage: ul, rl: rl}
 }
 
@@ -32,13 +37,13 @@ func (h *UsageDashboardHandler) LoginPage(w http.ResponseWriter, r *http.Request
 }
 
 func (h *UsageDashboardHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
-	ip := h.rl.clientIP(r)
+	ip := ratelimit.ClientIP(h.rl, r)
 	if !h.rl.Check(ip) {
-		writeError(w, http.StatusTooManyRequests, "too many attempts")
+		httputil.WriteError(w, http.StatusTooManyRequests, "too many attempts")
 		return
 	}
 	if err := r.ParseForm(); err != nil {
-		writeError(w, http.StatusBadRequest, "bad request")
+		httputil.WriteError(w, http.StatusBadRequest, "bad request")
 		return
 	}
 	password := r.FormValue("password")
@@ -54,7 +59,7 @@ func (h *UsageDashboardHandler) HandleLogin(w http.ResponseWriter, r *http.Reque
 
 func (h *UsageDashboardHandler) ServeData(w http.ResponseWriter, r *http.Request) {
 	if !h.checkCookie(r) {
-		writeError(w, http.StatusUnauthorized, "not authenticated")
+		httputil.WriteError(w, http.StatusUnauthorized, "not authenticated")
 		return
 	}
 	days := 30
@@ -66,10 +71,10 @@ func (h *UsageDashboardHandler) ServeData(w http.ResponseWriter, r *http.Request
 	data, err := h.usage.QueryDashboardData(days)
 	if err != nil {
 		slog.Error("dashboard query failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "query failed")
+		httputil.WriteError(w, http.StatusInternalServerError, "query failed")
 		return
 	}
-	setSecurityHeaders(w)
+	httputil.SetSecurityHeaders(w)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
 	json.NewEncoder(w).Encode(data)
@@ -113,7 +118,7 @@ func constantTimeEqual(a, b string) bool {
 }
 
 func (h *UsageDashboardHandler) renderLogin(w http.ResponseWriter, errMsg string) {
-	setSecurityHeaders(w)
+	httputil.SetSecurityHeaders(w)
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-ancestors 'none'")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	errNotice := ""
@@ -150,7 +155,7 @@ func (h *UsageDashboardHandler) renderLogin(w http.ResponseWriter, errMsg string
 }
 
 func (h *UsageDashboardHandler) renderDashboard(w http.ResponseWriter) {
-	setSecurityHeaders(w)
+	httputil.SetSecurityHeaders(w)
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(`<!DOCTYPE html>

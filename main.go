@@ -9,6 +9,14 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"go-llm-proxy/internal/auth"
+	"go-llm-proxy/internal/config"
+	"go-llm-proxy/internal/handler"
+	"go-llm-proxy/internal/httputil"
+	"go-llm-proxy/internal/pipeline"
+	"go-llm-proxy/internal/ratelimit"
+	"go-llm-proxy/internal/usage"
 )
 
 func main() {
@@ -25,7 +33,7 @@ func main() {
 	flag.Parse()
 
 	if *addUser {
-		runAddUser(*configPath)
+		auth.RunAddUser(*configPath)
 		return
 	}
 
@@ -33,7 +41,7 @@ func main() {
 	if *usageReport || *modelReport {
 		dbPath := *usageDBPath
 		if dbPath == "" {
-			cs, err := NewConfigStore(*configPath)
+			cs, err := config.NewConfigStore(*configPath)
 			if err == nil {
 				if cfg := cs.Get(); cfg.UsageDB != "" {
 					dbPath = cfg.UsageDB
@@ -44,10 +52,10 @@ func main() {
 			dbPath = "usage.db"
 		}
 		if *usageReport {
-			RunUsageReport(dbPath, *reportDays)
+			usage.RunUsageReport(dbPath, *reportDays)
 		}
 		if *modelReport {
-			RunModelReport(dbPath, *reportDays)
+			usage.RunModelReport(dbPath, *reportDays)
 		}
 		return
 	}
@@ -60,7 +68,7 @@ func main() {
 		Level: logLevel,
 	})))
 
-	cs, err := NewConfigStore(*configPath)
+	cs, err := config.NewConfigStore(*configPath)
 	if err != nil {
 		slog.Error("failed to load config", "error", err)
 		os.Exit(1)
@@ -69,7 +77,7 @@ func main() {
 	cfg := cs.Get()
 
 	// Initialize usage logger if enabled via CLI flag or config.
-	var usage *UsageLogger
+	var ul *usage.UsageLogger
 	if *logMetrics || cfg.LogMetrics {
 		dbPath := *usageDBPath
 		if dbPath == "" && cfg.UsageDB != "" {
@@ -79,7 +87,7 @@ func main() {
 			dbPath = "usage.db"
 		}
 		var err error
-		usage, err = NewUsageLogger(dbPath)
+		ul, err = usage.NewUsageLogger(dbPath)
 		if err != nil {
 			slog.Error("failed to open usage database", "error", err, "path", dbPath)
 			os.Exit(1)
@@ -88,20 +96,23 @@ func main() {
 	}
 
 	// Auto-detect context window sizes from backends (async, non-blocking).
-	DetectContextWindows(cs)
+	config.DetectContextWindows(cs)
 
-	proxy := NewProxyHandler(cs, usage)
-	responses := NewResponsesHandler(cs, usage)
-	messages := NewMessagesHandler(cs, usage)
-	models := NewModelsHandler(cs)
-	rl := NewRateLimiter(cfg.TrustedProxies)
+	// Create the processing pipeline (shared by all handlers).
+	pl := pipeline.NewPipeline(cs, httputil.NewHTTPClient())
 
-	var dashRl *RateLimiter
-	if (*serveDashboard || cfg.UsageDashboard) && usage != nil {
-		dashRl = NewRateLimiter(cfg.TrustedProxies)
+	proxy := handler.NewProxyHandler(cs, ul, pl)
+	responses := handler.NewResponsesHandler(cs, ul, pl)
+	messages := handler.NewMessagesHandler(cs, ul, pl)
+	models := handler.NewModelsHandler(cs)
+	rl := ratelimit.NewRateLimiter(cfg.TrustedProxies)
+
+	var dashRl *ratelimit.RateLimiter
+	if (*serveDashboard || cfg.UsageDashboard) && ul != nil {
+		dashRl = ratelimit.NewRateLimiter(cfg.TrustedProxies)
 	}
 
-	cs.SetOnReload(func(newCfg *Config) {
+	cs.SetOnReload(func(newCfg *config.Config) {
 		rl.SetTrustedProxies(newCfg.TrustedProxies)
 		if dashRl != nil {
 			dashRl.SetTrustedProxies(newCfg.TrustedProxies)
@@ -129,30 +140,30 @@ func main() {
 
 	mux := http.NewServeMux()
 	if *serveConfigPage || cfg.ServeConfigGenerator {
-		configPage := NewConfigPageHandler(cs)
+		configPage := handler.NewConfigPageHandler(cs)
 		mux.Handle("GET /{$}", configPage)
 		slog.Info("config generator page enabled at GET /")
 	}
 	if dashRl != nil {
-		dash := NewUsageDashboardHandler(cs, usage, dashRl)
+		dash := handler.NewUsageDashboardHandler(cs, ul, dashRl)
 		mux.Handle("GET /usage", http.HandlerFunc(dash.LoginPage))
 		mux.Handle("POST /usage", http.HandlerFunc(dash.HandleLogin))
 		mux.Handle("GET /usage/data", http.HandlerFunc(dash.ServeData))
 		slog.Info("usage dashboard enabled at /usage")
 	}
-	mux.Handle("GET /v1/models", RateLimitMiddleware(rl, AuthMiddleware(cs, models)))
-	mux.Handle("POST /v1/responses", RateLimitMiddleware(rl, AuthMiddleware(cs, responses)))
-	mux.Handle("POST /v1/responses/compact", RateLimitMiddleware(rl, AuthMiddleware(cs,
+	mux.Handle("GET /v1/models", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, models)))
+	mux.Handle("POST /v1/responses", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, responses)))
+	mux.Handle("POST /v1/responses/compact", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs,
 		http.HandlerFunc(responses.HandleCompact),
 	)))
-	mux.Handle("POST /v1/messages", RateLimitMiddleware(rl, AuthMiddleware(cs, messages)))
-	mux.Handle("POST /anthropic/v1/messages", RateLimitMiddleware(rl, AuthMiddleware(cs, messages)))
-	mux.Handle("/v1/", RateLimitMiddleware(rl, AuthMiddleware(cs, proxy)))
-	mux.Handle("/anthropic/", RateLimitMiddleware(rl, AuthMiddleware(cs, proxy)))
+	mux.Handle("POST /v1/messages", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, messages)))
+	mux.Handle("POST /anthropic/v1/messages", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, messages)))
+	mux.Handle("/v1/", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, proxy)))
+	mux.Handle("/anthropic/", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, proxy)))
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           RecoveryMiddleware(mux),
+		Handler:           httputil.RecoveryMiddleware(mux),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       120 * time.Second,
@@ -176,8 +187,8 @@ func main() {
 		if dashRl != nil {
 			dashRl.Close()
 		}
-		if usage != nil {
-			usage.Close()
+		if ul != nil {
+			ul.Close()
 		}
 		if stopWatch != nil {
 			stopWatch()

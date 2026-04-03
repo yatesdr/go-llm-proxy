@@ -1,4 +1,4 @@
-package main
+package handler
 
 import (
 	"encoding/json"
@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"go-llm-proxy/internal/config"
 )
 
 // --- Translation unit tests ---
@@ -125,7 +127,7 @@ func TestTranslateAnthropicTools(t *testing.T) {
 	tools := []json.RawMessage{
 		json.RawMessage(`{"name":"get_weather","description":"Get weather","input_schema":{"type":"object","properties":{"location":{"type":"string"}},"required":["location"]},"cache_control":{"type":"ephemeral"}}`),
 	}
-	result := translateAnthropicToolsToChat(tools)
+	result, _ := translateAnthropicToolsToChat(tools)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 tool, got %d", len(result))
 	}
@@ -146,9 +148,12 @@ func TestTranslateAnthropicTools_SkipsServerTools(t *testing.T) {
 		json.RawMessage(`{"type":"web_search_20250305","name":"web_search"}`),
 		json.RawMessage(`{"name":"get_weather","description":"Get weather","input_schema":{}}`),
 	}
-	result := translateAnthropicToolsToChat(tools)
+	result, stripped := translateAnthropicToolsToChat(tools)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 tool (server tool stripped), got %d", len(result))
+	}
+	if len(stripped) != 1 || stripped[0] != "web_search_20250305" {
+		t.Fatalf("expected stripped server tool web_search_20250305, got %v", stripped)
 	}
 }
 
@@ -313,17 +318,17 @@ func newTestMessagesHandler(t *testing.T, modelType string, upstream http.Handle
 	t.Helper()
 	ts := httptest.NewServer(upstream)
 	backend := ts.URL + "/v1"
-	if modelType == BackendAnthropic {
+	if modelType == config.BackendAnthropic {
 		backend = ts.URL
 	}
-	cfg := &Config{
-		Models: []ModelConfig{{
+	cfg := &config.Config{
+		Models: []config.ModelConfig{{
 			Name: "test-model", Backend: backend, APIKey: "backend-secret",
 			Model: "test-model", Timeout: 10, Type: modelType,
 		}},
 	}
-	cs := &ConfigStore{config: cfg}
-	return NewMessagesHandler(cs, nil), ts
+	cs := config.NewTestConfigStore(cfg)
+	return NewMessagesHandler(cs, nil, nil), ts
 }
 
 func TestMessagesHandler_NonStreaming(t *testing.T) {
@@ -588,7 +593,7 @@ func TestMessagesHandler_StreamingToolCalls(t *testing.T) {
 
 func TestMessagesHandler_NativePassthrough_AuthHeaders(t *testing.T) {
 	var gotAPIKey, gotAuth string
-	handler, ts := newTestMessagesHandler(t, BackendAnthropic, func(w http.ResponseWriter, r *http.Request) {
+	handler, ts := newTestMessagesHandler(t, config.BackendAnthropic, func(w http.ResponseWriter, r *http.Request) {
 		gotAPIKey = r.Header.Get("X-Api-Key")
 		gotAuth = r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "application/json")
@@ -617,7 +622,7 @@ func TestMessagesHandler_NativePassthrough_AuthHeaders(t *testing.T) {
 
 func TestMessagesHandler_NativePassthrough_HeadersForwarded(t *testing.T) {
 	var gotVersion, gotBeta string
-	handler, ts := newTestMessagesHandler(t, BackendAnthropic, func(w http.ResponseWriter, r *http.Request) {
+	handler, ts := newTestMessagesHandler(t, config.BackendAnthropic, func(w http.ResponseWriter, r *http.Request) {
 		gotVersion = r.Header.Get("Anthropic-Version")
 		gotBeta = r.Header.Get("Anthropic-Beta")
 		w.Header().Set("Content-Type", "application/json")
@@ -644,7 +649,7 @@ func TestMessagesHandler_NativePassthrough_HeadersForwarded(t *testing.T) {
 
 func TestMessagesHandler_NativePassthrough_UpstreamPath(t *testing.T) {
 	var gotPath string
-	handler, ts := newTestMessagesHandler(t, BackendAnthropic, func(w http.ResponseWriter, r *http.Request) {
+	handler, ts := newTestMessagesHandler(t, config.BackendAnthropic, func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -678,15 +683,15 @@ func TestMessagesHandler_TranslateModeSkipsProbe(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	cfg := &Config{
-		Models: []ModelConfig{{
+	cfg := &config.Config{
+		Models: []config.ModelConfig{{
 			Name: "test-model", Backend: ts.URL + "/v1",
 			Model: "test-model", Timeout: 10,
 			MessagesMode: "translate",
 		}},
 	}
-	cs := &ConfigStore{config: cfg}
-	handler := NewMessagesHandler(cs, nil)
+	cs := config.NewTestConfigStore(cfg)
+	handler := NewMessagesHandler(cs, nil, nil)
 
 	body := `{"model":"test-model","max_tokens":100,"messages":[{"role":"user","content":"Hello"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
@@ -932,7 +937,7 @@ func TestMessagesHandler_ToolChoiceWithoutTools(t *testing.T) {
 
 func TestMessagesHandler_AnthropicPrefix(t *testing.T) {
 	var gotPath string
-	handler, ts := newTestMessagesHandler(t, BackendAnthropic, func(w http.ResponseWriter, r *http.Request) {
+	handler, ts := newTestMessagesHandler(t, config.BackendAnthropic, func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

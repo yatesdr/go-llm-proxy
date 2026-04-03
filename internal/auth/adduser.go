@@ -1,4 +1,4 @@
-package main
+package auth
 
 import (
 	"bufio"
@@ -8,13 +8,15 @@ import (
 	"os"
 	"strings"
 
+	"go-llm-proxy/internal/config"
+
 	"gopkg.in/yaml.v3"
 )
 
-// runAddUser interactively creates a new API key and appends it to config.yaml.
+// RunAddUser interactively creates a new API key and appends it to config.yaml.
 // It reads the existing config, prompts for name and optional model restrictions,
 // generates a secure random key, writes the updated config, and prints the result.
-func runAddUser(configPath string) {
+func RunAddUser(configPath string) {
 	// Load existing config.
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -22,7 +24,7 @@ func runAddUser(configPath string) {
 		os.Exit(1)
 	}
 
-	var cfg Config
+	var cfg config.Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing %s: %v\n", configPath, err)
 		os.Exit(1)
@@ -90,7 +92,7 @@ func runAddUser(configPath string) {
 	key := "dy-" + hex.EncodeToString(keyBytes)
 
 	// Append the new key to config.
-	cfg.Keys = append(cfg.Keys, KeyConfig{
+	cfg.Keys = append(cfg.Keys, config.KeyConfig{
 		Key:    key,
 		Name:   name,
 		Models: models,

@@ -1,4 +1,4 @@
-package main
+package usage
 
 import (
 	"bufio"
@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"go-llm-proxy/internal/config"
 
 	_ "modernc.org/sqlite"
 )
@@ -329,7 +331,7 @@ func ExtractTokenUsage(responseBody []byte, backendType string, isStreaming bool
 
 // extractTokensFromJSON handles non-streaming responses.
 func extractTokensFromJSON(body []byte, backendType string) TokenUsage {
-	if backendType == BackendAnthropic {
+	if backendType == config.BackendAnthropic {
 		return extractAnthropicTokens(body)
 	}
 	return extractOpenAITokens(body)
@@ -384,7 +386,7 @@ func extractAnthropicTokens(body []byte) TokenUsage {
 // OpenAI puts usage in the final chunk; Anthropic sends it in message_delta
 // and message_start events.
 func extractTokensFromSSE(body []byte, backendType string) TokenUsage {
-	if backendType == BackendAnthropic {
+	if backendType == config.BackendAnthropic {
 		return extractAnthropicSSETokens(body)
 	}
 	return extractOpenAISSETokens(body)

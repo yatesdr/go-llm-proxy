@@ -1,15 +1,17 @@
-package main
+package auth
 
 import (
 	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"go-llm-proxy/internal/config"
 )
 
 func TestFindKey_Match(t *testing.T) {
-	cfg := &Config{
-		Keys: []KeyConfig{
+	cfg := &config.Config{
+		Keys: []config.KeyConfig{
 			{Key: "sk-alpha", Name: "alpha"},
 			{Key: "sk-beta", Name: "beta"},
 		},
@@ -22,8 +24,8 @@ func TestFindKey_Match(t *testing.T) {
 }
 
 func TestFindKey_NoMatch(t *testing.T) {
-	cfg := &Config{
-		Keys: []KeyConfig{
+	cfg := &config.Config{
+		Keys: []config.KeyConfig{
 			{Key: "sk-alpha", Name: "alpha"},
 		},
 	}
@@ -35,8 +37,8 @@ func TestFindKey_NoMatch(t *testing.T) {
 }
 
 func TestFindKey_MatchesLastKey(t *testing.T) {
-	cfg := &Config{
-		Keys: []KeyConfig{
+	cfg := &config.Config{
+		Keys: []config.KeyConfig{
 			{Key: "sk-first", Name: "first"},
 			{Key: "sk-second", Name: "second"},
 			{Key: "sk-third", Name: "third"},
@@ -50,8 +52,8 @@ func TestFindKey_MatchesLastKey(t *testing.T) {
 }
 
 func TestFindKey_EmptyToken(t *testing.T) {
-	cfg := &Config{
-		Keys: []KeyConfig{
+	cfg := &config.Config{
+		Keys: []config.KeyConfig{
 			{Key: "sk-alpha", Name: "alpha"},
 		},
 	}
@@ -63,28 +65,28 @@ func TestFindKey_EmptyToken(t *testing.T) {
 }
 
 func TestKeyAllowsModel_NilKey(t *testing.T) {
-	if !keyAllowsModel(nil, "any-model") {
+	if !KeyAllowsModel(nil, "any-model") {
 		t.Fatal("nil key should allow all models")
 	}
 }
 
 func TestKeyAllowsModel_EmptyModels(t *testing.T) {
-	key := &KeyConfig{Key: "sk-test", Name: "test", Models: []string{}}
-	if !keyAllowsModel(key, "any-model") {
+	key := &config.KeyConfig{Key: "sk-test", Name: "test", Models: []string{}}
+	if !KeyAllowsModel(key, "any-model") {
 		t.Fatal("empty models list should allow all models")
 	}
 }
 
 func TestKeyAllowsModel_Allowed(t *testing.T) {
-	key := &KeyConfig{Key: "sk-test", Name: "test", Models: []string{"model-a", "model-b"}}
-	if !keyAllowsModel(key, "model-b") {
+	key := &config.KeyConfig{Key: "sk-test", Name: "test", Models: []string{"model-a", "model-b"}}
+	if !KeyAllowsModel(key, "model-b") {
 		t.Fatal("expected model-b to be allowed")
 	}
 }
 
 func TestKeyAllowsModel_Denied(t *testing.T) {
-	key := &KeyConfig{Key: "sk-test", Name: "test", Models: []string{"model-a"}}
-	if keyAllowsModel(key, "model-b") {
+	key := &config.KeyConfig{Key: "sk-test", Name: "test", Models: []string{"model-a"}}
+	if KeyAllowsModel(key, "model-b") {
 		t.Fatal("expected model-b to be denied")
 	}
 }
@@ -130,25 +132,25 @@ func TestExtractToken_NonBearer(t *testing.T) {
 }
 
 func TestKeyContext_RoundTrip(t *testing.T) {
-	key := &KeyConfig{Key: "sk-test", Name: "test"}
+	key := &config.KeyConfig{Key: "sk-test", Name: "test"}
 	ctx := withKeyContext(context.Background(), key)
 
-	got := keyFromContext(ctx)
+	got := KeyFromContext(ctx)
 	if got != key {
 		t.Fatalf("expected same key back, got: %v", got)
 	}
 }
 
 func TestKeyContext_Missing(t *testing.T) {
-	got := keyFromContext(context.Background())
+	got := KeyFromContext(context.Background())
 	if got != nil {
 		t.Fatalf("expected nil from empty context, got: %v", got)
 	}
 }
 
 func TestAuthMiddleware_NoKeys(t *testing.T) {
-	cfg := &Config{}
-	cs := &ConfigStore{config: cfg}
+	cfg := &config.Config{}
+	cs := config.NewTestConfigStore(cfg)
 
 	called := false
 	handler := AuthMiddleware(cs, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -165,14 +167,14 @@ func TestAuthMiddleware_NoKeys(t *testing.T) {
 }
 
 func TestAuthMiddleware_ValidKey(t *testing.T) {
-	cfg := &Config{
-		Keys: []KeyConfig{{Key: "sk-valid", Name: "admin"}},
+	cfg := &config.Config{
+		Keys: []config.KeyConfig{{Key: "sk-valid", Name: "admin"}},
 	}
-	cs := &ConfigStore{config: cfg}
+	cs := config.NewTestConfigStore(cfg)
 
-	var gotKey *KeyConfig
+	var gotKey *config.KeyConfig
 	handler := AuthMiddleware(cs, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotKey = keyFromContext(r.Context())
+		gotKey = KeyFromContext(r.Context())
 	}))
 
 	r := httptest.NewRequest("GET", "/", nil)
@@ -186,10 +188,10 @@ func TestAuthMiddleware_ValidKey(t *testing.T) {
 }
 
 func TestAuthMiddleware_InvalidKey(t *testing.T) {
-	cfg := &Config{
-		Keys: []KeyConfig{{Key: "sk-valid", Name: "admin"}},
+	cfg := &config.Config{
+		Keys: []config.KeyConfig{{Key: "sk-valid", Name: "admin"}},
 	}
-	cs := &ConfigStore{config: cfg}
+	cs := config.NewTestConfigStore(cfg)
 
 	handler := AuthMiddleware(cs, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("handler should not be called")
@@ -206,14 +208,14 @@ func TestAuthMiddleware_InvalidKey(t *testing.T) {
 }
 
 func TestAuthMiddleware_ValidXApiKey(t *testing.T) {
-	cfg := &Config{
-		Keys: []KeyConfig{{Key: "sk-valid", Name: "admin"}},
+	cfg := &config.Config{
+		Keys: []config.KeyConfig{{Key: "sk-valid", Name: "admin"}},
 	}
-	cs := &ConfigStore{config: cfg}
+	cs := config.NewTestConfigStore(cfg)
 
-	var gotKey *KeyConfig
+	var gotKey *config.KeyConfig
 	handler := AuthMiddleware(cs, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotKey = keyFromContext(r.Context())
+		gotKey = KeyFromContext(r.Context())
 	}))
 
 	r := httptest.NewRequest("GET", "/", nil)
@@ -227,10 +229,10 @@ func TestAuthMiddleware_ValidXApiKey(t *testing.T) {
 }
 
 func TestAuthMiddleware_MissingHeader(t *testing.T) {
-	cfg := &Config{
-		Keys: []KeyConfig{{Key: "sk-valid", Name: "admin"}},
+	cfg := &config.Config{
+		Keys: []config.KeyConfig{{Key: "sk-valid", Name: "admin"}},
 	}
-	cs := &ConfigStore{config: cfg}
+	cs := config.NewTestConfigStore(cfg)
 
 	handler := AuthMiddleware(cs, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("handler should not be called")

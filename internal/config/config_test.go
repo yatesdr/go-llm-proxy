@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"strings"
@@ -196,5 +196,66 @@ func TestValidateConfig_DashboardDisabledNoValidation(t *testing.T) {
 	cfg.UsageDashboardPassword = ""
 	if err := validateConfig(cfg); err != nil {
 		t.Fatalf("expected no error when dashboard disabled, got: %v", err)
+	}
+}
+
+func TestValidateConfig_GlobalVisionProcessorValid(t *testing.T) {
+	cfg := validConfig()
+	cfg.Processors.Vision = "test-model"
+	if err := validateConfig(cfg); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestValidateConfig_GlobalVisionProcessorUnknownModel(t *testing.T) {
+	cfg := validConfig()
+	cfg.Processors.Vision = "nonexistent"
+	err := validateConfig(cfg)
+	if err == nil || !strings.Contains(err.Error(), "processors.vision references unknown model") {
+		t.Fatalf("expected unknown model error, got: %v", err)
+	}
+}
+
+func TestValidateConfig_PerModelVisionProcessorValid(t *testing.T) {
+	cfg := validConfig()
+	cfg.Models = append(cfg.Models, ModelConfig{
+		Name: "vision-model", Backend: "http://localhost:8001/v1", Model: "vision-model", Timeout: 300,
+	})
+	cfg.Models[0].Processors = &ProcessorsConfig{Vision: "vision-model"}
+	if err := validateConfig(cfg); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestValidateConfig_PerModelVisionProcessorNone(t *testing.T) {
+	cfg := validConfig()
+	cfg.Models[0].Processors = &ProcessorsConfig{Vision: "none"}
+	if err := validateConfig(cfg); err != nil {
+		t.Fatalf("expected no error for vision=none, got: %v", err)
+	}
+}
+
+func TestValidateConfig_PerModelVisionProcessorUnknown(t *testing.T) {
+	cfg := validConfig()
+	cfg.Models[0].Processors = &ProcessorsConfig{Vision: "nonexistent"}
+	err := validateConfig(cfg)
+	if err == nil || !strings.Contains(err.Error(), "processors.vision references unknown model") {
+		t.Fatalf("expected unknown model error, got: %v", err)
+	}
+}
+
+func TestValidateConfig_SupportsVisionField(t *testing.T) {
+	cfg := validConfig()
+	cfg.Models[0].SupportsVision = true
+	if err := validateConfig(cfg); err != nil {
+		t.Fatalf("expected no error for supports_vision, got: %v", err)
+	}
+}
+
+func TestValidateConfig_ForcePipelineField(t *testing.T) {
+	cfg := validConfig()
+	cfg.Models[0].ForcePipeline = true
+	if err := validateConfig(cfg); err != nil {
+		t.Fatalf("expected no error for force_pipeline, got: %v", err)
 	}
 }

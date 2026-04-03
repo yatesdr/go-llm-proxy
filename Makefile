@@ -1,9 +1,12 @@
 BINARY=go-llm-proxy
 
-.PHONY: build linux linux-arm macos macos-arm windows clean all
+.PHONY: build test linux linux-arm macos macos-arm windows clean all
 
 build:
 	go build -o $(BINARY) .
+
+test:
+	go test ./...
 
 linux:
 	GOOS=linux GOARCH=amd64 go build -o $(BINARY) .

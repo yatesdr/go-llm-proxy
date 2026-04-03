@@ -1,4 +1,4 @@
-package main
+package handler
 
 import (
 	"encoding/json"
@@ -6,39 +6,41 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"go-llm-proxy/internal/config"
 )
 
 func TestExtractModelFromJSON_Valid(t *testing.T) {
 	body := []byte(`{"model":"gpt-4","messages":[]}`)
-	if got := extractModelFromJSON(body); got != "gpt-4" {
+	if got := ExtractModelFromJSON(body); got != "gpt-4" {
 		t.Fatalf("expected gpt-4, got: %q", got)
 	}
 }
 
 func TestExtractModelFromJSON_Missing(t *testing.T) {
 	body := []byte(`{"messages":[]}`)
-	if got := extractModelFromJSON(body); got != "" {
+	if got := ExtractModelFromJSON(body); got != "" {
 		t.Fatalf("expected empty, got: %q", got)
 	}
 }
 
 func TestExtractModelFromJSON_Invalid(t *testing.T) {
 	body := []byte(`not json`)
-	if got := extractModelFromJSON(body); got != "" {
+	if got := ExtractModelFromJSON(body); got != "" {
 		t.Fatalf("expected empty for invalid JSON, got: %q", got)
 	}
 }
 
 func TestExtractModelFromJSON_Empty(t *testing.T) {
 	body := []byte(`{}`)
-	if got := extractModelFromJSON(body); got != "" {
+	if got := ExtractModelFromJSON(body); got != "" {
 		t.Fatalf("expected empty for empty object, got: %q", got)
 	}
 }
 
 func TestRewriteModelName_Replaces(t *testing.T) {
 	body := []byte(`{"model":"old-model","temperature":0.7}`)
-	result := rewriteModelName(body, "new-model")
+	result := RewriteModelName(body, "new-model")
 
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(result, &m); err != nil {
@@ -56,7 +58,7 @@ func TestRewriteModelName_Replaces(t *testing.T) {
 
 func TestRewriteModelName_PreservesOtherFields(t *testing.T) {
 	body := []byte(`{"model":"old","temperature":0.7,"max_tokens":100}`)
-	result := rewriteModelName(body, "new")
+	result := RewriteModelName(body, "new")
 
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(result, &m); err != nil {
@@ -73,7 +75,7 @@ func TestRewriteModelName_PreservesOtherFields(t *testing.T) {
 
 func TestRewriteModelName_InvalidJSON(t *testing.T) {
 	body := []byte(`not json`)
-	result := rewriteModelName(body, "new")
+	result := RewriteModelName(body, "new")
 	if string(result) != string(body) {
 		t.Fatalf("expected original body returned for invalid JSON")
 	}
@@ -81,34 +83,34 @@ func TestRewriteModelName_InvalidJSON(t *testing.T) {
 
 func TestRewriteModelName_NoModelField(t *testing.T) {
 	body := []byte(`{"temperature":0.7}`)
-	result := rewriteModelName(body, "new")
+	result := RewriteModelName(body, "new")
 	if string(result) != string(body) {
 		t.Fatalf("expected original body when no model field present")
 	}
 }
 
 func TestFindModel_Found(t *testing.T) {
-	cfg := &Config{
-		Models: []ModelConfig{
+	cfg := &config.Config{
+		Models: []config.ModelConfig{
 			{Name: "model-a", Backend: "http://localhost/v1"},
 			{Name: "model-b", Backend: "http://localhost/v1"},
 		},
 	}
 
-	m := findModel(cfg, "model-b")
+	m := config.FindModel(cfg, "model-b")
 	if m == nil || m.Name != "model-b" {
 		t.Fatalf("expected model-b, got: %v", m)
 	}
 }
 
 func TestFindModel_NotFound(t *testing.T) {
-	cfg := &Config{
-		Models: []ModelConfig{
+	cfg := &config.Config{
+		Models: []config.ModelConfig{
 			{Name: "model-a", Backend: "http://localhost/v1"},
 		},
 	}
 
-	m := findModel(cfg, "nonexistent")
+	m := config.FindModel(cfg, "nonexistent")
 	if m != nil {
 		t.Fatalf("expected nil, got: %v", m)
 	}
@@ -126,7 +128,7 @@ func TestAllowedPaths(t *testing.T) {
 		// /v1/messages is now handled by MessagesHandler, not ProxyHandler.
 	}
 	for _, p := range allowed {
-		if !allowedPaths.MatchString(p) {
+		if !AllowedPaths.MatchString(p) {
 			t.Errorf("expected %q to be allowed", p)
 		}
 	}
@@ -140,7 +142,7 @@ func TestAllowedPaths(t *testing.T) {
 		"/",
 	}
 	for _, p := range denied {
-		if allowedPaths.MatchString(p) {
+		if AllowedPaths.MatchString(p) {
 			t.Errorf("expected %q to be denied", p)
 		}
 	}
@@ -154,12 +156,12 @@ func newTestProxyHandler(t *testing.T, modelType string, upstream http.HandlerFu
 	ts := httptest.NewServer(upstream)
 
 	backend := ts.URL + "/v1"
-	if modelType == BackendAnthropic {
+	if modelType == config.BackendAnthropic {
 		backend = ts.URL
 	}
 
-	cfg := &Config{
-		Models: []ModelConfig{
+	cfg := &config.Config{
+		Models: []config.ModelConfig{
 			{
 				Name:    "test-model",
 				Backend: backend,
@@ -170,8 +172,8 @@ func newTestProxyHandler(t *testing.T, modelType string, upstream http.HandlerFu
 			},
 		},
 	}
-	cs := &ConfigStore{config: cfg}
-	return NewProxyHandler(cs, nil), ts
+	cs := config.NewTestConfigStore(cfg)
+	return NewProxyHandler(cs, nil, nil), ts
 }
 
 func TestProxyHandler_OpenAIAuthHeader(t *testing.T) {
@@ -209,7 +211,7 @@ func TestProxyHandler_OpenAIUpstreamPath(t *testing.T) {
 	w := httptest.NewRecorder()
 	proxy.ServeHTTP(w, req)
 
-	// OpenAI backend has /v1 in base URL, proxy strips /v1 → upstream sees /v1/chat/completions
+	// OpenAI backend has /v1 in base URL, proxy strips /v1 -> upstream sees /v1/chat/completions
 	if gotPath != "/v1/chat/completions" {
 		t.Fatalf("expected upstream path /v1/chat/completions, got: %q", gotPath)
 	}

@@ -1,4 +1,4 @@
-package main
+package auth
 
 import (
 	"context"
@@ -7,24 +7,27 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+
+	"go-llm-proxy/internal/config"
+	"go-llm-proxy/internal/httputil"
 )
 
 type contextKey int
 
 const keyContextKey contextKey = iota
 
-func withKeyContext(ctx context.Context, key *KeyConfig) context.Context {
+func withKeyContext(ctx context.Context, key *config.KeyConfig) context.Context {
 	return context.WithValue(ctx, keyContextKey, key)
 }
 
-func keyFromContext(ctx context.Context) *KeyConfig {
-	key, _ := ctx.Value(keyContextKey).(*KeyConfig)
+func KeyFromContext(ctx context.Context) *config.KeyConfig {
+	key, _ := ctx.Value(keyContextKey).(*config.KeyConfig)
 	return key
 }
 
 // AuthMiddleware validates API tokens against configured keys.
 // Accepts both OpenAI-style (Authorization: Bearer) and Anthropic-style (x-api-key) headers.
-func AuthMiddleware(cs *ConfigStore, next http.Handler) http.Handler {
+func AuthMiddleware(cs *config.ConfigStore, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg := cs.Get()
 
@@ -37,14 +40,14 @@ func AuthMiddleware(cs *ConfigStore, next http.Handler) http.Handler {
 		token := extractToken(r)
 		if token == "" {
 			slog.Warn("auth failed: missing token", "remote", r.RemoteAddr, "path", r.URL.Path)
-			writeError(w, http.StatusUnauthorized, "missing or invalid Authorization header")
+			httputil.WriteError(w, http.StatusUnauthorized, "missing or invalid Authorization header")
 			return
 		}
 
 		key := findKey(cfg, token)
 		if key == nil {
 			slog.Warn("auth failed: invalid key", "remote", r.RemoteAddr, "path", r.URL.Path)
-			writeError(w, http.StatusUnauthorized, "invalid API key")
+			httputil.WriteError(w, http.StatusUnauthorized, "invalid API key")
 			return
 		}
 
@@ -61,7 +64,7 @@ func extractToken(r *http.Request) string {
 	return r.Header.Get("X-Api-Key")
 }
 
-func findKey(cfg *Config, token string) *KeyConfig {
+func findKey(cfg *config.Config, token string) *config.KeyConfig {
 	// Hash to fixed length before comparing to prevent length oracle attacks.
 	tokenHash := sha256.Sum256([]byte(token))
 
@@ -74,8 +77,8 @@ func findKey(cfg *Config, token string) *KeyConfig {
 	return nil
 }
 
-// keyAllowsModel checks if the key is authorized for the given model.
-func keyAllowsModel(key *KeyConfig, model string) bool {
+// KeyAllowsModel checks if the key is authorized for the given model.
+func KeyAllowsModel(key *config.KeyConfig, model string) bool {
 	if key == nil || len(key.Models) == 0 {
 		return true
 	}

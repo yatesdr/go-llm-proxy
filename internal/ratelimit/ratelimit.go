@@ -1,4 +1,4 @@
-package main
+package ratelimit
 
 import (
 	"context"
@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"go-llm-proxy/internal/httputil"
 )
 
 const (
@@ -162,12 +164,12 @@ func (rl *RateLimiter) cleanup(ctx context.Context) {
 // RateLimitMiddleware throttles IPs that send bad auth. Valid keys are never throttled.
 func RateLimitMiddleware(rl *RateLimiter, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := rl.clientIP(r)
+		ip := ClientIP(rl, r)
 
 		if !rl.Check(ip) {
 			// Return 429 with Retry-After instead of holding a goroutine sleeping.
 			w.Header().Set("Retry-After", "60")
-			writeError(w, http.StatusTooManyRequests, "too many requests")
+			httputil.WriteError(w, http.StatusTooManyRequests, "too many requests")
 			return
 		}
 
@@ -182,9 +184,9 @@ func RateLimitMiddleware(rl *RateLimiter, next http.Handler) http.Handler {
 	})
 }
 
-// clientIP extracts the real client IP. Only trusts X-Real-IP / X-Forwarded-For
+// ClientIP extracts the real client IP. Only trusts X-Real-IP / X-Forwarded-For
 // from connections originating from configured trusted proxies.
-func (rl *RateLimiter) clientIP(r *http.Request) string {
+func ClientIP(rl *RateLimiter, r *http.Request) string {
 	remoteHost, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		remoteHost = r.RemoteAddr

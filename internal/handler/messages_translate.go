@@ -1,9 +1,11 @@
-package main
+package handler
 
 import (
 	"encoding/json"
 	"log/slog"
 	"strings"
+
+	"go-llm-proxy/internal/pipeline"
 )
 
 // --- Anthropic Messages API request types ---
@@ -282,10 +284,11 @@ func extractToolResultContent(raw json.RawMessage) string {
 // --- Tool translation ---
 
 // translateAnthropicToolsToChat converts Anthropic tool definitions to Chat
-// Completions format: {name, input_schema} → {type: "function", function: {name, parameters}}.
-// Server tools (web_search_20250305 etc.) are stripped.
-func translateAnthropicToolsToChat(tools []json.RawMessage) []map[string]any {
+// Completions format: {name, input_schema} -> {type: "function", function: {name, parameters}}.
+// Server tools (web_search_20250305 etc.) are stripped and returned in the second value.
+func translateAnthropicToolsToChat(tools []json.RawMessage) ([]map[string]any, []string) {
 	var result []map[string]any
+	var strippedServerTools []string
 	for _, raw := range tools {
 		var tool struct {
 			Name        string          `json:"name"`
@@ -299,6 +302,7 @@ func translateAnthropicToolsToChat(tools []json.RawMessage) []map[string]any {
 		// Skip server tools (web_search, code_execution, etc.)
 		if tool.Type != "" && tool.Type != "custom" {
 			slog.Debug("stripping server tool from translated request", "type", tool.Type, "name", tool.Name)
+			strippedServerTools = append(strippedServerTools, tool.Type)
 			continue
 		}
 		fn := map[string]any{"name": tool.Name}
@@ -313,7 +317,7 @@ func translateAnthropicToolsToChat(tools []json.RawMessage) []map[string]any {
 			"function": fn,
 		})
 	}
-	return result
+	return result, strippedServerTools
 }
 
 // translateAnthropicToolChoice converts Anthropic tool_choice to OpenAI format.
@@ -322,9 +326,9 @@ func translateAnthropicToolChoice(tc json.RawMessage, hasTools bool) json.RawMes
 		return nil
 	}
 	var choice struct {
-		Type                    string `json:"type"`
-		Name                    string `json:"name"`
-		DisableParallelToolUse  bool   `json:"disable_parallel_tool_use"`
+		Type                   string `json:"type"`
+		Name                   string `json:"name"`
+		DisableParallelToolUse bool   `json:"disable_parallel_tool_use"`
 	}
 	if json.Unmarshal(tc, &choice) != nil {
 		return nil
@@ -356,7 +360,7 @@ func translateAnthropicToolChoice(tc json.RawMessage, hasTools bool) json.RawMes
 func buildChatRequestFromAnthropic(req messagesRequest, backendModel string) (map[string]any, error) {
 	var chatMessages []map[string]any
 
-	// System prompt → system message.
+	// System prompt -> system message.
 	if sys := translateAnthropicSystem(req.System); sys != "" {
 		chatMessages = append(chatMessages, map[string]any{
 			"role":    "system",
@@ -383,25 +387,29 @@ func buildChatRequestFromAnthropic(req messagesRequest, backendModel string) (ma
 
 	// Tools.
 	if len(req.Tools) > 0 {
-		if tools := translateAnthropicToolsToChat(req.Tools); len(tools) > 0 {
+		tools, strippedServerTools := translateAnthropicToolsToChat(req.Tools)
+		if len(tools) > 0 {
 			chatReq["tools"] = tools
 			if tc := translateAnthropicToolChoice(req.ToolChoice, true); tc != nil {
 				chatReq["tool_choice"] = json.RawMessage(tc)
 			}
 		}
+		if len(strippedServerTools) > 0 {
+			chatReq[pipeline.InternalKeyStrippedTools] = strippedServerTools
+		}
 	}
 
-	// max_tokens → max_completion_tokens (required in Anthropic, map to OpenAI).
+	// max_tokens -> max_completion_tokens (required in Anthropic, map to OpenAI).
 	if req.MaxTokens > 0 {
 		chatReq["max_completion_tokens"] = req.MaxTokens
 	}
 
-	// stop_sequences → stop.
+	// stop_sequences -> stop.
 	if len(req.StopSequences) > 0 {
 		chatReq["stop"] = req.StopSequences
 	}
 
-	// Temperature (Anthropic max 1.0, OpenAI max 2.0 — pass through).
+	// Temperature (Anthropic max 1.0, OpenAI max 2.0 -- pass through).
 	if req.Temperature != nil {
 		chatReq["temperature"] = *req.Temperature
 	}
@@ -418,7 +426,7 @@ func buildChatRequestFromAnthropic(req messagesRequest, backendModel string) (ma
 		slog.Debug("dropping thinking config for translated request")
 	}
 
-	// metadata.user_id → user.
+	// metadata.user_id -> user.
 	if len(req.Metadata) > 0 {
 		var meta struct {
 			UserID string `json:"user_id"`
@@ -436,29 +444,6 @@ func buildChatRequestFromAnthropic(req messagesRequest, backendModel string) (ma
 		"max_tokens", req.MaxTokens)
 
 	return chatReq, nil
-}
-
-// requestContainsImages checks if the translated Chat Completions messages
-// contain any image_url content parts.
-func requestContainsImages(chatReq map[string]any) bool {
-	msgs, ok := chatReq["messages"].([]map[string]any)
-	if !ok {
-		return false
-	}
-	for _, msg := range msgs {
-		content := msg["content"]
-		parts, ok := content.([]any)
-		if !ok {
-			continue
-		}
-		for _, part := range parts {
-			p, ok := part.(map[string]any)
-			if ok && p["type"] == "image_url" {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // mapFinishToStopReason maps OpenAI finish_reason to Anthropic stop_reason.

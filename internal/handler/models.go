@@ -1,23 +1,27 @@
-package main
+package handler
 
 import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+
+	"go-llm-proxy/internal/auth"
+	"go-llm-proxy/internal/config"
+	"go-llm-proxy/internal/httputil"
 )
 
 // ModelsHandler serves GET /v1/models — returns the aggregated model list.
 type ModelsHandler struct {
-	config *ConfigStore
+	config *config.ConfigStore
 }
 
-func NewModelsHandler(cs *ConfigStore) *ModelsHandler {
+func NewModelsHandler(cs *config.ConfigStore) *ModelsHandler {
 	return &ModelsHandler{config: cs}
 }
 
 func (h *ModelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	cfg := h.config.Get()
-	key := keyFromContext(r.Context())
+	key := auth.KeyFromContext(r.Context())
 
 	type modelObj struct {
 		ID          string `json:"id"`
@@ -29,7 +33,7 @@ func (h *ModelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	models := make([]modelObj, 0, len(cfg.Models))
 	for _, m := range cfg.Models {
-		if !keyAllowsModel(key, m.Name) {
+		if !auth.KeyAllowsModel(key, m.Name) {
 			continue
 		}
 		models = append(models, modelObj{
@@ -41,7 +45,7 @@ func (h *ModelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	setSecurityHeaders(w)
+	httputil.SetSecurityHeaders(w)
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]any{
 		"object": "list",

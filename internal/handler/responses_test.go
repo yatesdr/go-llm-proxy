@@ -1,4 +1,4 @@
-package main
+package handler
 
 import (
 	"encoding/json"
@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"go-llm-proxy/internal/config"
 )
 
 // --- Input translation tests ---
@@ -80,12 +82,9 @@ func TestTranslateInput_TypedItems(t *testing.T) {
 		t.Fatalf("expected 4 messages, got %d: %v", len(msgs), msgs)
 	}
 
-	// First: user message.
 	if msgs[0]["role"] != "user" {
 		t.Fatalf("expected user role, got %v", msgs[0]["role"])
 	}
-
-	// Second: assistant message with merged tool_calls.
 	if msgs[1]["role"] != "assistant" {
 		t.Fatalf("expected assistant role, got %v", msgs[1]["role"])
 	}
@@ -96,13 +95,9 @@ func TestTranslateInput_TypedItems(t *testing.T) {
 	if !ok || len(tcs) != 1 {
 		t.Fatalf("expected 1 tool_call, got %v", msgs[1]["tool_calls"])
 	}
-
-	// Third: tool message.
 	if msgs[2]["role"] != "tool" || msgs[2]["tool_call_id"] != "call_1" {
 		t.Fatalf("expected tool message, got %v", msgs[2])
 	}
-
-	// Fourth: user message.
 	if msgs[3]["role"] != "user" || msgs[3]["content"] != "Thanks!" {
 		t.Fatalf("expected final user message, got %v", msgs[3])
 	}
@@ -121,7 +116,6 @@ func TestTranslateInput_FunctionCallWithoutMessage(t *testing.T) {
 	if len(msgs) != 3 {
 		t.Fatalf("expected 3 messages, got %d", len(msgs))
 	}
-	// Function call creates an empty assistant message.
 	if msgs[1]["role"] != "assistant" {
 		t.Fatalf("expected assistant message for tool_calls, got %v", msgs[1])
 	}
@@ -176,7 +170,7 @@ func TestTranslateTools_FunctionTools(t *testing.T) {
 	tools := []json.RawMessage{
 		json.RawMessage(`{"type":"function","name":"get_weather","description":"Get weather","parameters":{"type":"object","properties":{}},"strict":true}`),
 	}
-	result := translateTools(tools)
+	result, _ := translateTools(tools)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 tool, got %d", len(result))
 	}
@@ -197,9 +191,12 @@ func TestTranslateTools_SkipsNonFunction(t *testing.T) {
 		json.RawMessage(`{"type":"web_search_preview"}`),
 		json.RawMessage(`{"type":"function","name":"fn1"}`),
 	}
-	result := translateTools(tools)
+	result, stripped := translateTools(tools)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 tool (non-function skipped), got %d", len(result))
+	}
+	if len(stripped) != 1 || stripped[0] != "web_search_preview" {
+		t.Fatalf("expected stripped web_search_preview, got %v", stripped)
 	}
 }
 
@@ -248,21 +245,21 @@ func TestTranslateTextFormat_Text(t *testing.T) {
 func newTestResponsesHandler(t *testing.T, upstream http.HandlerFunc) (*ResponsesHandler, *httptest.Server) {
 	t.Helper()
 	ts := httptest.NewServer(upstream)
-	cfg := &Config{
-		Models: []ModelConfig{
+	cfg := &config.Config{
+		Models: []config.ModelConfig{
 			{
-				Name:                 "test-model",
-				Backend:              ts.URL + "/v1",
-				APIKey:               "backend-secret",
-				Model:                "test-model",
-				Timeout:              10,
-				Type:                 "",
+				Name:          "test-model",
+				Backend:       ts.URL + "/v1",
+				APIKey:        "backend-secret",
+				Model:         "test-model",
+				Timeout:       10,
+				Type:          "",
 				ResponsesMode: "translate",
 			},
 		},
 	}
-	cs := &ConfigStore{config: cfg}
-	return NewResponsesHandler(cs, nil), ts
+	cs := config.NewTestConfigStore(cfg)
+	return NewResponsesHandler(cs, nil, nil), ts
 }
 
 func TestResponsesHandler_NonStreaming(t *testing.T) {
@@ -313,7 +310,6 @@ func TestResponsesHandler_NonStreaming(t *testing.T) {
 		t.Fatalf("expected Bearer auth, got %q", gotAuth)
 	}
 
-	// Check the upstream request was properly translated.
 	msgs, _ := gotBody["messages"].([]any)
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(msgs))
@@ -323,7 +319,6 @@ func TestResponsesHandler_NonStreaming(t *testing.T) {
 		t.Fatalf("unexpected message: %v", msg)
 	}
 
-	// Check response is valid Responses API format.
 	var resp map[string]any
 	json.Unmarshal(w.Body.Bytes(), &resp)
 	if resp["object"] != "response" {
@@ -376,10 +371,8 @@ func TestResponsesHandler_Streaming(t *testing.T) {
 		t.Fatalf("expected SSE content type, got %q", w.Header().Get("Content-Type"))
 	}
 
-	// Parse SSE events from the response.
 	events := parseSSEEvents(w.Body.String())
 
-	// Verify expected event types are present.
 	expectedTypes := []string{
 		"response.created",
 		"response.output_item.added",
@@ -403,7 +396,6 @@ func TestResponsesHandler_Streaming(t *testing.T) {
 		}
 	}
 
-	// Verify every SSE event payload includes a "type" field matching the event name.
 	for _, e := range events {
 		var d map[string]any
 		if json.Unmarshal([]byte(e.data), &d) != nil {
@@ -414,7 +406,6 @@ func TestResponsesHandler_Streaming(t *testing.T) {
 		}
 	}
 
-	// Check text deltas accumulated correctly.
 	var textDeltas []string
 	for _, e := range events {
 		if e.event == "response.output_text.delta" {
@@ -428,7 +419,6 @@ func TestResponsesHandler_Streaming(t *testing.T) {
 		t.Fatalf("expected 'Hello world', got %q", fullText)
 	}
 
-	// Check the completed event has usage.
 	for _, e := range events {
 		if e.event == "response.completed" {
 			var d map[string]any
@@ -477,7 +467,6 @@ func TestResponsesHandler_StreamingToolCalls(t *testing.T) {
 
 	events := parseSSEEvents(w.Body.String())
 
-	// Should have message item done (with text) and function call item done.
 	var msgDone, fcDone bool
 	var fcArgs string
 	for _, e := range events {
@@ -506,19 +495,19 @@ func TestResponsesHandler_StreamingToolCalls(t *testing.T) {
 }
 
 func TestResponsesHandler_RejectsAnthropicBackend(t *testing.T) {
-	cfg := &Config{
-		Models: []ModelConfig{
+	cfg := &config.Config{
+		Models: []config.ModelConfig{
 			{
 				Name:    "claude-test",
 				Backend: "http://localhost:9999",
 				Model:   "claude-test",
 				Timeout: 10,
-				Type:    BackendAnthropic,
+				Type:    config.BackendAnthropic,
 			},
 		},
 	}
-	cs := &ConfigStore{config: cfg}
-	handler := NewResponsesHandler(cs, nil)
+	cs := config.NewTestConfigStore(cfg)
+	handler := NewResponsesHandler(cs, nil, nil)
 
 	body := `{"model":"claude-test","input":"Hello","stream":false}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
@@ -532,13 +521,13 @@ func TestResponsesHandler_RejectsAnthropicBackend(t *testing.T) {
 }
 
 func TestResponsesHandler_UnknownModel(t *testing.T) {
-	cfg := &Config{
-		Models: []ModelConfig{
+	cfg := &config.Config{
+		Models: []config.ModelConfig{
 			{Name: "model-a", Backend: "http://localhost:9999/v1", Model: "model-a", Timeout: 10},
 		},
 	}
-	cs := &ConfigStore{config: cfg}
-	handler := NewResponsesHandler(cs, nil)
+	cs := config.NewTestConfigStore(cfg)
+	handler := NewResponsesHandler(cs, nil, nil)
 
 	body := `{"model":"nonexistent","input":"Hello","stream":false}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
@@ -552,9 +541,9 @@ func TestResponsesHandler_UnknownModel(t *testing.T) {
 }
 
 func TestResponsesHandler_MissingModel(t *testing.T) {
-	cfg := &Config{}
-	cs := &ConfigStore{config: cfg}
-	handler := NewResponsesHandler(cs, nil)
+	cfg := &config.Config{}
+	cs := config.NewTestConfigStore(cfg)
+	handler := NewResponsesHandler(cs, nil, nil)
 
 	body := `{"input":"Hello","stream":false}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
@@ -568,9 +557,9 @@ func TestResponsesHandler_MissingModel(t *testing.T) {
 }
 
 func TestResponsesHandler_MethodNotAllowed(t *testing.T) {
-	cfg := &Config{}
-	cs := &ConfigStore{config: cfg}
-	handler := NewResponsesHandler(cs, nil)
+	cfg := &config.Config{}
+	cs := config.NewTestConfigStore(cfg)
+	handler := NewResponsesHandler(cs, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
 	w := httptest.NewRecorder()
@@ -662,7 +651,6 @@ func TestResponsesHandler_MaxOutputTokens(t *testing.T) {
 
 func TestResponsesHandler_NativePassthrough(t *testing.T) {
 	var gotPath string
-	// Backend that supports /v1/responses natively.
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
@@ -676,14 +664,14 @@ func TestResponsesHandler_NativePassthrough(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	cfg := &Config{
-		Models: []ModelConfig{{
+	cfg := &config.Config{
+		Models: []config.ModelConfig{{
 			Name: "test-model", Backend: ts.URL + "/v1",
 			Model: "test-model", Timeout: 10,
 		}},
 	}
-	cs := &ConfigStore{config: cfg}
-	handler := NewResponsesHandler(cs, nil)
+	cs := config.NewTestConfigStore(cfg)
+	handler := NewResponsesHandler(cs, nil, nil)
 
 	body := `{"model":"test-model","input":"Hello","stream":false}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
@@ -706,7 +694,6 @@ func TestResponsesHandler_NativePassthrough(t *testing.T) {
 
 func TestResponsesHandler_FallbackOn404(t *testing.T) {
 	var callCount int
-	// Backend returns 404 for /responses, 200 for /chat/completions.
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
 		if r.URL.Path == "/v1/responses" {
@@ -725,16 +712,15 @@ func TestResponsesHandler_FallbackOn404(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	cfg := &Config{
-		Models: []ModelConfig{{
+	cfg := &config.Config{
+		Models: []config.ModelConfig{{
 			Name: "test-model", Backend: ts.URL + "/v1",
 			Model: "test-model", Timeout: 10,
 		}},
 	}
-	cs := &ConfigStore{config: cfg}
-	handler := NewResponsesHandler(cs, nil)
+	cs := config.NewTestConfigStore(cfg)
+	handler := NewResponsesHandler(cs, nil, nil)
 
-	// First request: probes native (404) → falls back to translation.
 	body := `{"model":"test-model","input":"Hello","stream":false}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -752,9 +738,8 @@ func TestResponsesHandler_FallbackOn404(t *testing.T) {
 	if resp["output_text"] != "Translated response" {
 		t.Fatalf("expected translated content, got %v", resp["output_text"])
 	}
-	firstCallCount := callCount // Should be 2 (probe + translation).
+	firstCallCount := callCount
 
-	// Second request: cached — goes straight to translation, no probe.
 	req2 := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
 	req2.Header.Set("Content-Type", "application/json")
 	w2 := httptest.NewRecorder()
@@ -763,7 +748,6 @@ func TestResponsesHandler_FallbackOn404(t *testing.T) {
 	if w2.Code != http.StatusOK {
 		t.Fatalf("second request: expected 200, got %d", w2.Code)
 	}
-	// Should only have made 1 additional call (translation only, no probe).
 	if callCount != firstCallCount+1 {
 		t.Fatalf("expected cache to skip probe: call count went from %d to %d (expected +1)", firstCallCount, callCount)
 	}
@@ -784,15 +768,15 @@ func TestResponsesHandler_TranslateModeSkipsProbe(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	cfg := &Config{
-		Models: []ModelConfig{{
+	cfg := &config.Config{
+		Models: []config.ModelConfig{{
 			Name: "test-model", Backend: ts.URL + "/v1",
 			Model: "test-model", Timeout: 10,
 			ResponsesMode: "translate",
 		}},
 	}
-	cs := &ConfigStore{config: cfg}
-	handler := NewResponsesHandler(cs, nil)
+	cs := config.NewTestConfigStore(cfg)
+	handler := NewResponsesHandler(cs, nil, nil)
 
 	body := `{"model":"test-model","input":"Hello","stream":false}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
@@ -809,21 +793,20 @@ func TestResponsesHandler_TranslateModeSkipsProbe(t *testing.T) {
 }
 
 func TestResponsesHandler_NativeModeNoFallback(t *testing.T) {
-	// Backend returns 404 for /responses — native mode should NOT fall back.
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer ts.Close()
 
-	cfg := &Config{
-		Models: []ModelConfig{{
+	cfg := &config.Config{
+		Models: []config.ModelConfig{{
 			Name: "test-model", Backend: ts.URL + "/v1",
 			Model: "test-model", Timeout: 10,
 			ResponsesMode: "native",
 		}},
 	}
-	cs := &ConfigStore{config: cfg}
-	handler := NewResponsesHandler(cs, nil)
+	cs := config.NewTestConfigStore(cfg)
+	handler := NewResponsesHandler(cs, nil, nil)
 
 	body := `{"model":"test-model","input":"Hello","stream":false}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
@@ -848,14 +831,14 @@ func TestHandleCompact_NativePassthrough(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	cfg := &Config{
-		Models: []ModelConfig{{
+	cfg := &config.Config{
+		Models: []config.ModelConfig{{
 			Name: "test-model", Backend: ts.URL + "/v1",
 			Model: "test-model", Timeout: 10,
 		}},
 	}
-	cs := &ConfigStore{config: cfg}
-	handler := NewResponsesHandler(cs, nil)
+	cs := config.NewTestConfigStore(cfg)
+	handler := NewResponsesHandler(cs, nil, nil)
 
 	body := `{"model":"test-model","input":[{"role":"user","content":"Hi"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses/compact", strings.NewReader(body))
@@ -926,12 +909,10 @@ func TestHandleCompact_Summarizes(t *testing.T) {
 		t.Fatalf("expected output array, got %T", resp["output"])
 	}
 
-	// Should have 2 user messages preserved + 1 summary assistant message.
 	if len(output) != 3 {
 		t.Fatalf("expected 3 output items (2 user + 1 summary), got %d", len(output))
 	}
 
-	// Check user messages are preserved.
 	first := output[0].(map[string]any)
 	if first["role"] != "user" {
 		t.Fatalf("expected first output to be user message, got %v", first["role"])
@@ -941,13 +922,11 @@ func TestHandleCompact_Summarizes(t *testing.T) {
 		t.Fatalf("expected second output to be user message, got %v", second["role"])
 	}
 
-	// Check summary message.
 	summary := output[2].(map[string]any)
 	if summary["role"] != "assistant" || summary["type"] != "message" {
 		t.Fatalf("expected assistant message, got %v", summary)
 	}
 
-	// Check the upstream request included the summarization system prompt.
 	msgs, _ := gotBody["messages"].([]any)
 	if len(msgs) < 2 {
 		t.Fatalf("expected multiple messages in upstream request, got %d", len(msgs))
@@ -957,7 +936,6 @@ func TestHandleCompact_Summarizes(t *testing.T) {
 		t.Fatalf("expected summarization system prompt, got %v", firstMsg)
 	}
 
-	// Check usage is present.
 	usage, _ := resp["usage"].(map[string]any)
 	if usage == nil || usage["total_tokens"] != float64(120) {
 		t.Fatalf("expected usage with total_tokens=120, got %v", resp["usage"])
@@ -965,14 +943,14 @@ func TestHandleCompact_Summarizes(t *testing.T) {
 }
 
 func TestHandleCompact_RejectsAnthropicBackend(t *testing.T) {
-	cfg := &Config{
-		Models: []ModelConfig{{
+	cfg := &config.Config{
+		Models: []config.ModelConfig{{
 			Name: "claude-test", Backend: "http://localhost:9999",
-			Model: "claude-test", Timeout: 10, Type: BackendAnthropic,
+			Model: "claude-test", Timeout: 10, Type: config.BackendAnthropic,
 		}},
 	}
-	cs := &ConfigStore{config: cfg}
-	handler := NewResponsesHandler(cs, nil)
+	cs := config.NewTestConfigStore(cfg)
+	handler := NewResponsesHandler(cs, nil, nil)
 
 	body := `{"model":"claude-test","input":[{"role":"user","content":"Hi"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses/compact", strings.NewReader(body))

@@ -1,4 +1,4 @@
-package main
+package httputil
 
 import (
 	"encoding/json"
@@ -7,16 +7,16 @@ import (
 	"runtime/debug"
 )
 
-// setSecurityHeaders applies standard security headers to all responses.
-func setSecurityHeaders(w http.ResponseWriter) {
+// SetSecurityHeaders applies standard security headers to all responses.
+func SetSecurityHeaders(w http.ResponseWriter) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Cache-Control", "no-store")
 }
 
-// writeError sends an OpenAI-compatible error response.
-func writeError(w http.ResponseWriter, status int, message string) {
-	setSecurityHeaders(w)
+// WriteError sends an OpenAI-compatible error response.
+func WriteError(w http.ResponseWriter, status int, message string) {
+	SetSecurityHeaders(w)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]any{
@@ -28,10 +28,10 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	})
 }
 
-// writeAnthropicError sends an Anthropic-compatible error response.
+// WriteAnthropicError sends an Anthropic-compatible error response.
 // Claude Code expects this format for all Messages API errors.
-func writeAnthropicError(w http.ResponseWriter, status int, errType, message string) {
-	setSecurityHeaders(w)
+func WriteAnthropicError(w http.ResponseWriter, status int, errType, message string) {
+	SetSecurityHeaders(w)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]any{
@@ -55,9 +55,19 @@ func RecoveryMiddleware(next http.Handler) http.Handler {
 					"path", r.URL.Path,
 					"stack", string(debug.Stack()),
 				)
-				writeError(w, http.StatusInternalServerError, "internal server error")
+				WriteError(w, http.StatusInternalServerError, "internal server error")
 			}
 		}()
 		next.ServeHTTP(w, r)
 	})
+}
+
+// NewHTTPClient returns an http.Client that refuses to follow redirects.
+// All proxy HTTP clients must use this to prevent SSRF via backend redirect responses.
+func NewHTTPClient() *http.Client {
+	return &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 }
