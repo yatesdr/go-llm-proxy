@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>go-llm-proxy — Connect Coding Agents to Any Model</title>
+    <link rel="icon" href="favicon.ico" sizes="any">
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="apple-touch-icon" href="apple-touch-icon.png">
     <meta name="description" content="Connect Claude Code, Codex, OpenCode, and Qwen Coder to local models running on vLLM, llama-server, Ollama, or any OpenAI-compatible backend. Single binary, zero dependencies.">
     <style>
         *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -32,7 +35,7 @@
         .hero .subtext{font-size:15px;color:var(--muted);max-width:560px;margin:0 auto 28px}
         .cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
         .hero-badges{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:16px}
-        .hero-badge{font-size:13px;font-weight:500;color:var(--green);background:#ecfdf5;padding:3px 10px;border-radius:20px}
+        .hero-badge{font-size:13px;font-weight:500;color:var(--green);background:#ecfdf5;border:1px solid #a7f3d0;padding:3px 10px;border-radius:20px}
         .hero-badge-sep{color:var(--border);font-size:12px}
         .btn{display:inline-flex;align-items:center;gap:8px;padding:11px 22px;font-size:15px;font-weight:600;border-radius:8px;text-decoration:none;transition:all .2s}
         .btn-primary{background:var(--blue);color:#fff}
@@ -52,15 +55,15 @@
         .card p{font-size:14px;margin:0}
 
         /* Diagram */
-        .diagram{background:var(--slate);border-radius:10px;padding:28px 24px;margin:24px 0;overflow-x:auto}
+        .diagram{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:28px 24px;margin:24px 0;overflow-x:auto}
         .diagram-row{display:flex;align-items:center;justify-content:center;gap:14px;flex-wrap:wrap;margin-bottom:14px}
         .diagram-row:last-child{margin-bottom:0}
         .d-box{padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;white-space:nowrap;text-align:center}
-        .d-agent{background:#1e3a5f;color:#93c5fd;border:1px solid #2563eb}
-        .d-proxy{background:#1a7f37;color:#bbf7d0;border:1px solid #22c55e;padding:12px 28px;font-size:15px}
-        .d-backend{background:#4a2c0a;color:#fcd34d;border:1px solid #d97706}
-        .d-arrow{color:var(--slate-muted);font-size:20px;font-weight:400}
-        .d-label{color:var(--slate-muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px;text-align:center;margin-bottom:6px}
+        .d-agent{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
+        .d-proxy{background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;padding:12px 28px;font-size:15px}
+        .d-backend{background:#fffbeb;color:#92400e;border:1px solid #fde68a}
+        .d-arrow{color:var(--muted);font-size:20px;font-weight:400}
+        .d-label{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px;text-align:center;margin-bottom:6px}
 
         /* Tables */
         table{width:100%;border-collapse:collapse;font-size:14px;margin-top:16px}
@@ -77,11 +80,13 @@
         .matrix-table th:first-child{text-align:left}
         .matrix-section td{font-weight:600;color:var(--text);background:var(--surface-alt);font-size:11px;text-transform:uppercase;letter-spacing:.4px;padding:6px 10px}
         .y{color:#047857;font-weight:600}
+        .x{color:#dc2626;font-weight:500}
+        .na{color:#a1a8b8;font-style:italic}
         .n{color:#c4c9d4}
         .auto{color:#1d4ed8;font-weight:500}
 
         code{background:#f1f3f5;padding:2px 6px;border-radius:4px;font-size:13px}
-        .code-block{background:var(--slate);border-radius:8px;padding:16px 20px;font-family:'SF Mono',Consolas,monospace;font-size:13px;color:var(--slate-text);line-height:1.7;overflow-x:auto;white-space:pre;margin:16px 0}
+        .code-block{background:var(--surface-alt);border:1px solid var(--border);border-radius:8px;padding:16px 20px;font-family:'SF Mono',Consolas,monospace;font-size:13px;color:var(--text);line-height:1.7;overflow-x:auto;white-space:pre;margin:16px 0}
         .pill-list{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}
         .pill{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-size:14px;font-weight:500}
         footer{text-align:center;padding:48px 0;border-top:1px solid var(--border);margin-top:32px}
@@ -103,7 +108,7 @@
     <header>
         <div class="container">
             <div class="logo">
-                <div class="logo-icon"><svg viewBox="0 0 40 40" width="28" height="28" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 28 L14 14 L20 20 L26 12 L34 28" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="20" cy="16" r="5" fill="#fbbf24"/><path d="M15 16 Q20 11 25 16" fill="#fbbf24"/></svg></div>
+                <div class="logo-icon"><svg viewBox="0 0 40 40" width="26" height="26" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="sun" x1="50%" y1="0%" x2="50%" y2="100%"><stop offset="0%" stop-color="#fbbf24"/><stop offset="100%" stop-color="#f59e0b"/></linearGradient></defs><path d="M20 11 L20 8" stroke="#fbbf24" stroke-width="1.5" stroke-linecap="round"/><path d="M15.2 12.8 L13.1 10.7" stroke="#fbbf24" stroke-width="1.5" stroke-linecap="round"/><path d="M24.8 12.8 L26.9 10.7" stroke="#fbbf24" stroke-width="1.5" stroke-linecap="round"/><circle cx="20" cy="17" r="4.5" fill="url(#sun)"/><path d="M8 30 L16 18 L21 23 L27 15 L35 30 Z" fill="#fff" opacity="0.95"/><path d="M3 30 L12 20 L18 26 L18 30 Z" fill="rgba(255,255,255,0.6)"/></svg></div>
                 <span class="logo-text">go-llm-proxy</span>
             </div>
             <nav>
@@ -119,8 +124,7 @@
         <section class="hero">
             <div class="container">
                 <h1>Connect coding agents to any model</h1>
-                <p class="subtitle">Run Claude Code, Codex, OpenCode, and Qwen Coder against local models on vLLM, llama-server, Ollama &mdash; or any OpenAI-compatible backend.</p>
-                <p class="subtext">The proxy translates protocols, multiplexes models, and adds vision and web search to backends that don't have them.</p>
+                <p class="subtitle">A protocol-translating proxy that connects Claude Code, Codex, OpenCode, and Qwen Coder to local and upstream models, injecting the tools you expect.</p>
                 <div class="cta">
                     <a href="https://github.com/yatesdr/go-llm-proxy/releases" class="btn btn-primary">Download</a>
                     <a href="https://github.com/yatesdr/go-llm-proxy" class="btn btn-secondary">View Source</a>
@@ -145,6 +149,8 @@
                         <span class="d-box d-agent">Codex CLI</span>
                         <span class="d-box d-agent">OpenCode</span>
                         <span class="d-box d-agent">Qwen Coder</span>
+                        <span class="d-box d-agent">OpenClaw</span>
+                        <span class="d-box d-agent">Your App</span>
                     </div>
                     <div class="diagram-row"><span class="d-arrow">&darr;</span></div>
                     <div class="diagram-row"><span class="d-box d-proxy">go-llm-proxy</span></div>
@@ -231,8 +237,8 @@
                             <td>Reasoning display</td>
                             <td class="y">&#10003;</td>
                             <td class="y">&#10003;</td>
-                            <td class="n">&mdash;</td>
-                            <td class="n">&mdash;</td>
+                            <td class="na">N/A</td>
+                            <td class="na">N/A</td>
                         </tr>
 
                         <tr class="matrix-section"><td colspan="5">Proxy-side processing</td></tr>
@@ -240,8 +246,8 @@
                             <td>Web search (Tavily)</td>
                             <td class="y">&#10003;</td>
                             <td class="y">&#10003;</td>
-                            <td class="n">&mdash;</td>
-                            <td class="n">&mdash;</td>
+                            <td class="na">N/A</td>
+                            <td class="na">N/A</td>
                         </tr>
                         <tr>
                             <td>Vision pipeline</td>
@@ -252,10 +258,17 @@
                         </tr>
                         <tr>
                             <td>Conversation compaction</td>
-                            <td class="n">&mdash;</td>
+                            <td class="na">N/A</td>
                             <td class="y">&#10003;</td>
-                            <td class="n">&mdash;</td>
-                            <td class="n">&mdash;</td>
+                            <td class="na">N/A</td>
+                            <td class="na">N/A</td>
+                        </tr>
+                        <tr>
+                            <td>Usage logging &amp; reports</td>
+                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003;</td>
                         </tr>
 
                         <tr class="matrix-section"><td colspan="5">Configuration</td></tr>
@@ -283,7 +296,7 @@
                     </tbody>
                 </table>
 
-                <p style="margin-top:16px;font-size:13px;color:var(--muted)">Web search works by intercepting server-side search tool calls, executing them via <a href="https://tavily.com">Tavily</a>, and injecting results back into the conversation. Vision pipeline routes images to a vision-capable model for description when the target model is text-only.</p>
+                <p style="margin-top:16px;font-size:13px;color:var(--muted)">Web search works by intercepting server-side search tool calls, executing them via <a href="https://tavily.com">Tavily</a>, and injecting results back into the conversation. Vision pipeline routes images to a vision-capable model for description when the target model is text-only &mdash; a vision model must be configured on the proxy, either a local model or any upstream provider.</p>
             </div>
         </section>
 
@@ -296,16 +309,16 @@
 
 models:
   - name: my-model
-    backend: http://192.168.1.10:8000/v1   <span style="color:#94a3b8"># vLLM, llama-server, Ollama, etc.</span>
+    backend: http://192.168.1.10:8000/v1   <span style="color:#8893a4"># vLLM, llama-server, Ollama, etc.</span>
 
 keys:
   - key: sk-your-secret-key
     name: admin</div>
                 <p>Run it:</p>
-                <div class="code-block"><span style="color:#94a3b8"># Docker</span>
+                <div class="code-block"><span style="color:#8893a4"># Docker</span>
 docker compose up -d
 
-<span style="color:#94a3b8"># Or binary</span>
+<span style="color:#8893a4"># Or binary</span>
 ./go-llm-proxy -config config.yaml</div>
                 <p>Point any OpenAI or Anthropic-compatible client at <code>http://localhost:8080/v1</code>. That's it.</p>
                 <p style="font-size:14px">The built-in <strong>config generator</strong> at <code>GET /</code> creates ready-to-use configs for each coding agent. Enable it with <code>-serve-config-generator</code> or <code>serve_config_generator: true</code> in config.</p>
@@ -351,12 +364,12 @@ docker compose up -d
         <section>
             <div class="container">
                 <h2>How it works</h2>
-                <div class="code-block" style="font-size:12px;line-height:1.5"><span style="color:#94a3b8">Client request (any protocol)</span>
+                <div class="code-block" style="font-size:12px;line-height:1.5"><span style="color:#8893a4">Client request (any protocol)</span>
   &rarr; Protocol handler parses request
   &rarr; Translate to Chat Completions (if needed)
-  &rarr; <span style="color:#60a5fa">Pipeline: describe images, inject web search tool</span>
+  &rarr; <span style="color:#0969da">Pipeline: describe images, inject web search tool</span>
   &rarr; Send to backend
-  &rarr; <span style="color:#60a5fa">Pipeline: execute web search if called, re-send</span>
+  &rarr; <span style="color:#0969da">Pipeline: execute web search if called, re-send</span>
   &rarr; Translate response back to client protocol
   &rarr; Stream to client</div>
                 <p>The pipeline is optional. Without <code>processors</code> configured, the proxy just translates and routes. With processors enabled, images and search work transparently on any backend.</p>
