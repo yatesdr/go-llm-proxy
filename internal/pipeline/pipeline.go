@@ -106,7 +106,8 @@ func (p *Pipeline) ProcessRequest(ctx context.Context, chatReq map[string]any,
 	}
 
 	// Vision: route images to processor if target can't handle them natively.
-	if visionModel != nil && (!targetModel.SupportsVision || targetModel.ForcePipeline) {
+	// Skip if the vision model IS the target (avoid pointless round-trip).
+	if visionModel != nil && visionModel.Name != targetModel.Name && (!targetModel.SupportsVision || targetModel.ForcePipeline) {
 		var err error
 		chatReq, err = p.processImages(ctx, chatReq, visionModel)
 		if err != nil {

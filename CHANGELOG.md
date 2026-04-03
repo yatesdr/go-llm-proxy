@@ -38,7 +38,7 @@ All notable changes to this project will be documented in this file.
   - JSON data API at `/usage/data` with configurable time range
   - Rate-limited login with secure cookie-based sessions
 - **CLI usage reports**: `--usage-report` and `--model-report` flags with tabular output
-- Documentation: `doc/codex.md` (Codex setup, Responses API details), `doc/usage.md` (usage logging and dashboard)
+- Documentation: `docs/codex.md` (Codex setup, Responses API details), `docs/usage.md` (usage logging and dashboard)
 
 ### Changed
 - Trusted proxies now update on config reload (previously required a restart)

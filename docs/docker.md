@@ -7,10 +7,10 @@ One config file, one command.
 ```bash
 cp config.yaml.example config.yaml
 # edit config.yaml — add your models and keys
-docker compose up -d
+docker compose -f docker/docker-compose.yml up -d
 ```
 
-That's it. The included `docker-compose.yml` mounts your config and a persistent data volume.
+That's it. The included `docker/docker-compose.yml` mounts your config and a persistent data volume.
 
 ## Standalone run
 
@@ -73,7 +73,7 @@ Supported: `linux/amd64`, `linux/arm64`.
 ## Build locally
 
 ```bash
-docker build -t go-llm-proxy .
+docker build -t go-llm-proxy -f docker/Dockerfile .
 docker run --rm \
   -p 127.0.0.1:8080:8080 \
   -v $(pwd)/config.yaml:/config/config.yaml:ro \

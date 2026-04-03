@@ -272,12 +272,53 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	chatReq := buildChatRequest(req, model.Model, messages)
 
 	// Run pipeline pre-send processors (vision, PDF, etc.).
-	if h.pipeline != nil {
-		chatReq, err = h.pipeline.ProcessRequest(ctx, chatReq, model)
+	// For streaming requests, send SSE keepalives during processing to prevent
+	// the client from timing out while the vision model describes images.
+	headersAlreadySent := false
+	if h.pipeline != nil && h.pipeline.ShouldProcess(model) {
+		if req.Stream && pipeline.RequestContainsImageURLs(chatReq) {
+			httputil.SetSecurityHeaders(w)
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Connection", "keep-alive")
+			w.WriteHeader(http.StatusOK)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			headersAlreadySent = true
+
+			done := make(chan struct{})
+			go func() {
+				ticker := time.NewTicker(5 * time.Second)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-done:
+						return
+					case <-ticker.C:
+						fmt.Fprintf(w, ": keepalive\n\n")
+						if f, ok := w.(http.Flusher); ok {
+							f.Flush()
+						}
+					}
+				}
+			}()
+			chatReq, err = h.pipeline.ProcessRequest(ctx, chatReq, model)
+			close(done)
+		} else {
+			chatReq, err = h.pipeline.ProcessRequest(ctx, chatReq, model)
+		}
 		if err != nil {
 			httputil.WriteError(w, http.StatusInternalServerError, "processing error: "+err.Error())
 			return
 		}
+	}
+
+	// Check if the client disconnected during pipeline processing.
+	if ctx.Err() != nil {
+		slog.Warn("client disconnected during pipeline processing",
+			"model", req.Model, "key", keyName, "error", ctx.Err())
+		return
 	}
 
 	chatBody, err := json.Marshal(chatReq)
@@ -363,7 +404,7 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	reqBytes := int64(len(chatBody))
 	if req.Stream {
-		h.handleStreaming(w, resp, req, model, chatReq, reqBytes, keyName, keyHash, startTime)
+		h.handleStreaming(w, resp, req, model, chatReq, reqBytes, keyName, keyHash, startTime, headersAlreadySent)
 	} else {
 		h.handleNonStreaming(w, resp, req, model, chatReq, reqBytes, keyName, keyHash, startTime)
 	}

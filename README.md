@@ -20,7 +20,7 @@ You need data security and self-host models or have upstream secure vendors (Azu
 ```bash
 cp config.yaml.example config.yaml
 # edit config.yaml — add your models and keys
-docker compose up -d
+docker compose -f docker/docker-compose.yml up -d
 ```
 
 Or without Docker:
@@ -74,12 +74,12 @@ Without `processors`, the proxy just translates and routes. With it, images and 
 
 | Topic | Link |
 |-------|------|
-| Configuration reference | [doc/config-reference.md](doc/config-reference.md) |
-| Claude Code | [doc/claude-code.md](doc/claude-code.md) |
-| Codex CLI | [doc/codex.md](doc/codex.md) |
-| OpenCode | [doc/opencode.md](doc/opencode.md) |
-| Qwen Code | [doc/qwen-code.md](doc/qwen-code.md) |
-| Docker deployment | [doc/docker.md](doc/docker.md) |
-| Production deployment | [doc/deployment.md](doc/deployment.md) |
-| Usage monitoring | [doc/usage.md](doc/usage.md) |
-| Security | [doc/security.md](doc/security.md) |
+| Configuration reference | [docs/config-reference.md](docs/config-reference.md) |
+| Claude Code | [docs/claude-code.md](docs/claude-code.md) |
+| Codex CLI | [docs/codex.md](docs/codex.md) |
+| OpenCode | [docs/opencode.md](docs/opencode.md) |
+| Qwen Code | [docs/qwen-code.md](docs/qwen-code.md) |
+| Docker deployment | [docs/docker.md](docs/docker.md) |
+| Production deployment | [docs/deployment.md](docs/deployment.md) |
+| Usage monitoring | [docs/usage.md](docs/usage.md) |
+| Security | [docs/security.md](docs/security.md) |

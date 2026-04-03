@@ -25,8 +25,18 @@ const maxImagesPerRequest = 10
 func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 	visionModel *config.ModelConfig) (map[string]any, error) {
 
-	messages, ok := chatReq["messages"].([]any)
-	if !ok {
+	// Normalize messages to []any — translation layers may produce []map[string]any.
+	var messages []any
+	switch m := chatReq["messages"].(type) {
+	case []any:
+		messages = m
+	case []map[string]any:
+		messages = make([]any, len(m))
+		for i, msg := range m {
+			messages[i] = msg
+		}
+		chatReq["messages"] = messages
+	default:
 		return chatReq, nil
 	}
 
@@ -120,6 +130,14 @@ func extractImageURL(part map[string]any) string {
 // describeImage sends an image to a vision-capable model and returns a text description.
 // It uses the Pipeline's HTTP client (which has redirect protection).
 func (p *Pipeline) describeImage(ctx context.Context, visionModel *config.ModelConfig, imageURL string) (string, error) {
+	// Use a dedicated timeout instead of the caller's context. The caller's
+	// context is tied to the client connection, which may be closed (e.g. Claude
+	// Code retry) before the vision model finishes. A 60s timeout gives large
+	// images enough time while still bounding the call.
+	visionCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	_ = ctx // original context intentionally unused
+
 	start := time.Now()
 
 	reqBody := map[string]any{
@@ -142,6 +160,9 @@ func (p *Pipeline) describeImage(ctx context.Context, visionModel *config.ModelC
 			},
 		},
 		"max_completion_tokens": 1000,
+		// Disable reasoning/thinking for vision utility calls — we want all
+		// tokens spent on the description, not internal chain-of-thought.
+		"chat_template_kwargs": map[string]any{"enable_thinking": false},
 	}
 
 	body, err := json.Marshal(reqBody)
@@ -150,7 +171,7 @@ func (p *Pipeline) describeImage(ctx context.Context, visionModel *config.ModelC
 	}
 
 	url := visionModel.Backend + api.ChatCompletionsPath
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(visionCtx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("build vision request: %w", err)
 	}

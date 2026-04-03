@@ -167,7 +167,7 @@ Controls how the proxy handles Responses API requests (`POST /v1/responses`, `PO
   responses_mode: translate   # vLLM: use translation for reliable Codex support
 ```
 
-See [doc/codex.md](codex.md) for full details on the Responses API translation layer.
+See [codex.md](codex.md) for full details on the Responses API translation layer.
 
 ## Messages mode
 
@@ -192,7 +192,7 @@ In `auto` mode, the proxy determines the behavior from the model's `type` field 
   type: anthropic
 ```
 
-The translation supports text, tool calling, reasoning tokens (emitted as thinking blocks), and streaming. See [doc/claude-code.md](claude-code.md) for full details.
+The translation supports text, tool calling, reasoning tokens (emitted as thinking blocks), and streaming. See [claude-code.md](claude-code.md) for full details.
 
 ## Context window detection
 

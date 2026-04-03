@@ -272,6 +272,23 @@ func validateConfig(cfg *Config) error {
 		}
 	}
 
+	// Auto-infer SupportsVision: any model referenced as a vision processor
+	// obviously supports vision — don't require the user to say so twice.
+	visionModels := make(map[string]bool)
+	if cfg.Processors.Vision != "" {
+		visionModels[cfg.Processors.Vision] = true
+	}
+	for _, m := range cfg.Models {
+		if m.Processors != nil && m.Processors.Vision != "" && m.Processors.Vision != "none" {
+			visionModels[m.Processors.Vision] = true
+		}
+	}
+	for i := range cfg.Models {
+		if visionModels[cfg.Models[i].Name] && !cfg.Models[i].SupportsVision {
+			cfg.Models[i].SupportsVision = true
+		}
+	}
+
 	keys := make(map[string]bool)
 	for _, k := range cfg.Keys {
 		if k.Key == "" {

@@ -25,18 +25,20 @@ type msgToolCallState struct {
 	args       strings.Builder
 }
 
-func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Response, req messagesRequest, model *config.ModelConfig, chatReq map[string]any, requestBytes int64, keyName, keyHash string, startTime time.Time) {
+func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Response, req messagesRequest, model *config.ModelConfig, chatReq map[string]any, requestBytes int64, keyName, keyHash string, startTime time.Time, headersAlreadySent bool) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		httputil.WriteAnthropicError(w, http.StatusInternalServerError, "api_error", "streaming not supported")
 		return
 	}
 
-	httputil.SetSecurityHeaders(w)
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(http.StatusOK)
+	if !headersAlreadySent {
+		httputil.SetSecurityHeaders(w)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.WriteHeader(http.StatusOK)
+	}
 
 	upstreamModel := req.Model
 	msgID := api.RandomID("msg_")
