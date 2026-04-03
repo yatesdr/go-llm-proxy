@@ -228,6 +228,85 @@ func TestBuildChatRequestFromAnthropic_FullRequest(t *testing.T) {
 	}
 }
 
+func TestTranslateAnthropicMessages_ImageContent(t *testing.T) {
+	msgs := []json.RawMessage{
+		json.RawMessage(`{"role":"user","content":[{"type":"text","text":"What is this?"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBOR..."}}]}`),
+	}
+	result, err := translateAnthropicMessages(msgs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(result))
+	}
+	content := result[0]["content"].([]any)
+	if len(content) != 2 {
+		t.Fatalf("expected 2 content parts, got %d", len(content))
+	}
+	imgPart := content[1].(map[string]any)
+	if imgPart["type"] != "image_url" {
+		t.Fatalf("expected image_url type, got %v", imgPart["type"])
+	}
+	imgURL := imgPart["image_url"].(map[string]any)
+	if !strings.HasPrefix(imgURL["url"].(string), "data:image/png;base64,") {
+		t.Fatalf("expected data URI, got %v", imgURL["url"])
+	}
+}
+
+func TestTranslateAnthropicMessages_MultipleToolResults(t *testing.T) {
+	msgs := []json.RawMessage{
+		json.RawMessage(`{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"result1"},{"type":"tool_result","tool_use_id":"t2","content":"result2"}]}`),
+	}
+	result, err := translateAnthropicMessages(msgs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Should produce 2 separate role:tool messages.
+	if len(result) != 2 {
+		t.Fatalf("expected 2 tool messages, got %d", len(result))
+	}
+	if result[0]["role"] != "tool" || result[0]["tool_call_id"] != "t1" {
+		t.Fatalf("expected first tool message for t1, got %v", result[0])
+	}
+	if result[1]["role"] != "tool" || result[1]["tool_call_id"] != "t2" {
+		t.Fatalf("expected second tool message for t2, got %v", result[1])
+	}
+}
+
+func TestBuildChatRequestFromAnthropic_ThinkingDropped(t *testing.T) {
+	req := messagesRequest{
+		Model:     "test-model",
+		Messages:  []json.RawMessage{json.RawMessage(`{"role":"user","content":"Hello"}`)},
+		MaxTokens: 100,
+		Thinking:  json.RawMessage(`{"type":"adaptive"}`),
+	}
+	chatReq, err := buildChatRequestFromAnthropic(req, "test-model")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, has := chatReq["thinking"]; has {
+		t.Fatal("expected thinking config to be dropped")
+	}
+}
+
+func TestBuildChatRequestFromAnthropic_MaxTokensMapped(t *testing.T) {
+	req := messagesRequest{
+		Model:     "test-model",
+		Messages:  []json.RawMessage{json.RawMessage(`{"role":"user","content":"Hello"}`)},
+		MaxTokens: 4096,
+	}
+	chatReq, err := buildChatRequestFromAnthropic(req, "test-model")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if chatReq["max_completion_tokens"] != 4096 {
+		t.Fatalf("expected max_completion_tokens=4096, got %v", chatReq["max_completion_tokens"])
+	}
+	if _, has := chatReq["max_tokens"]; has {
+		t.Fatal("expected max_tokens NOT to be set (should use max_completion_tokens)")
+	}
+}
+
 // --- Integration tests ---
 
 func newTestMessagesHandler(t *testing.T, modelType string, upstream http.HandlerFunc) (*MessagesHandler, *httptest.Server) {
@@ -620,5 +699,274 @@ func TestMessagesHandler_TranslateModeSkipsProbe(t *testing.T) {
 	}
 	if len(paths) != 1 || paths[0] != "/v1/chat/completions" {
 		t.Fatalf("expected only /v1/chat/completions, got %v", paths)
+	}
+}
+
+func TestMessagesHandler_Streaming_TextAndTools(t *testing.T) {
+	handler, ts := newTestMessagesHandler(t, "", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher := w.(http.Flusher)
+		chunks := []string{
+			`{"id":"chatcmpl-1","model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,
+			`{"id":"chatcmpl-1","model":"test-model","choices":[{"index":0,"delta":{"content":"Let me check."},"finish_reason":null}]}`,
+			`{"id":"chatcmpl-1","model":"test-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_weather","arguments":""}}]},"finish_reason":null}]}`,
+			`{"id":"chatcmpl-1","model":"test-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"location\":\"Paris\"}"}}]},"finish_reason":null}]}`,
+			`{"id":"chatcmpl-1","model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		}
+		for _, c := range chunks {
+			fmt.Fprintf(w, "data: %s\n\n", c)
+			flusher.Flush()
+		}
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	})
+	defer ts.Close()
+
+	body := `{"model":"test-model","max_tokens":1000,"stream":true,"messages":[{"role":"user","content":"Weather?"}],"tools":[{"name":"get_weather","input_schema":{}}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	events := parseSSEEvents(w.Body.String())
+
+	// Should have both a text block and a tool_use block.
+	var hasTextBlock, hasToolBlock bool
+	for _, e := range events {
+		if e.event == "content_block_start" {
+			var d map[string]any
+			json.Unmarshal([]byte(e.data), &d)
+			cb := d["content_block"].(map[string]any)
+			if cb["type"] == "text" {
+				hasTextBlock = true
+			}
+			if cb["type"] == "tool_use" {
+				hasToolBlock = true
+			}
+		}
+	}
+	if !hasTextBlock {
+		t.Error("expected text content_block_start")
+	}
+	if !hasToolBlock {
+		t.Error("expected tool_use content_block_start")
+	}
+
+	// Text block should be closed before tool block opens.
+	var textStopIdx, toolStartIdx int
+	for i, e := range events {
+		if e.event == "content_block_stop" {
+			var d map[string]any
+			json.Unmarshal([]byte(e.data), &d)
+			if d["index"] == float64(0) {
+				textStopIdx = i
+			}
+		}
+		if e.event == "content_block_start" {
+			var d map[string]any
+			json.Unmarshal([]byte(e.data), &d)
+			cb := d["content_block"].(map[string]any)
+			if cb["type"] == "tool_use" {
+				toolStartIdx = i
+			}
+		}
+	}
+	if textStopIdx >= toolStartIdx {
+		t.Errorf("text block stop (idx %d) should come before tool block start (idx %d)", textStopIdx, toolStartIdx)
+	}
+}
+
+func TestMessagesHandler_BackendError_Streaming(t *testing.T) {
+	handler, ts := newTestMessagesHandler(t, "", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, `{"error":"invalid request"}`)
+	})
+	defer ts.Close()
+
+	body := `{"model":"test-model","max_tokens":100,"stream":true,"messages":[{"role":"user","content":"Hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	// Should return SSE with error event.
+	if !strings.Contains(w.Header().Get("Content-Type"), "text/event-stream") {
+		t.Fatalf("expected SSE content type for streaming error, got %q", w.Header().Get("Content-Type"))
+	}
+	events := parseSSEEvents(w.Body.String())
+	var hasError bool
+	for _, e := range events {
+		if e.event == "error" {
+			hasError = true
+			var d map[string]any
+			json.Unmarshal([]byte(e.data), &d)
+			if d["type"] != "error" {
+				t.Fatalf("expected type=error in payload, got %v", d["type"])
+			}
+		}
+	}
+	if !hasError {
+		t.Fatal("expected error SSE event for backend error in streaming mode")
+	}
+}
+
+func TestMessagesHandler_BackendError_NonStreaming(t *testing.T) {
+	handler, ts := newTestMessagesHandler(t, "", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, `{"error":"bad request"}`)
+	})
+	defer ts.Close()
+
+	body := `{"model":"test-model","max_tokens":100,"messages":[{"role":"user","content":"Hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+	var resp map[string]any
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["type"] != "error" {
+		t.Fatalf("expected Anthropic error format, got %v", resp)
+	}
+}
+
+func TestMessagesHandler_ReasoningKeepalive(t *testing.T) {
+	handler, ts := newTestMessagesHandler(t, "", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher := w.(http.Flusher)
+		chunks := []string{
+			`{"id":"chatcmpl-1","model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,
+			`{"id":"chatcmpl-1","model":"test-model","choices":[{"index":0,"delta":{"reasoning":"Thinking..."},"finish_reason":null}]}`,
+			`{"id":"chatcmpl-1","model":"test-model","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}`,
+			`{"id":"chatcmpl-1","model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		}
+		for _, c := range chunks {
+			fmt.Fprintf(w, "data: %s\n\n", c)
+			flusher.Flush()
+		}
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	})
+	defer ts.Close()
+
+	body := `{"model":"test-model","max_tokens":100,"stream":true,"messages":[{"role":"user","content":"Hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	events := parseSSEEvents(w.Body.String())
+
+	// Should have a thinking block from reasoning tokens.
+	var hasThinkingStart, hasThinkingDelta, hasTextBlock bool
+	for _, e := range events {
+		if e.event == "content_block_start" {
+			var d map[string]any
+			json.Unmarshal([]byte(e.data), &d)
+			cb := d["content_block"].(map[string]any)
+			if cb["type"] == "thinking" {
+				hasThinkingStart = true
+			}
+			if cb["type"] == "text" {
+				hasTextBlock = true
+			}
+		}
+		if e.event == "content_block_delta" {
+			var d map[string]any
+			json.Unmarshal([]byte(e.data), &d)
+			delta := d["delta"].(map[string]any)
+			if delta["type"] == "thinking_delta" {
+				hasThinkingDelta = true
+			}
+		}
+	}
+	if !hasThinkingStart {
+		t.Error("expected thinking content_block_start from reasoning tokens")
+	}
+	if !hasThinkingDelta {
+		t.Error("expected thinking_delta from reasoning tokens")
+	}
+	if !hasTextBlock {
+		t.Error("expected text content_block_start after reasoning")
+	}
+}
+
+func TestMessagesHandler_ToolChoiceWithoutTools(t *testing.T) {
+	var gotBody map[string]any
+	handler, ts := newTestMessagesHandler(t, "", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id": "chatcmpl-1", "model": "test-model", "created": 0,
+			"choices": []map[string]any{{
+				"index": 0, "finish_reason": "stop",
+				"message": map[string]any{"role": "assistant", "content": "OK"},
+			}},
+		})
+	})
+	defer ts.Close()
+
+	// Send tool_choice without any tools.
+	body := `{"model":"test-model","max_tokens":100,"messages":[{"role":"user","content":"Hi"}],"tool_choice":{"type":"auto"}}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	// tool_choice should be stripped from the translated request.
+	if _, has := gotBody["tool_choice"]; has {
+		t.Fatal("expected tool_choice to be stripped when no tools present")
+	}
+}
+
+func TestMessagesHandler_AnthropicPrefix(t *testing.T) {
+	var gotPath string
+	handler, ts := newTestMessagesHandler(t, BackendAnthropic, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, `{"id":"msg_1","type":"message","role":"assistant","content":[],"stop_reason":"end_turn"}`)
+	})
+	defer ts.Close()
+
+	body := `{"model":"test-model","max_tokens":100,"messages":[{"role":"user","content":"Hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/anthropic/v1/messages", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if gotPath != "/v1/messages" {
+		t.Fatalf("expected upstream path /v1/messages, got %q", gotPath)
+	}
+}
+
+func TestMessagesHandler_AnthropicPrefixRejectsOpenAI(t *testing.T) {
+	handler, ts := newTestMessagesHandler(t, "", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	defer ts.Close()
+
+	body := `{"model":"test-model","max_tokens":100,"messages":[{"role":"user","content":"Hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/anthropic/v1/messages", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for openai model on /anthropic path, got %d", w.Code)
 	}
 }

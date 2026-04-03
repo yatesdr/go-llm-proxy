@@ -141,6 +141,25 @@ func TestValidateConfig_UnknownType(t *testing.T) {
 	}
 }
 
+func TestValidateConfig_ValidMessagesMode(t *testing.T) {
+	for _, mode := range []string{"", "auto", "native", "translate"} {
+		cfg := validConfig()
+		cfg.Models[0].MessagesMode = mode
+		if err := validateConfig(cfg); err != nil {
+			t.Fatalf("expected no error for messages_mode %q, got: %v", mode, err)
+		}
+	}
+}
+
+func TestValidateConfig_UnknownMessagesMode(t *testing.T) {
+	cfg := validConfig()
+	cfg.Models[0].MessagesMode = "bogus"
+	err := validateConfig(cfg)
+	if err == nil || !strings.Contains(err.Error(), "unknown messages_mode") {
+		t.Fatalf("expected unknown messages_mode error, got: %v", err)
+	}
+}
+
 func TestValidateConfig_DashboardRequiresMetrics(t *testing.T) {
 	cfg := validConfig()
 	cfg.UsageDashboard = true
