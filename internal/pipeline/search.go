@@ -136,9 +136,9 @@ func HasSearchToolCall(toolCalls []api.ChatChoiceToolCall) bool {
 
 // --- Tavily API ---
 
-// executeTavilySearch calls the Tavily search API and returns formatted results.
+// ExecuteTavilySearch calls the Tavily search API and returns formatted results.
 // Uses the Pipeline's HTTP client for consistent redirect/timeout behavior.
-func (p *Pipeline) executeTavilySearch(ctx context.Context, apiKey, query string) (string, error) {
+func (p *Pipeline) ExecuteTavilySearch(ctx context.Context, apiKey, query string) (string, error) {
 	start := time.Now()
 
 	// 10-second timeout for Tavily calls.
@@ -214,9 +214,9 @@ func (p *Pipeline) executeTavilySearch(ctx context.Context, apiKey, query string
 
 // --- Shared message-building ---
 
-// AppendMessagesToSlice normalizes chatReq["messages"] (which may be []any or
+// appendMessagesToSlice normalizes chatReq["messages"] (which may be []any or
 // []map[string]any) into a []any and appends additional messages.
-func AppendMessagesToSlice(existing any, additional ...any) []any {
+func appendMessagesToSlice(existing any, additional ...any) []any {
 	var result []any
 	switch m := existing.(type) {
 	case []any:
@@ -260,7 +260,7 @@ func (p *Pipeline) executeSearchCalls(ctx context.Context, searchKey string,
 			args.Query = tc.Function.Arguments // best-effort fallback
 		}
 
-		result, err := p.executeTavilySearch(ctx, searchKey, args.Query)
+		result, err := p.ExecuteTavilySearch(ctx, searchKey, args.Query)
 		if err != nil {
 			slog.Warn("tavily search failed", "query", args.Query, "error", err)
 			result = fmt.Sprintf("Web search failed: %s", err.Error())
@@ -289,7 +289,7 @@ func (p *Pipeline) buildSearchContinuation(ctx context.Context, chatReq map[stri
 		assistantMsg["content"] = assistantContent
 	}
 
-	newMessages := AppendMessagesToSlice(chatReq["messages"], assistantMsg)
+	newMessages := appendMessagesToSlice(chatReq["messages"], assistantMsg)
 	toolResults, hasClientTools := p.executeSearchCalls(ctx, searchKey, toolCalls)
 	newMessages = append(newMessages, toolResults...)
 
@@ -372,9 +372,9 @@ func (p *Pipeline) ExecuteSearchAndResend(ctx context.Context, chatReq map[strin
 	return newReq, err
 }
 
-// StreamingSearchState tracks accumulated tool calls during streaming to detect
+// streamingSearchState tracks accumulated tool calls during streaming to detect
 // web_search calls that need proxy-side execution.
-type StreamingSearchState struct {
+type streamingSearchState struct {
 	ToolCalls []streamingToolCall
 }
 
@@ -384,22 +384,22 @@ type streamingToolCall struct {
 	Args strings.Builder
 }
 
-// AccumulateToolCall records a new tool call from a streaming chunk.
-func (s *StreamingSearchState) AccumulateToolCall(id, name string) int {
+// accumulateToolCall records a new tool call from a streaming chunk.
+func (s *streamingSearchState) accumulateToolCall(id, name string) int {
 	idx := len(s.ToolCalls)
 	s.ToolCalls = append(s.ToolCalls, streamingToolCall{ID: id, Name: name})
 	return idx
 }
 
-// AppendArgs appends arguments to a tracked tool call.
-func (s *StreamingSearchState) AppendArgs(idx int, args string) {
+// appendArgs appends arguments to a tracked tool call.
+func (s *streamingSearchState) appendArgs(idx int, args string) {
 	if idx >= 0 && idx < len(s.ToolCalls) {
 		s.ToolCalls[idx].Args.WriteString(args)
 	}
 }
 
-// HasSearchCall returns true if any accumulated tool call is web_search.
-func (s *StreamingSearchState) HasSearchCall() bool {
+// hasSearchCall returns true if any accumulated tool call is web_search.
+func (s *streamingSearchState) hasSearchCall() bool {
 	for _, tc := range s.ToolCalls {
 		if tc.Name == webSearchFunctionName {
 			return true
@@ -408,8 +408,8 @@ func (s *StreamingSearchState) HasSearchCall() bool {
 	return false
 }
 
-// OnlySearchCalls returns true if ALL accumulated tool calls are web_search.
-func (s *StreamingSearchState) OnlySearchCalls() bool {
+// onlySearchCalls returns true if ALL accumulated tool calls are web_search.
+func (s *streamingSearchState) onlySearchCalls() bool {
 	if len(s.ToolCalls) == 0 {
 		return false
 	}
@@ -421,8 +421,8 @@ func (s *StreamingSearchState) OnlySearchCalls() bool {
 	return true
 }
 
-// ToChatChoiceToolCalls converts accumulated streaming state to ChatChoiceToolCall format.
-func (s *StreamingSearchState) ToChatChoiceToolCalls() []api.ChatChoiceToolCall {
+// toChatChoiceToolCalls converts accumulated streaming state to ChatChoiceToolCall format.
+func (s *streamingSearchState) toChatChoiceToolCalls() []api.ChatChoiceToolCall {
 	result := make([]api.ChatChoiceToolCall, len(s.ToolCalls))
 	for i, tc := range s.ToolCalls {
 		result[i] = api.ChatChoiceToolCall{

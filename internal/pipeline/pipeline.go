@@ -132,8 +132,8 @@ func (p *Pipeline) ProcessRequest(ctx context.Context, chatReq map[string]any,
 	return chatReq, nil
 }
 
-// PipelineError builds a formatted error message for pipeline failures.
-func PipelineError(feature, model, docSection, originalErr string) string {
+// pipelineError builds a formatted error message for pipeline failures.
+func pipelineError(feature, model, docSection, originalErr string) string {
 	return fmt.Sprintf(
 		"The backend model (%s) does not support %s, and the proxy could not process it.\n\n"+
 			"To enable %s support, configure the proxy:\n\n"+
@@ -144,16 +144,16 @@ func PipelineError(feature, model, docSection, originalErr string) string {
 	)
 }
 
-// ImageNotSupportedError returns a friendly error when images are sent to a text-only
+// imageNotSupportedError returns a friendly error when images are sent to a text-only
 // model and no vision processor is configured.
-func ImageNotSupportedError(modelName string, originalErr string) string {
-	return PipelineError("image inputs", modelName,
+func imageNotSupportedError(modelName string, originalErr string) string {
+	return pipelineError("image inputs", modelName,
 		"vision: your-vision-model    # any vision-capable model", originalErr)
 }
 
-// SearchNotConfiguredError returns a friendly error when web search is requested
+// searchNotConfiguredError returns a friendly error when web search is requested
 // but no Tavily key is configured.
-func SearchNotConfiguredError() string {
+func searchNotConfiguredError() string {
 	return "Web search was requested but no search API key is configured on the proxy.\n\n" +
 		"To enable web search, add a Tavily API key to your proxy config:\n\n" +
 		"    processors:\n" +

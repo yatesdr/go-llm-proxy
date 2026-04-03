@@ -325,7 +325,7 @@ func TestRequestContainsImageURLs(t *testing.T) {
 // --- Error formatting tests ---
 
 func TestImageNotSupportedError(t *testing.T) {
-	msg := ImageNotSupportedError("MiniMax-M2.5", "400: model does not support image inputs")
+	msg := imageNotSupportedError("MiniMax-M2.5", "400: model does not support image inputs")
 	if msg == "" {
 		t.Fatal("expected non-empty error message")
 	}
@@ -338,7 +338,7 @@ func TestImageNotSupportedError(t *testing.T) {
 }
 
 func TestSearchNotConfiguredError(t *testing.T) {
-	msg := SearchNotConfiguredError()
+	msg := searchNotConfiguredError()
 	if msg == "" {
 		t.Fatal("expected non-empty error message")
 	}
@@ -525,22 +525,22 @@ func TestMarshalToolCalls(t *testing.T) {
 }
 
 func TestStreamingSearchState(t *testing.T) {
-	s := &StreamingSearchState{}
-	idx1 := s.AccumulateToolCall("call_1", "web_search")
-	s.AppendArgs(idx1, `{"query":`)
-	s.AppendArgs(idx1, `"test"}`)
+	s := &streamingSearchState{}
+	idx1 := s.accumulateToolCall("call_1", "web_search")
+	s.appendArgs(idx1, `{"query":`)
+	s.appendArgs(idx1, `"test"}`)
 
-	idx2 := s.AccumulateToolCall("call_2", "bash")
-	s.AppendArgs(idx2, `{"cmd":"ls"}`)
+	idx2 := s.accumulateToolCall("call_2", "bash")
+	s.appendArgs(idx2, `{"cmd":"ls"}`)
 
-	if !s.HasSearchCall() {
+	if !s.hasSearchCall() {
 		t.Fatal("expected HasSearchCall true")
 	}
-	if s.OnlySearchCalls() {
+	if s.onlySearchCalls() {
 		t.Fatal("expected OnlySearchCalls false (has bash)")
 	}
 
-	tcs := s.ToChatChoiceToolCalls()
+	tcs := s.toChatChoiceToolCalls()
 	if len(tcs) != 2 {
 		t.Fatalf("expected 2 tool calls, got %d", len(tcs))
 	}
@@ -553,21 +553,21 @@ func TestStreamingSearchState(t *testing.T) {
 }
 
 func TestStreamingSearchState_OnlySearch(t *testing.T) {
-	s := &StreamingSearchState{}
-	s.AccumulateToolCall("call_1", "web_search")
-	s.AccumulateToolCall("call_2", "web_search")
+	s := &streamingSearchState{}
+	s.accumulateToolCall("call_1", "web_search")
+	s.accumulateToolCall("call_2", "web_search")
 
-	if !s.OnlySearchCalls() {
+	if !s.onlySearchCalls() {
 		t.Fatal("expected OnlySearchCalls true")
 	}
 }
 
 func TestStreamingSearchState_Empty(t *testing.T) {
-	s := &StreamingSearchState{}
-	if s.HasSearchCall() {
+	s := &streamingSearchState{}
+	if s.hasSearchCall() {
 		t.Fatal("expected HasSearchCall false on empty")
 	}
-	if s.OnlySearchCalls() {
+	if s.onlySearchCalls() {
 		t.Fatal("expected OnlySearchCalls false on empty")
 	}
 }
