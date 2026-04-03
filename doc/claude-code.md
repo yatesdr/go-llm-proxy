@@ -121,13 +121,44 @@ For **native Anthropic backends**: real extended thinking with cryptographic sig
 
 ## Web search
 
-Claude Code's built-in `WebSearch` tool is an Anthropic server-side feature. It works with native Anthropic backends but not through translation (the search executes on Anthropic's infrastructure).
+Claude Code's built-in `WebSearch` tool (`web_search_20250305`) is an Anthropic server-side feature. It works with native Anthropic backends through passthrough.
 
-For translated backends, configure [Tavily](https://tavily.com/) as an MCP server for web search. The config generator can set this up — enter your Tavily API key and the generated config will include the MCP setup command.
+For translated backends, the proxy can handle web search transparently using the processing pipeline:
+
+**Option 1: Proxy-side search (recommended)** — Configure a Tavily API key in the proxy's `processors` block:
+
+```yaml
+processors:
+  web_search_key: tvly-your-key
+```
+
+The proxy automatically converts Claude Code's `web_search_20250305` server tool to a function tool that the backend model can call. When the model calls `web_search`, the proxy executes the Tavily search and injects the results — transparent to Claude Code. No client-side MCP configuration needed.
+
+**Option 2: Client-side MCP** — Configure [Tavily](https://tavily.com/) as an MCP server in Claude Code's settings. The config generator can set this up — enter your Tavily API key and the generated config will include the MCP setup command.
 
 ## Image handling
 
-If the backend model supports vision, images pass through the translation normally. If the backend is text-only and rejects the request, the proxy returns a clear error message: *"The backend model does not appear to support image inputs."*
+The proxy's processing pipeline can handle images for text-only backends:
+
+**Vision-capable backends** (`supports_vision: true`): Images pass through the translation normally.
+
+**Text-only backends with a vision processor configured**: The proxy sends each image to the vision model for description, then replaces the image with the text description. The backend model receives only text. Configure this in the proxy:
+
+```yaml
+processors:
+  vision: qwen-3.5    # any vision-capable model in your config
+
+models:
+  - name: MiniMax-M2.5
+    backend: http://192.168.100.10:8000/v1
+    # Images auto-routed to qwen-3.5 for description
+
+  - name: qwen-3.5
+    backend: http://192.168.13.30:8000/v1
+    supports_vision: true    # handles images natively, no processing needed
+```
+
+**Text-only backends without a vision processor**: The proxy returns a clear error message: *"The backend model does not appear to support image inputs."* with configuration guidance.
 
 ## Proxy-side config
 
@@ -150,7 +181,8 @@ models:
 
 - **Extended thinking**: Reasoning tokens from the backend are displayed as thinking blocks, but they don't have real Anthropic signatures. This is cosmetic — tool calling and agentic behavior work normally.
 - **Prompt caching**: Stripped silently. All translated requests are uncached.
-- **Server-side web search**: Not available. Use Tavily MCP as an alternative.
-- **Image support**: Depends on the backend model. Text-only models will error with a clear message.
+- **Server-side web search**: Not available directly, but the proxy can execute web searches via Tavily when `web_search_key` is configured in the `processors` block. Alternatively, use Tavily MCP.
+- **Image support**: Text-only models work with images when a vision processor is configured. Otherwise, the proxy returns a clear error with configuration guidance.
+- **PDF support**: The proxy can extract text from PDFs for text-only backends when a vision processor is configured (vision fallback for scanned PDFs).
 
-Native Anthropic backends have full fidelity — all features work through passthrough.
+Native Anthropic backends have full fidelity — all features work through passthrough. Use `force_pipeline: true` on an Anthropic model to override and use proxy-side processing instead.

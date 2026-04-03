@@ -3,126 +3,68 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>go-llm-proxy — Lightweight LLM API Gateway</title>
-    <meta name="description" content="A lightweight, secure LLM API proxy that aggregates multiple backends behind a single endpoint. Supports OpenAI and Anthropic protocols.">
+    <title>go-llm-proxy — LLM API Proxy</title>
+    <meta name="description" content="A single-binary LLM proxy that makes any model work with any client. Protocol translation, model multiplexing, vision pipeline, web search, usage monitoring.">
     <style>
         *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
         :root{
-            --bg:#fafbfc;
-            --surface:#fff;
-            --surface-alt:#f5f7fa;
-            --border:#e2e5eb;
-            --text:#1a2332;
-            --text-muted:#5c6678;
-            --blue:#0969da;
-            --blue-dark:#0550ae;
-            --green:#1a7f37;
-            --amber:#9a6700;
+            --bg:#fafbfc;--surface:#fff;--surface-alt:#f5f7fa;
+            --border:#e2e5eb;--text:#1a2332;--muted:#5c6678;
+            --blue:#0969da;--blue-dark:#0550ae;
+            --green:#1a7f37;--amber:#9a6700;
+            --slate:#0f172a;--slate-text:#e2e8f0;--slate-muted:#94a3b8;
         }
         html{scroll-behavior:smooth}
         body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;padding:0 16px}
         .container{max-width:900px;margin:0 auto;padding:0 8px}
-        
-        /* Header */
         header{padding:48px 0 32px;border-bottom:1px solid var(--border);margin-bottom:40px}
         header .container{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px}
         .logo{display:flex;align-items:center;gap:12px}
         .logo-icon{width:40px;height:40px;background:var(--blue);border-radius:8px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:18px}
         .logo-text{font-size:22px;font-weight:700;letter-spacing:-0.5px}
         nav{display:flex;gap:24px}
-        nav a{color:var(--text-muted);text-decoration:none;font-size:15px;transition:color .2s}
+        nav a{color:var(--muted);text-decoration:none;font-size:15px;transition:color .2s}
         nav a:hover{color:var(--blue)}
-        
-        /* Hero */
         .hero{text-align:center;padding:0 0 48px}
-        .hero h1{font-size:clamp(32px,6vw,48px);font-weight:800;letter-spacing:-1px;line-height:1.15;margin-bottom:20px}
-        .hero p{font-size:18px;color:var(--text-muted);max-width:600px;margin:0 auto 32px;line-height:1.7}
-        .hero .cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
-        .btn{display:inline-flex;align-items:center;gap:8px;padding:12px 24px;font-size:16px;font-weight:600;border-radius:8px;text-decoration:none;transition:all .2s}
+        .hero h1{font-size:clamp(28px,5vw,42px);font-weight:800;letter-spacing:-1px;line-height:1.2;margin-bottom:16px}
+        .hero p{font-size:17px;color:var(--muted);max-width:640px;margin:0 auto 28px;line-height:1.7}
+        .cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+        .btn{display:inline-flex;align-items:center;gap:8px;padding:11px 22px;font-size:15px;font-weight:600;border-radius:8px;text-decoration:none;transition:all .2s}
         .btn-primary{background:var(--blue);color:#fff}
-        .btn-primary:hover{background:var(--blue-dark);transform:translateY(-1px)}
+        .btn-primary:hover{background:var(--blue-dark)}
         .btn-secondary{background:var(--surface);color:var(--text);border:1px solid var(--border)}
         .btn-secondary:hover{background:var(--surface-alt)}
-        
-        /* Sections */
-        section{padding:48px 0;border-bottom:1px solid var(--border)}
+        section{padding:44px 0;border-bottom:1px solid var(--border)}
         section:last-of-type{border-bottom:none}
-        h2{font-size:28px;font-weight:700;margin-bottom:16px;letter-spacing:-0.5px}
-        h3{font-size:18px;font-weight:600;margin-bottom:12px}
-        p{color:var(--text-muted);margin-bottom:16px}
-        
-        /* Use Cases */
-        .use-cases{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:24px;margin-top:24px}
-        .use-case{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px}
-        .use-case h3{color:var(--text);margin-bottom:8px}
-        .use-case p{font-size:15px;margin:0}
-        
-        /* Features */
-        .features{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:20px;margin-top:24px}
-        .feature{display:flex;gap:14px;align-items:flex-start}
-        .feature-icon{width:36px;height:36px;min-width:36px;background:var(--surface-alt);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:18px}
-        .feature h3{font-size:15px;margin-bottom:4px}
-        .feature p{font-size:14px;margin:0}
-        
-        /* Tested With */
-        .tested-with{display:flex;flex-wrap:wrap;gap:16px;margin-top:20px}
-        .tested-item{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 20px;font-size:15px;font-weight:500;display:flex;align-items:center;gap:8px}
-        .tested-item .check{color:var(--green)}
-        
-        /* Screenshots */
-        .screenshots{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:24px;margin-top:24px}
-        .screenshot{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden}
-        .screenshot-placeholder{height:200px;background:linear-gradient(135deg,#f5f7fa 0%,#e8ecf1 100%);display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:14px}
-        .screenshot-caption{padding:16px;font-size:14px;color:var(--text-muted);border-top:1px solid var(--border)}
-        
-        /* Config UI Preview */
-        .config-ui-preview{display:flex;justify-content:center;margin-top:24px}
-        .config-ui-window{background:#fff;border:1px solid var(--border);border-radius:12px;width:100%;max-width:420px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.1)}
-        .config-ui-header{background:linear-gradient(180deg,#f8f9fa 0%,#e9ecef 100%);padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}
-        .config-ui-dots{display:flex;gap:6px}
-        .dot{width:12px;height:12px;border-radius:50%}
-        .red{background:#ff5f56}
-        .yellow{background:#ffbd2e}
-        .green{background:#27ca3f}
-        .config-ui-title{font-size:13px;color:#495057;font-weight:500}
-        .config-ui-body{padding:20px}
-        .config-ui-section{margin-bottom:16px}
-        .config-ui-section:last-of-type{margin-bottom:0}
-        .config-ui-label{font-size:11px;font-weight:600;color:#6c757d;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
-        .config-ui-models{display:flex;flex-wrap:wrap;gap:8px}
-        .model-badge{background:#e7f5ff;color:#0969da;padding:4px 10px;border-radius:20px;font-size:12px;font-weight:500}
-        .config-ui-row{display:flex;gap:12px}
-        .config-ui-field{flex:1}
-        .config-ui-select{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:6px;font-size:14px;background:#fff;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236c757d' d='M6 8L1 3h10z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center}
-        .config-ui-btn{background:#0969da;color:#fff;padding:12px 20px;border-radius:8px;text-align:center;font-weight:600;font-size:14px;margin-top:16px}
-        
-        /* Security */
-        .security-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:24px;margin-top:24px}
-        .security-item{background:var(--surface-alt);border-radius:10px;padding:20px}
-        .security-item h3{color:var(--text);margin-bottom:8px}
-        .security-item p{font-size:14px;margin:0}
-        
-        /* Stats */
-        .stats{display:flex;justify-content:center;gap:48px;flex-wrap:wrap;margin:32px 0}
-        .stat{text-align:center}
-        .stat-value{font-size:36px;font-weight:800;color:var(--blue)}
-        .stat-label{font-size:14px;color:var(--text-muted)}
-        
-        /* Footer */
+        h2{font-size:24px;font-weight:700;margin-bottom:12px;letter-spacing:-0.3px}
+        h3{font-size:17px;font-weight:600;margin-bottom:8px}
+        p{color:var(--muted);margin-bottom:14px}
+        .grid-2{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px;margin-top:20px}
+        .grid-3{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:20px;margin-top:20px}
+        .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px}
+        .card h3{color:var(--text);margin-bottom:6px}
+        .card p{font-size:14px;margin:0}
+        table{width:100%;border-collapse:collapse;font-size:14px;margin-top:16px}
+        th{text-align:left;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;padding:8px 10px;border-bottom:2px solid var(--border)}
+        td{padding:9px 10px;border-bottom:1px solid #f1f3f5;vertical-align:top}
+        tr:last-child td{border-bottom:none}
+        code{background:#f1f3f5;padding:2px 6px;border-radius:4px;font-size:13px}
+        .code-block{background:var(--slate);border-radius:8px;padding:16px 20px;font-family:'SF Mono',Consolas,monospace;font-size:13px;color:var(--slate-text);line-height:1.7;overflow-x:auto;white-space:pre;margin:16px 0}
+        .badge{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px}
+        .badge-yes{background:#ecfdf5;color:#047857}
+        .badge-no{color:#94a3b8}
+        .badge-auto{background:#eff6ff;color:#1d4ed8}
+        .pill-list{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}
+        .pill{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-size:14px;font-weight:500}
         footer{text-align:center;padding:48px 0;border-top:1px solid var(--border);margin-top:32px}
-        footer p{font-size:14px;color:var(--text-muted);margin-bottom:8px}
+        footer p{font-size:14px;color:var(--muted);margin-bottom:8px}
         footer a{color:var(--blue);text-decoration:none}
         footer a:hover{text-decoration:underline}
-        
         @media(max-width:600px){
             header{padding:24px 0}
             .logo-text{font-size:18px}
-            nav{gap:16px}
-            nav a{font-size:14px}
+            nav{gap:16px}nav a{font-size:14px}
             .hero{padding:0 0 32px}
-            .hero p{font-size:16px}
-            .stats{gap:32px}
-            .stat-value{font-size:28px}
         }
     </style>
 </head>
@@ -130,14 +72,13 @@
     <header>
         <div class="container">
             <div class="logo">
-                <div class="logo-icon">⌘</div>
+                <div class="logo-icon">&#x2318;</div>
                 <span class="logo-text">go-llm-proxy</span>
             </div>
             <nav>
+                <a href="#problem">Problems Solved</a>
                 <a href="#features">Features</a>
-                <a href="#backends">Backends</a>
-                <a href="#tools">Coding Assistants</a>
-                <a href="#security">Security</a>
+                <a href="#harnesses">Coding Assistants</a>
                 <a href="https://github.com/yatesdr/go-llm-proxy" target="_blank" rel="noopener">GitHub</a>
             </nav>
         </div>
@@ -146,398 +87,166 @@
     <main>
         <section class="hero">
             <div class="container">
-                <h1>One endpoint, any LLM backend</h1>
-                <p>A lightweight, secure API proxy that aggregates multiple OpenAI and Anthropic-compatible backends behind a single endpoint. No database or complex dependencies—just a single binary and a YAML config.</p>
+                <h1>Make any model work with any client</h1>
+                <p>A single-binary LLM proxy that translates between API protocols, routes requests across backends, and runs upstream tools locally. One YAML config. No dependencies.</p>
                 <div class="cta">
-                    <a href="https://github.com/yatesdr/go-llm-proxy/releases" class="btn btn-primary">Download Binary</a>
-                    <a href="https://github.com/yatesdr/go-llm-proxy" class="btn btn-secondary">View on GitHub</a>
+                    <a href="https://github.com/yatesdr/go-llm-proxy/releases" class="btn btn-primary">Download</a>
+                    <a href="https://github.com/yatesdr/go-llm-proxy" class="btn btn-secondary">View Source</a>
                 </div>
             </div>
         </section>
 
-        <section id="use-cases">
+        <section id="problem">
             <div class="container">
-                <h2>What it's for</h2>
-                <p>go-llm-proxy solves common LLM infrastructure challenges without the weight of full API management platforms.</p>
-                <div class="use-cases">
-                    <div class="use-case">
-                        <h3>🏠 Home Lab & Local Models</h3>
-                        <p>Run vLLM or llama-server on your local machine or home server, then expose it with a consistent OpenAI-compatible API for all your tools.</p>
+                <h2>Problems this solves</h2>
+                <div class="grid-2">
+                    <div class="card">
+                        <h3>Coding assistants don't speak your model's language</h3>
+                        <p>Claude Code uses the Anthropic Messages API. Codex uses the OpenAI Responses API. Your vLLM instance speaks Chat Completions. The proxy translates between them automatically.</p>
                     </div>
-                    <div class="use-case">
-                        <h3>🔀 Multi-Provider Aggregation</h3>
-                        <p>Combine locally-hosted models with cloud subscriptions (OpenAI, Anthropic, MiniMax, Zhipu) behind one endpoint. Switch models by changing the request—no code changes.</p>
+                    <div class="card">
+                        <h3>Models spread across machines and providers</h3>
+                        <p>Local GPU servers, cloud APIs, third-party providers — each with different URLs and auth. The proxy aggregates them behind one endpoint. Clients see one model list.</p>
                     </div>
-                    <div class="use-case">
-                        <h3>🛠️ CLI Agent Integration</h3>
-                        <p>Connect coding assistants like Claude Code, Codex, Qwen Code, and OpenCode to any backend. The built-in config generator makes setup trivial.</p>
+                    <div class="card">
+                        <h3>Server-side tools don't exist locally</h3>
+                        <p>When Claude Code requests web search or sends images to a text-only model, local backends can't handle it. The proxy intercepts these, executes them (Tavily search, vision model description), and injects the results.</p>
                     </div>
-                    <div class="use-case">
-                        <h3>📊 Usage Tracking</h3>
-                        <p>Log per-request metrics to SQLite. Understand who is using which models, token consumption, error rates, and latency—without external services.</p>
+                    <div class="card">
+                        <h3>No visibility into who's using what</h3>
+                        <p>Per-request logging with token counts, latency, and per-user breakdowns. Web dashboard and CLI reports. SQLite — no external database needed.</p>
                     </div>
                 </div>
+            </div>
+        </section>
+
+        <section id="quickstart">
+            <div class="container">
+                <h2>Get started</h2>
+                <p>Create a <code>config.yaml</code> with your models and keys:</p>
+                <div class="code-block">listen: ":8080"
+
+models:
+  - name: my-model
+    backend: http://192.168.1.10:8000/v1
+
+keys:
+  - key: sk-your-secret-key
+    name: admin</div>
+                <p>Run it:</p>
+                <div class="code-block"><span style="color:#94a3b8"># Docker</span>
+docker run --rm -p 8080:8080 -v ./config.yaml:/config/config.yaml:ro ghcr.io/yatesdr/go-llm-proxy:latest
+
+<span style="color:#94a3b8"># Or binary</span>
+./go-llm-proxy -config config.yaml</div>
+                <p>Point any OpenAI or Anthropic-compatible client at <code>http://localhost:8080/v1</code> with your proxy API key. The <a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/config-reference.md">config reference</a> covers all options.</p>
             </div>
         </section>
 
         <section id="features">
             <div class="container">
                 <h2>Features</h2>
-                <div class="features">
-                    <div class="feature">
-                        <div class="feature-icon">🔄</div>
-                        <div>
-                            <h3>Protocol Translation</h3>
-                            <p>Automatically translates between OpenAI Responses API and Chat Completions. Backends that only support Chat Completions work with Codex and other Responses API clients.</p>
-                        </div>
-                    </div>
-                    <div class="feature">
-                        <div class="feature-icon">🔑</div>
-                        <div>
-                            <h3>API Key Management</h3>
-                            <p>Per-key model access control. Restrict users to specific models. Supports both Bearer tokens and x-api-key headers.</p>
-                        </div>
-                    </div>
-                    <div class="feature">
-                        <div class="feature-icon">⚡</div>
-                        <div>
-                            <h3>Hot Reload</h3>
-                            <p>Config reloads automatically when you save the YAML file. Add models or adjust keys without restarting—active connections drain gracefully.</p>
-                        </div>
-                    </div>
-                    <div class="feature">
-                        <div class="feature-icon">📈</div>
-                        <div>
-                            <h3>Usage Logging</h3>
-                            <p>SQLite-based logging with a web dashboard and CLI reports. Track per-user token consumption, model usage, and error rates.</p>
-                        </div>
-                    </div>
-                    <div class="feature">
-                        <div class="feature-icon">🛠️</div>
-                        <div>
-                            <h3>Config Generator</h3>
-                            <p>Built-in UI that generates ready-to-use configs for Claude Code, Codex, Qwen Code, and OpenCode. Select your models, get working configs instantly.</p>
-                        </div>
-                    </div>
-                    <div class="feature">
-                        <div class="feature-icon">🔗</div>
-                        <div>
-                            <h3>Dual Protocol Support</h3>
-                            <p>Handles both OpenAI and Anthropic APIs. Use <code>/v1/...</code> or <code>/anthropic/...</code> prefix to explicitly route to Anthropic-type backends.</p>
-                        </div>
-                    </div>
-                </div>
+                <table>
+                    <tr><td style="font-weight:600;white-space:nowrap">Protocol translation</td><td>Anthropic Messages API and OpenAI Responses API translated to Chat Completions. Any client works with any backend.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">Model multiplexing</td><td>Route multiple models across multiple backends. Name rewriting, per-model timeouts, auto protocol detection.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">API key management</td><td>Issue proxy keys with per-key model restrictions. Backend credentials stay on the server. Supports Bearer and x-api-key headers.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">Vision pipeline</td><td>Images sent to text-only models are described by a vision-capable model and replaced with text. Transparent to the client.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">Web search</td><td>Server-side search tools (Claude Code, Codex) executed at the proxy via Tavily. Results injected into the conversation.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">Usage monitoring</td><td>Per-request logging to SQLite. Web dashboard, CLI reports, per-user/model breakdowns.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">Config generator</td><td>Built-in web UI creates ready-to-use configs for Claude Code, Codex, OpenCode, and Qwen Code.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">Hot reload</td><td>Config reloads on file save. Add models or rotate keys without restarting.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">Security hardened</td><td>Constant-time auth, rate limiting, SSRF protection, sanitized error responses, path allowlisting.</td></tr>
+                </table>
             </div>
         </section>
 
-        <section id="tools">
+        <section id="harnesses">
             <div class="container">
-                <h2>Coding Assistants</h2>
-                <p>These tools work with go-llm-proxy out of the box. The config generator creates ready-to-use configurations for each.</p>
-                <div class="tested-with">
-                    <div class="tested-item">
-                        <span class="check">✓</span> Claude Code
-                    </div>
-                    <div class="tested-item">
-                        <span class="check">✓</span> OpenAI Codex
-                    </div>
-                    <div class="tested-item">
-                        <span class="check">✓</span> Qwen Code
-                    </div>
-                    <div class="tested-item">
-                        <span class="check">✓</span> OpenCode
-                    </div>
-                    <div class="tested-item">
-                        <span class="check">✓</span> OpenAI Python SDK
-                    </div>
-                    <div class="tested-item">
-                        <span class="check">✓</span> Anthropic Python SDK
-                    </div>
-                </div>
+                <h2>Coding assistant support</h2>
+                <p>Each assistant speaks a different protocol. The proxy handles translation so they all work with any Chat Completions backend.</p>
+
+                <table style="margin-top:20px">
+                    <thead>
+                        <tr>
+                            <th></th>
+                            <th>Claude Code</th>
+                            <th>Codex CLI</th>
+                            <th>OpenCode</th>
+                            <th>Qwen Code</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td style="font-weight:500">Protocol</td><td>Anthropic Messages</td><td>OpenAI Responses</td><td>Chat Completions</td><td>Chat Completions</td></tr>
+                        <tr><td style="font-weight:500">Translation needed</td><td><span class="badge badge-auto">Auto</span></td><td><span class="badge badge-auto">Auto</span></td><td><span class="badge-no">None</span></td><td><span class="badge-no">None</span></td></tr>
+                        <tr><td style="font-weight:500">Text + streaming</td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge badge-yes">Yes</span></td></tr>
+                        <tr><td style="font-weight:500">Tool calling</td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge badge-yes">Yes</span></td></tr>
+                        <tr><td style="font-weight:500">Reasoning display</td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge-no">&mdash;</span></td><td><span class="badge-no">&mdash;</span></td></tr>
+                        <tr><td style="font-weight:500">Web search (proxy)</td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge-no">&mdash;</span></td><td><span class="badge-no">&mdash;</span></td></tr>
+                        <tr><td style="font-weight:500">Image processing</td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge badge-yes">Yes</span></td></tr>
+                        <tr><td style="font-weight:500">Model slots</td><td>Sonnet / Opus / Haiku</td><td>Single</td><td>Build / Plan agents</td><td>Multi-select</td></tr>
+                        <tr><td style="font-weight:500">Config output</td><td>settings.json / script</td><td>config.toml / script</td><td>JSON config</td><td>settings.json</td></tr>
+                    </tbody>
+                </table>
+                <p style="margin-top:16px;font-size:14px">Guides: <a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/claude-code.md">Claude Code</a> · <a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/codex.md">Codex</a> · <a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/opencode.md">OpenCode</a> · <a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/qwen-code.md">Qwen Code</a></p>
             </div>
         </section>
 
         <section id="backends">
             <div class="container">
-                <h3 style="font-size:20px;">Supported Backends</h3>
-                <div class="tested-with" style="margin-top:16px">
-                    <div class="tested-item"><span class="check">✓</span> vLLM</div>
-                    <div class="tested-item"><span class="check">✓</span> llama-server (llama.cpp)</div>
-                    <div class="tested-item"><span class="check">✓</span> Ollama</div>
-                    <div class="tested-item"><span class="check">✓</span> OpenAI API</div>
-                    <div class="tested-item"><span class="check">✓</span> Anthropic API</div>
-                    <div class="tested-item"><span class="check">✓</span> MiniMax</div>
-                    <div class="tested-item"><span class="check">✓</span> Zhipu (GLM)</div>
-                </div>
-                <p style="margin-top:12px;font-size:14px;color:var(--text-muted);">
-                    Plus any other OpenAI/Anthropic-compatible endpoint.
-                </p>
-            </div>
-        </section>
-
-        <section id="config-gen">
-            <div class="container">
-                <h2>Config Generator</h2>
-                <p>Built right into the proxy is an interactive config generator. Enable it with <code>--serve-config-generator</code>, point your browser at <code>http://localhost:8080/</code>, and it'll read your running config to show available models. Select the coding assistant you want to configure, pick your models, and it generates:</p>
-                <ul style="margin:16px 0;color:var(--text-muted);padding-left:20px">
-                    <li>Configuration files (settings.json, config.toml, opencode.json)</li>
-                    <li>Downloadable startup scripts (.sh, .bat, .ps1)</li>
-                    <li>Environment setup with API keys</li>
-                    <li>MCP server integration (e.g., Tavily for web search)</li>
-                </ul>
-                <div class="config-ui-preview">
-                    <div class="config-ui-window" style="max-width:620px">
-                        <div class="config-ui-header">
-                            <div class="config-ui-dots">
-                                <span class="dot red"></span>
-                                <span class="dot yellow"></span>
-                                <span class="dot green"></span>
-                            </div>
-                            <div class="config-ui-title">go-llm-proxy — Config Generator</div>
-                        </div>
-                        <div class="config-ui-body">
-                            <!-- Model table -->
-                            <div class="config-ui-section">
-                                <div class="config-ui-label">Available Models</div>
-                                <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:4px">
-                                    <thead><tr style="border-bottom:2px solid var(--border)">
-                                        <th style="text-align:left;padding:6px 8px;font-size:10px;font-weight:600;color:#6c757d;text-transform:uppercase;letter-spacing:.5px">Model</th>
-                                        <th style="text-align:left;padding:6px 8px;font-size:10px;font-weight:600;color:#6c757d;text-transform:uppercase;letter-spacing:.5px">Protocol</th>
-                                        <th style="text-align:left;padding:6px 8px;font-size:10px;font-weight:600;color:#6c757d;text-transform:uppercase;letter-spacing:.5px">Data Safety</th>
-                                    </tr></thead>
-                                    <tbody>
-                                        <tr style="border-bottom:1px solid #f1f5f9"><td style="padding:8px"><strong>MiniMax-M2.5</strong></td><td style="padding:8px"><span style="background:#f0fdf4;color:#166534;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600">OpenAI</span></td><td style="padding:8px"><span style="background:#ecfdf5;color:#047857;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600">Safe for data</span></td></tr>
-                                        <tr style="border-bottom:1px solid #f1f5f9"><td style="padding:8px"><strong>qwen-3.5</strong></td><td style="padding:8px"><span style="background:#f0fdf4;color:#166534;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600">OpenAI</span></td><td style="padding:8px"><span style="background:#ecfdf5;color:#047857;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600">Safe for data</span></td></tr>
-                                        <tr style="border-bottom:1px solid #f1f5f9"><td style="padding:8px"><strong>glm-5.1</strong></td><td style="padding:8px"><span style="background:#f0fdf4;color:#166534;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600">OpenAI</span></td><td style="padding:8px"><span style="background:#fffbeb;color:#b45309;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600">3rd party</span></td></tr>
-                                        <tr><td style="padding:8px"><strong>claude-sonnet-4</strong></td><td style="padding:8px"><span style="background:#eef2ff;color:#4338ca;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600">Anthropic</span></td><td style="padding:8px"><span style="background:#fffbeb;color:#b45309;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600">3rd party</span></td></tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                            <!-- Form -->
-                            <div class="config-ui-section" style="background:#f8fafc;margin:0 -20px;padding:16px 20px;border-top:1px solid var(--border)">
-                                <div class="config-ui-row" style="margin-bottom:12px">
-                                    <div class="config-ui-field">
-                                        <div class="config-ui-label">Coding Assistant</div>
-                                        <select class="config-ui-select"><option>Codex</option></select>
-                                    </div>
-                                    <div class="config-ui-field">
-                                        <div class="config-ui-label">Proxy API Key</div>
-                                        <div style="padding:10px 12px;border:1px solid var(--border);border-radius:6px;font-size:14px;background:#fff;color:#94a3b8">••••••••••••••••</div>
-                                    </div>
-                                </div>
-                                <div class="config-ui-row" style="margin-bottom:12px">
-                                    <div class="config-ui-field">
-                                        <div class="config-ui-label">Model</div>
-                                        <select class="config-ui-select"><option>MiniMax-M2.5</option></select>
-                                    </div>
-                                    <div class="config-ui-field">
-                                        <div class="config-ui-label">Reasoning Effort</div>
-                                        <select class="config-ui-select"><option>Medium</option></select>
-                                    </div>
-                                    <div class="config-ui-field">
-                                        <div class="config-ui-label">Context Window</div>
-                                        <select class="config-ui-select"><option>Auto-detect</option></select>
-                                        <div style="font-size:11px;color:#047857;margin-top:4px">Detected: 192K tokens</div>
-                                    </div>
-                                </div>
-                                <div class="config-ui-btn">Generate Config</div>
-                            </div>
-                            <!-- Output preview -->
-                            <div class="config-ui-section" style="margin-top:16px">
-                                <div style="display:inline-block;background:#f1f5f9;padding:2px 10px;border-radius:4px;font-family:monospace;font-size:12px;color:var(--text);margin-bottom:8px">config.toml</div>
-                                <div style="background:#0f172a;border-radius:6px;padding:14px 16px;font-family:'SF Mono',Consolas,monospace;font-size:11.5px;color:#e2e8f0;line-height:1.6;overflow-x:auto;white-space:pre">model = "MiniMax-M2.5"
-model_provider = "go-llm-proxy"
-model_reasoning_effort = "medium"
-model_context_window = 196608
-
-[model_providers.go-llm-proxy]
-name = "Go-LLM-Proxy"
-base_url = "https://llm.example.com/v1"
-wire_api = "responses"
-experimental_bearer_token = "sk-••••••"</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <section id="usage">
-            <div class="container">
-                <h2>Usage Logging</h2>
-                <p>Enable per-request logging with <code>--log-metrics</code> or <code>log_metrics: true</code> in your config. Every request writes to a local SQLite database.</p>
-                <!-- Dashboard render -->
-                <div class="config-ui-preview" style="margin-top:24px;margin-bottom:32px">
-                    <div class="config-ui-window" style="max-width:620px">
-                        <div class="config-ui-header">
-                            <div class="config-ui-dots">
-                                <span class="dot red"></span>
-                                <span class="dot yellow"></span>
-                                <span class="dot green"></span>
-                            </div>
-                            <div class="config-ui-title">Usage Dashboard — /usage</div>
-                        </div>
-                        <div class="config-ui-body" style="padding:16px 20px">
-                            <!-- Stat cards -->
-                            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px">
-                                <div style="background:#f8fafc;border-radius:8px;padding:10px 12px">
-                                    <div style="font-size:9px;font-weight:600;color:#6c757d;text-transform:uppercase;letter-spacing:.5px">Requests</div>
-                                    <div style="font-size:20px;font-weight:700;color:var(--text);margin-top:2px">12,847</div>
-                                </div>
-                                <div style="background:#f8fafc;border-radius:8px;padding:10px 12px">
-                                    <div style="font-size:9px;font-weight:600;color:#6c757d;text-transform:uppercase;letter-spacing:.5px">Tokens</div>
-                                    <div style="font-size:20px;font-weight:700;color:var(--text);margin-top:2px">48.2M</div>
-                                </div>
-                                <div style="background:#f8fafc;border-radius:8px;padding:10px 12px">
-                                    <div style="font-size:9px;font-weight:600;color:#6c757d;text-transform:uppercase;letter-spacing:.5px">Users</div>
-                                    <div style="font-size:20px;font-weight:700;color:var(--text);margin-top:2px">5</div>
-                                </div>
-                                <div style="background:#f8fafc;border-radius:8px;padding:10px 12px">
-                                    <div style="font-size:9px;font-weight:600;color:#6c757d;text-transform:uppercase;letter-spacing:.5px">Error Rate</div>
-                                    <div style="font-size:20px;font-weight:700;color:#047857;margin-top:2px">0.3%</div>
-                                </div>
-                            </div>
-                            <!-- Chart area -->
-                            <div style="background:#f8fafc;border-radius:8px;padding:12px;margin-bottom:16px">
-                                <div style="font-size:9px;font-weight:600;color:#6c757d;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Daily Requests</div>
-                                <div style="display:flex;align-items:flex-end;gap:4px;height:60px">
-                                    <div style="flex:1;background:#93c5fd;border-radius:2px;height:40%;opacity:.6"></div>
-                                    <div style="flex:1;background:#93c5fd;border-radius:2px;height:55%;opacity:.6"></div>
-                                    <div style="flex:1;background:#93c5fd;border-radius:2px;height:65%;opacity:.7"></div>
-                                    <div style="flex:1;background:#93c5fd;border-radius:2px;height:58%;opacity:.7"></div>
-                                    <div style="flex:1;background:#93c5fd;border-radius:2px;height:45%;opacity:.6"></div>
-                                    <div style="flex:1;background:#93c5fd;border-radius:2px;height:72%;opacity:.7"></div>
-                                    <div style="flex:1;background:#93c5fd;border-radius:2px;height:68%;opacity:.7"></div>
-                                    <div style="flex:1;background:#93c5fd;border-radius:2px;height:30%;opacity:.4"></div>
-                                    <div style="flex:1;background:#93c5fd;border-radius:2px;height:25%;opacity:.4"></div>
-                                    <div style="flex:1;background:#93c5fd;border-radius:2px;height:75%;opacity:.7"></div>
-                                    <div style="flex:1;background:#93c5fd;border-radius:2px;height:82%;opacity:.8"></div>
-                                    <div style="flex:1;background:#93c5fd;border-radius:2px;height:70%;opacity:.7"></div>
-                                    <div style="flex:1;background:#93c5fd;border-radius:2px;height:68%;opacity:.7"></div>
-                                    <div style="flex:1;background:#0969da;border-radius:2px;height:88%"></div>
-                                </div>
-                            </div>
-                            <!-- Model table -->
-                            <table style="width:100%;border-collapse:collapse;font-size:12px">
-                                <thead><tr style="border-bottom:2px solid var(--border)">
-                                    <th style="text-align:left;padding:5px 6px;font-size:9px;font-weight:600;color:#6c757d;text-transform:uppercase;letter-spacing:.5px">Model</th>
-                                    <th style="text-align:right;padding:5px 6px;font-size:9px;font-weight:600;color:#6c757d;text-transform:uppercase;letter-spacing:.5px">Requests</th>
-                                    <th style="text-align:right;padding:5px 6px;font-size:9px;font-weight:600;color:#6c757d;text-transform:uppercase;letter-spacing:.5px">Users</th>
-                                    <th style="text-align:right;padding:5px 6px;font-size:9px;font-weight:600;color:#6c757d;text-transform:uppercase;letter-spacing:.5px">Tokens</th>
-                                    <th style="text-align:right;padding:5px 6px;font-size:9px;font-weight:600;color:#6c757d;text-transform:uppercase;letter-spacing:.5px">Avg Latency</th>
-                                </tr></thead>
-                                <tbody>
-                                    <tr style="border-bottom:1px solid #f1f5f9"><td style="padding:6px;font-weight:500">MiniMax-M2.5</td><td style="padding:6px;text-align:right">8,234</td><td style="padding:6px;text-align:right">4</td><td style="padding:6px;text-align:right">32.1M</td><td style="padding:6px;text-align:right">1,523ms</td></tr>
-                                    <tr style="border-bottom:1px solid #f1f5f9"><td style="padding:6px;font-weight:500">qwen-3.5</td><td style="padding:6px;text-align:right">3,412</td><td style="padding:6px;text-align:right">3</td><td style="padding:6px;text-align:right">12.8M</td><td style="padding:6px;text-align:right">2,341ms</td></tr>
-                                    <tr><td style="padding:6px;font-weight:500">glm-5.1</td><td style="padding:6px;text-align:right">1,201</td><td style="padding:6px;text-align:right">2</td><td style="padding:6px;text-align:right">3.3M</td><td style="padding:6px;text-align:right">856ms</td></tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-                <!-- CLI render -->
-                <div class="config-ui-preview" style="margin-bottom:32px">
-                    <div style="max-width:620px;width:100%;background:#0f172a;border-radius:10px;padding:16px 20px;font-family:'SF Mono','Cascadia Code',Consolas,monospace;font-size:11.5px;line-height:1.7;overflow-x:auto;box-shadow:0 8px 32px rgba(0,0,0,.15)">
-                        <div style="color:#94a3b8;margin-bottom:8px">$ ./go-llm-proxy -usage-report -report-days 7</div>
-                        <div style="color:#e2e8f0;white-space:pre;overflow-x:auto"><span style="font-weight:700">DATE        USER     REQUESTS  INPUT TOK   OUTPUT TOK  TOTAL TOK</span>
-<span style="color:#475569">----        ----     --------  ---------   ----------  ---------</span>
-2026-04-02  admin    342       1,245,000   312,000     1,557,000
-2026-04-02  derek    128       489,000     122,000     611,000
-2026-04-01  admin    456       1,890,000   478,000     2,368,000
-2026-04-01  derek    89        312,000     78,000      390,000
-
-<span style="font-weight:700">=== User Summary ===</span>
-<span style="font-weight:700">USER     REQUESTS  TOTAL TOK    DAYS  LAST SEEN</span>
-<span style="color:#475569">----     --------  ---------    ----  ---------</span>
-admin    4,892     22,801,000   7     2026-04-02
-derek    1,234     4,515,000    6     2026-04-02</div>
-                        <div style="color:#94a3b8;margin-top:4px">$ <span style="display:inline-block;width:6px;height:13px;background:#94a3b8;opacity:.6;vertical-align:text-bottom"></span></div>
-                    </div>
-                </div>
-                <div class="features" style="margin-top:24px">
-                    <div class="feature">
-                        <div class="feature-icon">📊</div>
-                        <div>
-                            <h3>Web Dashboard</h3>
-                            <p>Password-protected UI at <code>/usage</code> with daily breakdowns, per-user stats, model metrics, and error rates.</p>
-                        </div>
-                    </div>
-                    <div class="feature">
-                        <div class="feature-icon">📋</div>
-                        <div>
-                            <h3>CLI Reports</h3>
-                            <p>Run <code>--usage-report</code> or <code>--model-report</code> to get terminal-based summaries without starting the server.</p>
-                        </div>
-                    </div>
-                    <div class="feature">
-                        <div class="feature-icon">🔒</div>
-                        <div>
-                            <h3>Privacy-First</h3>
-                            <p>API keys are never stored—only the first 16 hex characters of their SHA-256 hash. Enough to identify users, not reversible.</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <section id="security">
-            <div class="container">
-                <h2>Security</h2>
-                <p>go-llm-proxy is designed to be run behind a reverse proxy (like nginx) in production. It includes several hardening measures:</p>
-                <div class="security-grid">
-                    <div class="security-item">
-                        <h3>🔒 Path Allowlisting</h3>
-                        <p>Only documented endpoints are proxied. Arbitrary backend URLs cannot be accessed.</p>
-                    </div>
-                    <div class="security-item">
-                        <h3>🛡️ SSRF Prevention</h3>
-                        <p>HTTP client does not follow redirects. Backend URLs are validated on config load (scheme, host, no embedded credentials).</p>
-                    </div>
-                    <div class="security-item">
-                        <h3>⏱️ Request Limits</h3>
-                        <p>Request bodies capped at 50 MB, response bodies at 100 MB. Timeouts protect against slowloris attacks.</p>
-                    </div>
-                    <div class="security-item">
-                        <h3>🔑 Timing-Safe Comparison</h3>
-                        <p>API keys are compared in constant time to prevent timing attacks.</p>
-                    </div>
-                    <div class="security-item">
-                        <h3>🚫 Panic Recovery</h3>
-                        <p>Internal panics are caught and return generic 500 errors—stack traces never leak to clients.</p>
-                    </div>
-                    <div class="security-item">
-                        <h3>📝 Config Page Note</h3>
-                        <p>The config generator (disabled by default) exposes model names but not backend URLs or API keys. Enable only behind a trusted proxy.</p>
-                    </div>
-                </div>
-                <div style="margin-top:24px;padding:16px;background:#fff7ed;border:1px solid #fdba74;border-radius:8px">
-                    <strong style="color:#c2410c">Deploy behind a reverse proxy</strong>
-                    <p style="margin:8px 0 0;font-size:14px">For public-facing deployments, always put go-llm-proxy behind nginx or another TLS-terminating proxy. This provides additional rate limiting, request filtering, and authentication layers.</p>
+                <h2>Supported backends</h2>
+                <p>Anything that speaks OpenAI or Anthropic protocol works. Tested with:</p>
+                <div class="pill-list">
+                    <span class="pill">vLLM</span>
+                    <span class="pill">llama-server</span>
+                    <span class="pill">Ollama</span>
+                    <span class="pill">OpenAI API</span>
+                    <span class="pill">Anthropic API</span>
+                    <span class="pill">MiniMax</span>
+                    <span class="pill">Zhipu (GLM)</span>
                 </div>
             </div>
         </section>
 
         <section>
             <div class="container">
-                <h2>Dependencies</h2>
-                <p>go-llm-proxy has minimal external dependencies:</p>
-                <ul style="color:var(--text-muted);padding-left:20px;margin-top:12px">
-                    <li><strong>fsnotify</strong> — for config file watching</li>
-                    <li><strong>yaml</strong> — for config parsing</li>
-                    <li><strong>modernc.org/sqlite</strong> — embedded SQLite (no server required)</li>
-                </ul>
-                <p style="margin-top:16px">That's it. No Redis, no external database, no complex runtime. One static binary, one config file.</p>
+                <h2>How it works</h2>
+                <div class="code-block" style="font-size:12px;line-height:1.5"><span style="color:#94a3b8">Client request (any protocol)</span>
+  → Protocol handler parses request
+  → Translate to Chat Completions if needed
+  → <span style="color:#60a5fa">Pipeline: describe images, inject web search tool</span>
+  → Send to backend
+  → <span style="color:#60a5fa">Pipeline: execute web search if called, re-send</span>
+  → Translate response back to client protocol
+  → Stream to client</div>
+                <p>The pipeline is optional. Without <code>processors</code> configured, the proxy just translates and routes. With it, images and search work transparently on text-only backends.</p>
+            </div>
+        </section>
+
+        <section>
+            <div class="container">
+                <h2>Documentation</h2>
+                <table>
+                    <tr><td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/config-reference.md">Configuration reference</a></td><td>All config fields, modes, and examples</td></tr>
+                    <tr><td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/claude-code.md">Claude Code guide</a></td><td>Setup, translation details, capabilities</td></tr>
+                    <tr><td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/codex.md">Codex CLI guide</a></td><td>Responses API translation, compaction, context windows</td></tr>
+                    <tr><td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/opencode.md">OpenCode guide</a></td><td>Multi-provider setup</td></tr>
+                    <tr><td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/qwen-code.md">Qwen Code guide</a></td><td>Multi-model configuration</td></tr>
+                    <tr><td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/docker.md">Docker deployment</a></td><td>One config file, one command</td></tr>
+                    <tr><td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/deployment.md">Production deployment</a></td><td>systemd, nginx, TLS</td></tr>
+                    <tr><td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/usage.md">Usage monitoring</a></td><td>Logging, dashboard, CLI reports</td></tr>
+                    <tr><td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/security.md">Security</a></td><td>Hardening, rate limiting, deployment recommendations</td></tr>
+                </table>
             </div>
         </section>
     </main>
 
     <footer>
         <div class="container">
-            <p>go-llm-proxy is open source under the <a href="https://github.com/yatesdr/go-llm-proxy/blob/main/LICENSE">MIT License</a>.</p>
+            <p>Single binary. Three dependencies (<a href="https://github.com/fsnotify/fsnotify">fsnotify</a>, <a href="https://pkg.go.dev/gopkg.in/yaml.v3">yaml</a>, <a href="https://pkg.go.dev/modernc.org/sqlite">sqlite</a>). No Redis, no runtime, no nonsense.</p>
             <p>
-                <a href="https://github.com/yatesdr/go-llm-proxy">GitHub</a> · 
-                <a href="https://github.com/yatesdr/go-llm-proxy/releases">Releases</a> · 
-                <a href="https://github.com/yatesdr/go-llm-proxy/tree/main/doc">Documentation</a>
+                <a href="https://github.com/yatesdr/go-llm-proxy">GitHub</a> ·
+                <a href="https://github.com/yatesdr/go-llm-proxy/releases">Releases</a> ·
+                <a href="https://github.com/yatesdr/go-llm-proxy/blob/main/LICENSE">MIT License</a>
             </p>
         </div>
     </footer>

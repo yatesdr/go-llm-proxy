@@ -5,3 +5,4 @@ config.yaml
 claude-code-main/
 claude-api.md
 claude-proxy-plan.md
+pipeline-plan.md

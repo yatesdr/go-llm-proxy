@@ -1,27 +1,29 @@
 # go-llm-proxy
 
-A lightweight LLM API proxy that aggregates multiple backends (vLLM, llama-server, cloud APIs) behind a single endpoint. Single binary, YAML config, no external dependencies.
+A single-binary LLM proxy that translates between API protocols, routes requests across backends, and runs upstream tools locally. One YAML config. No dependencies.
 
-Combine locally hosted models with cloud subscriptions on one endpoint. Switch models by name, control access per API key, and connect any OpenAI or Anthropic-compatible client.
+## What it does
 
-## Quick Start
+- **Protocol translation** — Claude Code speaks Anthropic Messages. Codex speaks OpenAI Responses. Your vLLM speaks Chat Completions. The proxy translates between them automatically.
+- **Model multiplexing** — Aggregate local GPU servers, cloud APIs, and third-party providers behind one endpoint. Clients see one model list.
+- **API key management** — Issue proxy keys with per-key model restrictions. Backend credentials stay on the server.
+- **Vision pipeline** — Images sent to text-only models are described by a vision-capable model and replaced with text. Transparent to the client.
+- **Web search** — When coding assistants request web search, the proxy executes it via Tavily and injects the results. No client-side MCP setup needed.
+- **Usage monitoring** — Per-request logging to SQLite. Web dashboard, CLI reports, per-user/model breakdowns.
+- **Config generator** — Built-in web UI creates ready-to-use configs for Claude Code, Codex, OpenCode, and Qwen Code.
 
-**Docker:**
+## Quick start
 
 ```bash
 cp config.yaml.example config.yaml
-# edit config.yaml with your models and keys
-docker run --rm -p 8080:8080 \
-  -v $(pwd)/config.yaml:/config/config.yaml:ro \
-  ghcr.io/yatesdr/go-llm-proxy:latest
+# edit config.yaml — add your models and keys
+docker compose up -d
 ```
 
-**Binary** ([download](https://github.com/yatesdr/go-llm-proxy/releases)):
+Or without Docker:
 
 ```bash
-cp config.yaml.example config.yaml
-# edit config.yaml with your models and keys
-./go-llm-proxy -config ./config.yaml
+./go-llm-proxy -config config.yaml
 ```
 
 ## Minimum config
@@ -38,69 +40,43 @@ keys:
     name: admin
 ```
 
-That's it — one model, one key. See [config reference](doc/config-reference.md) for all options.
+See [config.yaml.example](config.yaml.example) for a fully annotated starter config with all options.
 
-## Features
+## Coding assistant support
 
-- OpenAI and Anthropic API passthrough (chat, completions, embeddings, images, audio, messages)
-- Anthropic Messages API translation — use Claude Code with any Chat Completions backend
-- OpenAI Responses API translation — use Codex CLI with any Chat Completions backend
-- Model name routing and rewriting across backends
-- API key auth with per-key model access control
-- Streaming (SSE) support with proper flush handling
-- Context window auto-detection from backends
-- Per-request usage logging with web dashboard and CLI reports
-- Hot-reload config on file change + `SIGHUP`
-- Hardened for public internet exposure
+|  | Claude Code | Codex CLI | OpenCode | Qwen Code |
+|---|:---:|:---:|:---:|:---:|
+| Text + streaming | Yes | Yes | Yes | Yes |
+| Tool calling | Yes | Yes | Yes | Yes |
+| Reasoning display | Yes | Yes | — | — |
+| Web search (proxy) | Yes | Yes | — | — |
+| Image processing | Yes | Yes | Yes | Yes |
+| Config generator | Yes | Yes | Yes | Yes |
 
-## Supported endpoints
+Each assistant speaks a different API protocol. The proxy detects this and translates automatically — no per-model configuration needed for the common case.
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /v1/models` | Aggregated model list |
-| `POST /v1/chat/completions` | Chat completions (streaming supported) |
-| `POST /v1/completions` | Text completions |
-| `POST /v1/embeddings` | Embeddings |
-| `POST /v1/images/generations` | Image generation |
-| `POST /v1/audio/*` | Speech-to-text, translation, TTS |
-| `POST /v1/responses` | Responses API (native or translated) |
-| `POST /v1/responses/compact` | Context compaction |
-| `POST /v1/messages` | Anthropic Messages API (native or translated — see [Claude Code guide](doc/claude-code.md)) |
-| `POST /anthropic/v1/messages` | Anthropic Messages (explicit prefix, validates backend type) |
+## Processing pipeline
 
-## Config generator
+Optional. Handles content that local backends don't support natively:
 
-The built-in config generator (`--serve-config-generator`) creates ready-to-use configs for popular coding assistants.
+```yaml
+processors:
+  vision: qwen-3.5              # vision model for image descriptions
+  web_search_key: tvly-...      # Tavily API key for web search
+```
 
-![Config generator — model overview](doc/img/config-generator-models.svg)
-
-Select a tool, choose your models, and generate a config file or start script:
-
-| Tool | Guide |
-|------|-------|
-| Codex CLI | [doc/codex.md](doc/codex.md) |
-| Claude Code | [doc/claude-code.md](doc/claude-code.md) |
-| OpenCode | [doc/opencode.md](doc/opencode.md) |
-| Qwen Code | [doc/qwen-code.md](doc/qwen-code.md) |
-
-## Usage monitoring
-
-Track requests, tokens, and latency per user and model with built-in logging and a web dashboard.
-
-![Usage dashboard](doc/img/usage-dashboard.svg)
-
-Enable with `log_metrics: true` and `usage_dashboard: true` in config. See [usage docs](doc/usage.md) for details.
+Without `processors`, the proxy just translates and routes. With it, images and search work on text-only backends.
 
 ## Documentation
 
 | Topic | Link |
 |-------|------|
 | Configuration reference | [doc/config-reference.md](doc/config-reference.md) |
-| Codex CLI / Responses API | [doc/codex.md](doc/codex.md) |
 | Claude Code | [doc/claude-code.md](doc/claude-code.md) |
+| Codex CLI | [doc/codex.md](doc/codex.md) |
 | OpenCode | [doc/opencode.md](doc/opencode.md) |
 | Qwen Code | [doc/qwen-code.md](doc/qwen-code.md) |
-| Usage logging and dashboard | [doc/usage.md](doc/usage.md) |
-| Deployment (systemd, nginx) | [doc/deployment.md](doc/deployment.md) |
-| Docker | [doc/docker.md](doc/docker.md) |
+| Docker deployment | [doc/docker.md](doc/docker.md) |
+| Production deployment | [doc/deployment.md](doc/deployment.md) |
+| Usage monitoring | [doc/usage.md](doc/usage.md) |
 | Security | [doc/security.md](doc/security.md) |

@@ -41,6 +41,61 @@ models:
 | `messages_mode` | no | `"auto"` | Messages API handling: `"auto"`, `"native"`, or `"translate"` (see [Messages mode](#messages-mode)) |
 | `context_window` | no | `0` | Max context tokens. `0` = auto-detect from backend at startup |
 
+## Processors (pipeline)
+
+The `processors` block configures the proxy's content processing pipeline. This enables transparent image description, PDF extraction, and web search for backends that don't support these features natively.
+
+```yaml
+processors:
+  vision: qwen-3.5              # model name for vision processing (must be in models list)
+  web_search_key: tvly-...      # Tavily API key for web search
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `vision` | — | Model name to use for describing images sent to text-only backends. Must be a vision-capable model defined in `models`. |
+| `web_search_key` | — | [Tavily](https://tavily.com/) API key. When set, the proxy executes web searches on behalf of clients (Claude Code, Codex) transparently. |
+
+### Per-model processor overrides
+
+Each model can override or disable global processors:
+
+```yaml
+models:
+  - name: MiniMax-M2.5
+    backend: http://192.168.13.32:8000/v1
+    # No vision → images routed to qwen-3.5 automatically
+
+  - name: qwen-3.5
+    backend: http://192.168.13.30:8000/v1
+    supports_vision: true         # model handles images natively
+    processors:
+      vision: none                # disable vision processing for this model
+
+  - name: glm-5.1
+    backend: https://api.z.ai/api/coding/paas/v4
+    processors:
+      vision: MiniMax-M2.5        # use a specific model for this backend's images
+```
+
+### Additional model fields for pipeline
+
+| Field | Default | Description |
+|---|---|---|
+| `supports_vision` | `false` | Set to `true` if the model handles images natively. Skips vision processing. |
+| `force_pipeline` | `false` | Run the pipeline even on native Anthropic backends. Use to force Tavily search instead of Anthropic's server-side search, or to test pipeline processing. |
+| `processors` | — | Per-model processor overrides. Set `vision: none` to disable, or `vision: other-model` to use a specific processor. |
+
+### How it works
+
+**Vision processing**: When a client sends an image to a text-only model, the proxy sends the image to the configured vision model with a description prompt, then replaces the image with the text description. The backend model receives only text.
+
+**Web search**: When a client (Claude Code, Codex) includes a web search tool, the proxy converts it to a function tool that the backend can call. If the backend calls `web_search`, the proxy executes a Tavily search, injects the results, and re-sends to the backend. The client sees only the final response with search context incorporated.
+
+**PDF processing**: PDF content is extracted as text. If text extraction fails (scanned PDFs), the vision processor is used as a fallback.
+
+Native Anthropic backends skip the pipeline by default (images, search, and PDFs pass through to Anthropic's infrastructure). Set `force_pipeline: true` to override this.
+
 ## Key fields
 
 ```yaml

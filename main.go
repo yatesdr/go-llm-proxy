@@ -14,6 +14,7 @@ import (
 	"go-llm-proxy/internal/config"
 	"go-llm-proxy/internal/handler"
 	"go-llm-proxy/internal/httputil"
+	"go-llm-proxy/internal/mcp"
 	"go-llm-proxy/internal/pipeline"
 	"go-llm-proxy/internal/ratelimit"
 	"go-llm-proxy/internal/usage"
@@ -160,6 +161,14 @@ func main() {
 	mux.Handle("POST /anthropic/v1/messages", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, messages)))
 	mux.Handle("/v1/", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, proxy)))
 	mux.Handle("/anthropic/", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, proxy)))
+
+	// MCP endpoint for web search (OpenCode, Qwen Code, any MCP client).
+	mcpHandler := mcp.NewHandler(cs, pl)
+	mux.Handle("GET /mcp/sse", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, http.HandlerFunc(mcpHandler.ServeSSE))))
+	mux.Handle("POST /mcp/messages", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, http.HandlerFunc(mcpHandler.ServeMessages))))
+	if cfg.Processors.WebSearchKey != "" {
+		slog.Info("MCP endpoint enabled at /mcp/sse (web_search tool available)")
+	}
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,

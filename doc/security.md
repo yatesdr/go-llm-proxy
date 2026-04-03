@@ -13,6 +13,8 @@ go-llm-proxy is designed to be safe for public internet exposure when deployed b
 | Backend URL validation | Config rejects non-HTTP schemes, missing hosts, embedded credentials |
 | Response header filtering | Only allowlisted headers forwarded from backends |
 | Panic recovery | Internal errors return generic 500; stack traces logged server-side only |
+| Error sanitization | Backend error responses are never forwarded to clients. Clients receive `"backend returned HTTP {status}"` only; full error bodies are logged server-side. |
+| Pipeline security | Vision processor caps at 10 images per request. Tavily errors are sanitized (no response body reflection). Search queries are user-influenced but Tavily is operator-configured trusted infrastructure. |
 | Security headers | `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Cache-Control: no-store` on all responses |
 
 ## Authentication
@@ -93,9 +95,20 @@ trusted_proxies:
 
 Without this, all requests appear to come from the nginx IP, and a single attacker could trigger rate limiting for everyone.
 
+## Processing pipeline security
+
+The content processing pipeline (vision, web search) introduces additional attack surface:
+
+| Concern | Mitigation |
+|---|---|
+| Image count amplification | Capped at 10 images per request. Beyond this, images get a placeholder. |
+| Tavily API key in error responses | Tavily errors are sanitized — only HTTP status is returned, never the response body. |
+| Data exfiltration via search queries | Inherent to web search. Operators handling sensitive data should not configure `web_search_key`, or disable per-model with `processors: {web_search_key: none}`. |
+| Vision model SSRF via image URLs | Vision backends may fetch `http://` image URLs. Coding assistants send `data:` base64 by default. Operators on sensitive networks should validate their vision model's URL fetching behavior. |
+
 ## Known considerations
 
 - **No TLS termination**: The proxy serves plain HTTP. Use nginx/Caddy for TLS.
-- **Backend trust**: Backend URLs come from the admin config. The proxy trusts these hosts for all operations including context window detection.
-- **Config generator exposure**: When enabled, model names are public. This is by design for usability but may be undesirable in some environments.
-- **Log data**: Usage logs contain model names, key hashes, token counts, and timing data. Protect the SQLite database file appropriately.
+- **Backend trust**: Backend URLs come from the admin config. The proxy trusts these hosts for all operations including context window detection and pipeline processing.
+- **Config generator exposure**: When enabled, model names and capability flags (vision, search) are public. This is by design for usability but may be undesirable in some environments.
+- **Log data**: Usage logs contain model names, key hashes, token counts, and timing data. Protect the SQLite database file appropriately. Backend error bodies are logged server-side and may contain sensitive infrastructure details — configure log redaction if forwarding to third-party aggregators.

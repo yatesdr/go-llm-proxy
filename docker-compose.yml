@@ -1,6 +1,5 @@
 services:
   go-llm-proxy:
-    build: .
     image: ghcr.io/yatesdr/go-llm-proxy:latest
     container_name: go-llm-proxy
     restart: unless-stopped
@@ -8,15 +7,7 @@ services:
       - "127.0.0.1:8080:8080"
     volumes:
       - ./config.yaml:/config/config.yaml:ro
-      - usage-data:/data
-    command:
-      - "-config"
-      - "/config/config.yaml"
-      - "-serve-config-generator"
-      - "-log-metrics"
-      - "-serve-dashboard"
-      - "-usage-db"
-      - "/data/usage.db"
+      - proxy-data:/data
 
 volumes:
-  usage-data:
+  proxy-data:

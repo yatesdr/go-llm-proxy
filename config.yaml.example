@@ -1,72 +1,78 @@
-# Bind to localhost only — nginx handles external traffic.
-listen: "127.0.0.1:8080"
+# go-llm-proxy configuration
+#
+# Copy this file to config.yaml, fill in your models and keys, and start the proxy.
+# All settings below have sane defaults — uncomment and edit what you need.
 
-# Serve the config generator UI at GET / (default: false).
-# Can also be enabled with the --serve-config-generator CLI flag.
+# ── Server ─────────────────────────────────────────────────────────────────────
+# For Docker: use "0.0.0.0:8080" (container networking requires binding all interfaces).
+# For bare metal behind nginx: use "127.0.0.1:8080".
+# For local-only testing: use ":8080".
+listen: ":8080"
+
+# ── Models ─────────────────────────────────────────────────────────────────────
+# Each model gets a name that clients use, and a backend URL where requests are sent.
+# The proxy auto-detects the protocol and translates as needed.
+models:
+  # Local vLLM / llama-server / Ollama backend (OpenAI-compatible)
+  - name: my-model
+    backend: http://192.168.1.10:8000/v1
+    # api_key: backend-key           # if your backend requires auth
+    # model: actual-model-name       # if the backend expects a different model name
+    # timeout: 300                   # request timeout in seconds (default: 300)
+    # context_window: 131072         # set manually if auto-detect fails (default: auto)
+    # supports_vision: false         # set true if the model handles images natively
+    # responses_mode: auto           # auto | native | translate (for Codex CLI)
+    # messages_mode: auto            # auto | native | translate (for Claude Code)
+
+  # Cloud Anthropic backend (native passthrough — no translation needed)
+  # - name: claude-sonnet-4
+  #   backend: https://api.anthropic.com
+  #   api_key: sk-ant-your-key
+  #   type: anthropic
+
+  # Cloud OpenAI backend
+  # - name: gpt-4.1
+  #   backend: https://api.openai.com/v1
+  #   api_key: sk-your-openai-key
+
+  # Third-party API with model name rewriting
+  # - name: glm-4.5
+  #   backend: https://api.z.ai/api/coding/paas/v4
+  #   api_key: your-zhipu-key
+
+# ── Processing Pipeline ────────────────────────────────────────────────────────
+# Optional. Handles images and web search for backends that don't support them.
+# processors:
+#   vision: my-vision-model          # model name from above (must support vision)
+#   web_search_key: tvly-...         # Tavily API key — enables proxy-side web search
+
+# ── API Keys ───────────────────────────────────────────────────────────────────
+# Clients authenticate with these keys via Authorization: Bearer or x-api-key.
+# Remove this entire section to disable auth (not recommended for public exposure).
+keys:
+  - key: sk-change-me-to-something-secure
+    name: admin
+    # models: []                     # empty or omitted = access to all models
+
+  # Restricted key example:
+  # - key: sk-guest-key
+  #   name: guest
+  #   models: [my-model]            # only this model
+
+# ── Features ───────────────────────────────────────────────────────────────────
+# Config generator: web UI at GET / that creates client configs for coding assistants.
 # serve_config_generator: true
 
-# IPs allowed to set X-Real-IP / X-Forwarded-For headers.
-# Only trust your nginx server. Without this, attackers can spoof IPs
-# to bypass rate limiting.
-trusted_proxies:
-  - "127.0.0.1"
-  # - "192.168.1.0/24"
-
-models:
-  - name: MiniMax-M2.5
-    backend: http://192.168.100.10:8000/v1
-    api_key: your-backend-key
-    timeout: 300
-
-  - name: glm-4.5
-    backend: https://api.z.ai/api/coding/paas/v4
-    api_key: your-zhipu-key
-
-  - name: nomic-embed
-    backend: http://192.168.100.12:8002/v1
-    model: nomic-embed-text-v1.5.Q8_0.gguf  # name sent to backend
-    api_key: your-backend-key
-
-  - name: Nemotron-3-Super
-    backend: http://192.168.100.15:8003/v1
-    api_key: anything
-    timeout: 600
-
-  - name: claude-sonnet-4-20250514
-    backend: https://api.anthropic.com
-    api_key: sk-ant-your-anthropic-key
-    type: anthropic    # keeps /v1 in path; uses x-api-key header upstream
-    timeout: 300
-
-  # Responses API mode: auto (default), native, or translate.
-  #   auto      — probe backend on first request; cache and fall back as needed
-  #   native    — always passthrough (for backends you know support /v1/responses)
-  #   translate — always translate to Chat Completions (skip probe entirely)
-  # - name: MiniMax-M2.5-local
-  #   backend: http://192.168.100.10:8000/v1
-  #   responses_mode: translate
-
-  # Context window: auto-detected from the backend at startup (via /models
-  # endpoint). Set context_window explicitly for backends that don't report it.
-  # Omit or set to 0 for auto-detection.
-  # - name: MiniMax-M2.7
-  #   backend: https://api.minimax.io/anthropic
-  #   type: anthropic
-  #   context_window: 1048576   # 1M tokens (manual override)
-
-# Usage metrics logging (off by default).
-# Can also be enabled with the --log-metrics CLI flag.
+# Usage logging: per-request metrics to SQLite.
 # log_metrics: true
-# usage_db: /var/lib/go-llm/usage.db   # default: usage.db in working directory
+# usage_db: usage.db                # path to SQLite database (default: usage.db)
 
-# API keys for clients. Remove this section entirely to disable auth.
-keys:
-  - key: sk-your-api-key-here
-    name: admin
-    models: []    # empty = access to all models
+# Usage dashboard: web UI at /usage (requires log_metrics and a password).
+# usage_dashboard: true
+# usage_dashboard_password: change-me
 
-  - key: sk-restricted-key
-    name: guest
-    models:       # restricted to specific models
-      - MiniMax-M2.5
-      - nomic-embed
+# ── Network ────────────────────────────────────────────────────────────────────
+# IPs allowed to set X-Real-IP / X-Forwarded-For (for rate limiting behind a proxy).
+# trusted_proxies:
+#   - "127.0.0.1"
+#   - "172.17.0.1"                  # Docker bridge gateway (for host-based nginx)

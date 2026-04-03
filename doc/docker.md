@@ -1,91 +1,74 @@
 # Docker Deployment
 
-`go-llm-proxy` is a single statically-linked binary with no runtime dependencies — Docker is one config file and a volume mount away.
+One config file, one command.
 
-## Published Image
+## Quick start
 
-Multi-arch images are published to GHCR on version tags:
+```bash
+cp config.yaml.example config.yaml
+# edit config.yaml — add your models and keys
+docker compose up -d
+```
+
+That's it. The included `docker-compose.yml` mounts your config and a persistent data volume.
+
+## Standalone run
+
+If you don't want compose:
+
+```bash
+docker run --rm \
+  -p 127.0.0.1:8080:8080 \
+  -v $(pwd)/config.yaml:/config/config.yaml:ro \
+  ghcr.io/yatesdr/go-llm-proxy:latest
+```
+
+## Enabling features
+
+All features are controlled in `config.yaml` — no CLI flags needed:
+
+```yaml
+listen: "0.0.0.0:8080"           # required for Docker networking
+
+serve_config_generator: true      # config generator UI at GET /
+log_metrics: true                 # usage logging to SQLite
+usage_db: /data/usage.db          # persist in the mounted volume
+usage_dashboard: true             # web dashboard at /usage
+usage_dashboard_password: "pick-a-password"
+```
+
+Mount a volume for `/data` to persist the usage database across container restarts:
+
+```yaml
+volumes:
+  - ./config.yaml:/config/config.yaml:ro
+  - proxy-data:/data
+```
+
+## Docker networking
+
+Docker containers have their own network namespace. Two things to watch:
+
+**`listen` must be `"0.0.0.0:8080"`** inside the container (not `127.0.0.1`), or the port mapping won't work.
+
+**`trusted_proxies`** must match where nginx connects from:
+- Host-based nginx → Docker bridge gateway (typically `172.17.0.1`)
+- Containerized nginx on same network → that network's subnet
+
+```yaml
+trusted_proxies:
+  - "172.17.0.1"
+```
+
+## Published images
+
+Multi-arch images on GHCR:
 
 ```bash
 docker pull ghcr.io/yatesdr/go-llm-proxy:latest
 ```
 
-Supported platforms: `linux/amd64`, `linux/arm64`.
-
-## Quick run
-
-```bash
-cp config.yaml.example config.yaml
-# edit config.yaml with your models and keys
-
-docker run --rm \
-  -p 127.0.0.1:8080:8080 \
-  -v $(pwd)/config.yaml:/config/config.yaml:ro \
-  ghcr.io/yatesdr/go-llm-proxy:latest
-```
-
-The image does not contain a baked-in config. Mount your own at `/config/config.yaml`.
-
-## Enabling all features
-
-The default entrypoint only loads the config. To enable the config generator, usage logging, and dashboard, pass additional flags:
-
-```bash
-docker run --rm \
-  -p 127.0.0.1:8080:8080 \
-  -v $(pwd)/config.yaml:/config/config.yaml:ro \
-  -v usage-data:/data \
-  ghcr.io/yatesdr/go-llm-proxy:latest \
-  -config /config/config.yaml \
-  -serve-config-generator \
-  -log-metrics \
-  -serve-dashboard \
-  -usage-db /data/usage.db
-```
-
-The `/data` volume persists the SQLite usage database across container restarts.
-
-## Compose
-
-The included `docker-compose.yml` enables all features out of the box:
-
-```yaml
-services:
-  go-llm-proxy:
-    image: ghcr.io/yatesdr/go-llm-proxy:latest
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:8080:8080"
-    volumes:
-      - ./config.yaml:/config/config.yaml:ro
-      - usage-data:/data
-    command:
-      - "-config"
-      - "/config/config.yaml"
-      - "-serve-config-generator"
-      - "-log-metrics"
-      - "-serve-dashboard"
-      - "-usage-db"
-      - "/data/usage.db"
-
-volumes:
-  usage-data:
-```
-
-Run with:
-
-```bash
-docker compose up -d
-```
-
-To use only the proxy without extra features, override the command:
-
-```bash
-docker run --rm \
-  -p 127.0.0.1:8080:8080 \
-  -v $(pwd)/config.yaml:/config/config.yaml:ro \
-  ghcr.io/yatesdr/go-llm-proxy:latest
-```
+Supported: `linux/amd64`, `linux/arm64`.
 
 ## Build locally
 
@@ -97,47 +80,6 @@ docker run --rm \
   go-llm-proxy
 ```
 
-## Config options via flags vs config file
-
-Some features can be enabled via CLI flags or config file settings. Either works:
-
-| Feature | CLI flag | Config field |
-|---|---|---|
-| Config generator | `-serve-config-generator` | `serve_config_generator: true` |
-| Usage logging | `-log-metrics` | `log_metrics: true` |
-| Usage dashboard | `-serve-dashboard` | `usage_dashboard: true` |
-| Database path | `-usage-db /data/usage.db` | `usage_db: /data/usage.db` |
-
-When using config file settings, the Docker command simplifies to just `-config /config/config.yaml` and you put everything in the YAML:
-
-```yaml
-listen: "0.0.0.0:8080"
-serve_config_generator: true
-log_metrics: true
-usage_db: /data/usage.db
-usage_dashboard: true
-usage_dashboard_password: "your-dashboard-password"
-# ... models, keys, etc.
-```
-
-## Networking
-
-Docker containers have their own network namespace. Key points:
-
-- **`listen`** must be `"0.0.0.0:8080"` inside the container (not `127.0.0.1`), otherwise the port mapping won't reach the proxy.
-- **Port binding** uses `127.0.0.1:8080:8080` so the proxy is only accessible from the host's loopback. Omitting `127.0.0.1` exposes the port on all host interfaces, bypassing nginx.
-- **`trusted_proxies`** must match the IP nginx connects from:
-  - Host-based nginx → Docker bridge gateway (typically `172.17.0.1`)
-  - Containerized nginx on the same network → that network's subnet (e.g., `172.18.0.0/16`)
-
-Example config for Docker with host-based nginx:
-
-```yaml
-listen: "0.0.0.0:8080"
-trusted_proxies:
-  - 172.17.0.1
-```
-
 ## Volumes
 
 | Mount | Purpose | Required |
@@ -145,4 +87,4 @@ trusted_proxies:
 | `/config/config.yaml` | Proxy configuration | Yes |
 | `/data` | Usage database persistence | Only if `log_metrics` enabled |
 
-The `/data` directory is writable by the `app` user (UID 1000) that the container runs as. The config file should be mounted read-only (`:ro`).
+The config file should be mounted read-only (`:ro`). The `/data` directory is writable by the `app` user (UID 1000) that the container runs as.

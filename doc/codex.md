@@ -117,9 +117,20 @@ Long Codex sessions may trigger context compaction to manage the growing convers
 
 ## Web search
 
-Codex's built-in `web_search_preview` tool is a server-side OpenAI feature. It works with native OpenAI backends but not with local models through the proxy.
+Codex's built-in `web_search_preview` tool is a server-side OpenAI feature. It works with native OpenAI backends but not with local models directly.
 
-For local/proxy models, the config generator disables the built-in search (`web_search = "disabled"`) and optionally configures [Tavily](https://tavily.com/) as an MCP server for web search. Enter your Tavily API key in the config generator to include it.
+The proxy can handle web search transparently for local models:
+
+**Option 1: Proxy-side search (recommended)** — Configure a Tavily API key in the proxy's `processors` block:
+
+```yaml
+processors:
+  web_search_key: tvly-your-key
+```
+
+The proxy automatically converts Codex's `web_search_preview` tool to a function tool. When the backend model calls `web_search`, the proxy executes a Tavily search and injects the results. Codex sees only the final response. No client-side configuration needed — the config generator omits MCP setup when the proxy has search configured.
+
+**Option 2: Client-side MCP** — For local/proxy models, the config generator disables the built-in search (`web_search = "disabled"`) and optionally configures [Tavily](https://tavily.com/) as an MCP server. Enter your Tavily API key in the config generator to include it.
 
 The generated TOML includes:
 
@@ -207,7 +218,7 @@ These limitations apply only to **translated backends** (Chat Completions). Nati
 
 The translation layer targets **Codex CLI and coding-agent workflows**: text generation, function calling, and tool use. It is not a spec-complete generic Responses API adapter. Specifically:
 
-- **Non-function tools are not translated.** Built-in Responses API tools like `web_search_preview`, `code_interpreter`, and `file_search` are OpenAI server-side features that Chat Completions backends cannot execute. They are dropped from tool definitions. Use MCP servers (like Tavily) as alternatives for web search.
+- **Non-function tools are converted or dropped.** `web_search_preview` is converted to a proxy-side function tool when `web_search_key` is configured in the `processors` block (the proxy executes Tavily searches transparently). Other server-side tools (`code_interpreter`, `file_search`) are dropped since Chat Completions backends cannot execute them.
 - **Some input item types are dropped.** `reasoning`, `compaction`, `tool_search_call`, `web_search_call`, and `image_generation_call` items in conversation history are skipped during translation since they have no Chat Completions equivalent. These are either Codex-internal state or server-side features. This does not affect normal conversation flow — Codex handles their absence gracefully.
 - **Assistant content is simplified.** Structured content arrays on assistant messages are reduced to concatenated text from `output_text` parts. Other content types (e.g., images from `image_generation_call`) are not preserved through translation.
 - **Encrypted compaction is not available.** The summarization fallback preserves conversation context but is not protocol-equivalent to OpenAI's encrypted compaction.

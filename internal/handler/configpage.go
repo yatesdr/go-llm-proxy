@@ -113,11 +113,13 @@ func (h *ConfigPageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Models       template.JS
 		HasVision    bool
 		HasWebSearch bool
+		HasMCP       bool
 	}
 	td := tmplData{
 		Models:       template.JS(data),
 		HasVision:    cfg.Processors.Vision != "",
 		HasWebSearch: cfg.Processors.WebSearchKey != "",
+		HasMCP:       cfg.Processors.WebSearchKey != "",
 	}
 
 	var buf bytes.Buffer
@@ -219,6 +221,7 @@ select:focus,input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 
 var MODELS = {{.Models}};
 var HAS_VISION = {{.HasVision}};
 var HAS_WEB_SEARCH = {{.HasWebSearch}};
+var HAS_MCP = {{.HasMCP}};
 (function(){
 var tbody = document.getElementById("modelsBody");
 for (var i = 0; i < MODELS.length; i++) {
@@ -231,6 +234,29 @@ for (var i = 0; i < MODELS.length; i++) {
     '<td><span class="badge ' + (m.local ? "badge-safe" : "badge-warn") + '">' + (m.local ? "local" : "remote") + '</span></td>' +
     '<td>' + (m.context_window > 0 ? m.context_window.toLocaleString() : "unknown") + '</td>';
   tbody.appendChild(row);
+}
+if (HAS_MCP) {
+  var mcpCard = document.createElement("div");
+  mcpCard.className = "card";
+  mcpCard.innerHTML = '<h2>Web Search (MCP)</h2>' +
+    '<p style="margin-bottom:12px">This proxy provides web search via MCP. Add to your client config:</p>' +
+    '<pre style="background:var(--slate-bg);color:var(--slate-text);padding:14px;border-radius:6px;font-size:.82rem;overflow-x:auto;line-height:1.5">' +
+    '// OpenCode (~/.config/opencode/opencode.json)\n' +
+    '"mcp": {\n' +
+    '  "proxy-search": {\n' +
+    '    "type": "remote",\n' +
+    '    "url": "http://&lt;this-host&gt;/mcp/sse",\n' +
+    '    "headers": { "Authorization": "Bearer &lt;your-proxy-key&gt;" },\n' +
+    '    "enabled": true\n' +
+    '  }\n' +
+    '}\n\n' +
+    '// Codex (~/.codex/config.toml)\n' +
+    '[mcp_servers.proxy-search]\n' +
+    'url = "http://&lt;this-host&gt;/mcp/sse"\n' +
+    'headers = { Authorization = "Bearer &lt;your-proxy-key&gt;" }' +
+    '</pre>' +
+    '<p class="hint" style="margin-top:8px">Replace &lt;this-host&gt; with this proxy\'s address and &lt;your-proxy-key&gt; with your API key.</p>';
+  document.querySelector(".container").appendChild(mcpCard);
 }
 })();
 </script>
