@@ -108,3 +108,41 @@ server {
 ```
 
 Keep nginx as a plain pass-through proxy. `go-llm-proxy` maps `/v1/...` and `/anthropic/...` requests onto each configured backend base URL, including provider-specific paths like `https://api.z.ai/api/coding/paas/v4`.
+
+If the proxy runs on a different host from nginx, change `proxy_pass` to that host's IP (e.g., `http://192.168.5.144:8080`).
+
+## TLS
+
+**API keys are sent in every request.** Running without TLS exposes them on the network. Always terminate TLS at nginx.
+
+### Certbot (Let's Encrypt)
+
+The easiest path for a public-facing server with a domain name:
+
+```bash
+sudo apt install certbot python3-certbot-nginx   # Debian/Ubuntu
+sudo certbot --nginx -d llm.example.com
+```
+
+Certbot will modify your nginx config to add the `listen 443 ssl` block and certificate paths, and set up automatic renewal. No manual certificate management needed.
+
+### Self-signed certificates
+
+For internal/lab deployments without a public domain:
+
+```bash
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /etc/ssl/private/llm-proxy.key \
+  -out /etc/ssl/certs/llm-proxy.crt \
+  -subj "/CN=llm.internal"
+```
+
+Add to your nginx server block:
+
+```nginx
+listen 443 ssl;
+ssl_certificate /etc/ssl/certs/llm-proxy.crt;
+ssl_certificate_key /etc/ssl/private/llm-proxy.key;
+```
+
+Clients connecting to a self-signed endpoint will need to disable certificate verification or trust the CA. For coding assistants, this typically means setting an environment variable (e.g., `NODE_TLS_REJECT_UNAUTHORIZED=0`) or configuring the system trust store.
