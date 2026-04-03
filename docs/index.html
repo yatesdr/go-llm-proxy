@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>go-llm-proxy — LLM API Proxy</title>
-    <meta name="description" content="A single-binary LLM proxy that makes any model work with any client. Protocol translation, model multiplexing, vision pipeline, web search, usage monitoring.">
+    <title>go-llm-proxy — Connect Coding Agents to Any Model</title>
+    <meta name="description" content="Connect Claude Code, Codex, OpenCode, and Qwen Coder to local models running on vLLM, llama-server, Ollama, or any OpenAI-compatible backend. Single binary, zero dependencies.">
     <style>
         *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
         :root{
@@ -16,7 +16,7 @@
         }
         html{scroll-behavior:smooth}
         body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;padding:0 16px}
-        .container{max-width:900px;margin:0 auto;padding:0 8px}
+        .container{max-width:940px;margin:0 auto;padding:0 8px}
         header{padding:48px 0 32px;border-bottom:1px solid var(--border);margin-bottom:40px}
         header .container{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px}
         .logo{display:flex;align-items:center;gap:12px}
@@ -25,35 +25,63 @@
         nav{display:flex;gap:24px}
         nav a{color:var(--muted);text-decoration:none;font-size:15px;transition:color .2s}
         nav a:hover{color:var(--blue)}
+
         .hero{text-align:center;padding:0 0 48px}
         .hero h1{font-size:clamp(28px,5vw,42px);font-weight:800;letter-spacing:-1px;line-height:1.2;margin-bottom:16px}
-        .hero p{font-size:17px;color:var(--muted);max-width:640px;margin:0 auto 28px;line-height:1.7}
+        .hero .subtitle{font-size:19px;color:var(--muted);max-width:680px;margin:0 auto 12px;line-height:1.7}
+        .hero .subtext{font-size:15px;color:var(--muted);max-width:560px;margin:0 auto 28px}
         .cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+        .hero-badges{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:16px}
+        .hero-badge{font-size:13px;font-weight:500;color:var(--green);background:#ecfdf5;padding:3px 10px;border-radius:20px}
+        .hero-badge-sep{color:var(--border);font-size:12px}
         .btn{display:inline-flex;align-items:center;gap:8px;padding:11px 22px;font-size:15px;font-weight:600;border-radius:8px;text-decoration:none;transition:all .2s}
         .btn-primary{background:var(--blue);color:#fff}
         .btn-primary:hover{background:var(--blue-dark)}
         .btn-secondary{background:var(--surface);color:var(--text);border:1px solid var(--border)}
         .btn-secondary:hover{background:var(--surface-alt)}
+
         section{padding:44px 0;border-bottom:1px solid var(--border)}
         section:last-of-type{border-bottom:none}
         h2{font-size:24px;font-weight:700;margin-bottom:12px;letter-spacing:-0.3px}
         h3{font-size:17px;font-weight:600;margin-bottom:8px}
         p{color:var(--muted);margin-bottom:14px}
         .grid-2{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px;margin-top:20px}
-        .grid-3{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:20px;margin-top:20px}
+        .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:20px}
         .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px}
         .card h3{color:var(--text);margin-bottom:6px}
         .card p{font-size:14px;margin:0}
+
+        /* Diagram */
+        .diagram{background:var(--slate);border-radius:10px;padding:28px 24px;margin:24px 0;overflow-x:auto}
+        .diagram-row{display:flex;align-items:center;justify-content:center;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+        .diagram-row:last-child{margin-bottom:0}
+        .d-box{padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;white-space:nowrap;text-align:center}
+        .d-agent{background:#1e3a5f;color:#93c5fd;border:1px solid #2563eb}
+        .d-proxy{background:#1a7f37;color:#bbf7d0;border:1px solid #22c55e;padding:12px 28px;font-size:15px}
+        .d-backend{background:#4a2c0a;color:#fcd34d;border:1px solid #d97706}
+        .d-arrow{color:var(--slate-muted);font-size:20px;font-weight:400}
+        .d-label{color:var(--slate-muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px;text-align:center;margin-bottom:6px}
+
+        /* Tables */
         table{width:100%;border-collapse:collapse;font-size:14px;margin-top:16px}
         th{text-align:left;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;padding:8px 10px;border-bottom:2px solid var(--border)}
         td{padding:9px 10px;border-bottom:1px solid #f1f3f5;vertical-align:top}
         tr:last-child td{border-bottom:none}
+        .matrix-table{font-size:13px}
+        .matrix-table th{font-size:13px;text-transform:none;letter-spacing:0;font-weight:700}
+        .matrix-table th:first-child{width:180px}
+        .matrix-table td:first-child{font-weight:500;color:var(--text)}
+        .matrix-table td{text-align:center;padding:8px 6px}
+        .matrix-table td:first-child{text-align:left;padding-left:10px}
+        .matrix-table th{text-align:center}
+        .matrix-table th:first-child{text-align:left}
+        .matrix-section td{font-weight:600;color:var(--text);background:var(--surface-alt);font-size:11px;text-transform:uppercase;letter-spacing:.4px;padding:6px 10px}
+        .y{color:#047857;font-weight:600}
+        .n{color:#c4c9d4}
+        .auto{color:#1d4ed8;font-weight:500}
+
         code{background:#f1f3f5;padding:2px 6px;border-radius:4px;font-size:13px}
         .code-block{background:var(--slate);border-radius:8px;padding:16px 20px;font-family:'SF Mono',Consolas,monospace;font-size:13px;color:var(--slate-text);line-height:1.7;overflow-x:auto;white-space:pre;margin:16px 0}
-        .badge{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px}
-        .badge-yes{background:#ecfdf5;color:#047857}
-        .badge-no{color:#94a3b8}
-        .badge-auto{background:#eff6ff;color:#1d4ed8}
         .pill-list{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}
         .pill{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-size:14px;font-weight:500}
         footer{text-align:center;padding:48px 0;border-top:1px solid var(--border);margin-top:32px}
@@ -65,6 +93,9 @@
             .logo-text{font-size:18px}
             nav{gap:16px}nav a{font-size:14px}
             .hero{padding:0 0 32px}
+            .diagram-row{gap:8px}
+            .d-box{font-size:12px;padding:6px 10px}
+            .grid-3{grid-template-columns:1fr}
         }
     </style>
 </head>
@@ -72,13 +103,13 @@
     <header>
         <div class="container">
             <div class="logo">
-                <div class="logo-icon">&#x2318;</div>
+                <div class="logo-icon"><svg viewBox="0 0 40 40" width="28" height="28" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 28 L14 14 L20 20 L26 12 L34 28" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="20" cy="16" r="5" fill="#fbbf24"/><path d="M15 16 Q20 11 25 16" fill="#fbbf24"/></svg></div>
                 <span class="logo-text">go-llm-proxy</span>
             </div>
             <nav>
-                <a href="#problem">Problems Solved</a>
+                <a href="#compatibility">Compatibility</a>
                 <a href="#features">Features</a>
-                <a href="#harnesses">Coding Assistants</a>
+                <a href="#quickstart">Quick Start</a>
                 <a href="https://github.com/yatesdr/go-llm-proxy" target="_blank" rel="noopener">GitHub</a>
             </nav>
         </div>
@@ -87,114 +118,223 @@
     <main>
         <section class="hero">
             <div class="container">
-                <h1>Make any model work with any client</h1>
-                <p>A single-binary LLM proxy that translates between API protocols, routes requests across backends, and runs upstream tools locally. One YAML config. No dependencies.</p>
+                <h1>Connect coding agents to any model</h1>
+                <p class="subtitle">Run Claude Code, Codex, OpenCode, and Qwen Coder against local models on vLLM, llama-server, Ollama &mdash; or any OpenAI-compatible backend.</p>
+                <p class="subtext">The proxy translates protocols, multiplexes models, and adds vision and web search to backends that don't have them.</p>
                 <div class="cta">
                     <a href="https://github.com/yatesdr/go-llm-proxy/releases" class="btn btn-primary">Download</a>
                     <a href="https://github.com/yatesdr/go-llm-proxy" class="btn btn-secondary">View Source</a>
                 </div>
-            </div>
-        </section>
-
-        <section id="problem">
-            <div class="container">
-                <h2>Problems this solves</h2>
-                <div class="grid-2">
-                    <div class="card">
-                        <h3>Coding assistants don't speak your model's language</h3>
-                        <p>Claude Code uses the Anthropic Messages API. Codex uses the OpenAI Responses API. Your vLLM instance speaks Chat Completions. The proxy translates between them automatically.</p>
-                    </div>
-                    <div class="card">
-                        <h3>Models spread across machines and providers</h3>
-                        <p>Local GPU servers, cloud APIs, third-party providers — each with different URLs and auth. The proxy aggregates them behind one endpoint. Clients see one model list.</p>
-                    </div>
-                    <div class="card">
-                        <h3>Server-side tools don't exist locally</h3>
-                        <p>When Claude Code requests web search or sends images to a text-only model, local backends can't handle it. The proxy intercepts these, executes them (Tavily search, vision model description), and injects the results.</p>
-                    </div>
-                    <div class="card">
-                        <h3>No visibility into who's using what</h3>
-                        <p>Per-request logging with token counts, latency, and per-user breakdowns. Web dashboard and CLI reports. SQLite — no external database needed.</p>
-                    </div>
+                <div class="hero-badges">
+                    <span class="hero-badge">MIT License</span>
+                    <span class="hero-badge-sep">&middot;</span>
+                    <span class="hero-badge">Open Source</span>
+                    <span class="hero-badge-sep">&middot;</span>
+                    <span class="hero-badge">Free Forever</span>
                 </div>
             </div>
         </section>
 
-        <section id="quickstart">
+        <!-- Visual overview + use cases + compatibility -->
+        <section id="compatibility">
             <div class="container">
-                <h2>Get started</h2>
-                <p>Create a <code>config.yaml</code> with your models and keys:</p>
-                <div class="code-block">listen: ":8080"
+                <div class="diagram">
+                    <div class="d-label">Coding agents</div>
+                    <div class="diagram-row">
+                        <span class="d-box d-agent">Claude Code</span>
+                        <span class="d-box d-agent">Codex CLI</span>
+                        <span class="d-box d-agent">OpenCode</span>
+                        <span class="d-box d-agent">Qwen Coder</span>
+                    </div>
+                    <div class="diagram-row"><span class="d-arrow">&darr;</span></div>
+                    <div class="diagram-row"><span class="d-box d-proxy">go-llm-proxy</span></div>
+                    <div class="diagram-row"><span class="d-arrow">&darr;</span></div>
+                    <div class="d-label">Your backends</div>
+                    <div class="diagram-row">
+                        <span class="d-box d-backend">vLLM</span>
+                        <span class="d-box d-backend">llama-server</span>
+                        <span class="d-box d-backend">Ollama</span>
+                        <span class="d-box d-backend">OpenAI</span>
+                        <span class="d-box d-backend">Anthropic</span>
+                        <span class="d-box d-backend">MiniMax</span>
+                    </div>
+                </div>
 
-models:
-  - name: my-model
-    backend: http://192.168.1.10:8000/v1
+                <div class="grid-3">
+                    <div class="card">
+                        <h3>Connects agents to local models</h3>
+                        <p>Claude Code speaks Anthropic. Codex speaks Responses API. Your vLLM box speaks Chat Completions. The proxy translates automatically.</p>
+                    </div>
+                    <div class="card">
+                        <h3>Multiplexes models</h3>
+                        <p>Route multiple models across multiple backends behind one endpoint. Name rewriting, per-model timeouts, per-key access control.</p>
+                    </div>
+                    <div class="card">
+                        <h3>Adds tools backends lack</h3>
+                        <p>Web search via Tavily, vision processing for text-only models &mdash; executed at the proxy, injected transparently into the conversation.</p>
+                    </div>
+                </div>
 
-keys:
-  - key: sk-your-secret-key
-    name: admin</div>
-                <p>Run it:</p>
-                <div class="code-block"><span style="color:#94a3b8"># Docker</span>
-docker run --rm -p 8080:8080 -v ./config.yaml:/config/config.yaml:ro ghcr.io/yatesdr/go-llm-proxy:latest
+                <h2 style="margin-top:36px">Compatibility matrix</h2>
+                <p>What works with each coding agent through the proxy.</p>
 
-<span style="color:#94a3b8"># Or binary</span>
-./go-llm-proxy -config config.yaml</div>
-                <p>Point any OpenAI or Anthropic-compatible client at <code>http://localhost:8080/v1</code> with your proxy API key. The <a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/config-reference.md">config reference</a> covers all options.</p>
-            </div>
-        </section>
-
-        <section id="features">
-            <div class="container">
-                <h2>Features</h2>
-                <table>
-                    <tr><td style="font-weight:600;white-space:nowrap">Protocol translation</td><td>Anthropic Messages API and OpenAI Responses API translated to Chat Completions. Any client works with any backend.</td></tr>
-                    <tr><td style="font-weight:600;white-space:nowrap">Model multiplexing</td><td>Route multiple models across multiple backends. Name rewriting, per-model timeouts, auto protocol detection.</td></tr>
-                    <tr><td style="font-weight:600;white-space:nowrap">API key management</td><td>Issue proxy keys with per-key model restrictions. Backend credentials stay on the server. Supports Bearer and x-api-key headers.</td></tr>
-                    <tr><td style="font-weight:600;white-space:nowrap">Vision pipeline</td><td>Images sent to text-only models are described by a vision-capable model and replaced with text. Transparent to the client.</td></tr>
-                    <tr><td style="font-weight:600;white-space:nowrap">Web search</td><td>Server-side search tools (Claude Code, Codex) executed at the proxy via Tavily. Results injected into the conversation.</td></tr>
-                    <tr><td style="font-weight:600;white-space:nowrap">Usage monitoring</td><td>Per-request logging to SQLite. Web dashboard, CLI reports, per-user/model breakdowns.</td></tr>
-                    <tr><td style="font-weight:600;white-space:nowrap">Config generator</td><td>Built-in web UI creates ready-to-use configs for Claude Code, Codex, OpenCode, and Qwen Code.</td></tr>
-                    <tr><td style="font-weight:600;white-space:nowrap">Hot reload</td><td>Config reloads on file save. Add models or rotate keys without restarting.</td></tr>
-                    <tr><td style="font-weight:600;white-space:nowrap">Security hardened</td><td>Constant-time auth, rate limiting, SSRF protection, sanitized error responses, path allowlisting.</td></tr>
-                </table>
-            </div>
-        </section>
-
-        <section id="harnesses">
-            <div class="container">
-                <h2>Coding assistant support</h2>
-                <p>Each assistant speaks a different protocol. The proxy handles translation so they all work with any Chat Completions backend.</p>
-
-                <table style="margin-top:20px">
+                <table class="matrix-table" style="margin-top:20px">
                     <thead>
                         <tr>
                             <th></th>
                             <th>Claude Code</th>
                             <th>Codex CLI</th>
                             <th>OpenCode</th>
-                            <th>Qwen Code</th>
+                            <th>Qwen Coder</th>
                         </tr>
                     </thead>
                     <tbody>
-                        <tr><td style="font-weight:500">Protocol</td><td>Anthropic Messages</td><td>OpenAI Responses</td><td>Chat Completions</td><td>Chat Completions</td></tr>
-                        <tr><td style="font-weight:500">Translation needed</td><td><span class="badge badge-auto">Auto</span></td><td><span class="badge badge-auto">Auto</span></td><td><span class="badge-no">None</span></td><td><span class="badge-no">None</span></td></tr>
-                        <tr><td style="font-weight:500">Text + streaming</td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge badge-yes">Yes</span></td></tr>
-                        <tr><td style="font-weight:500">Tool calling</td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge badge-yes">Yes</span></td></tr>
-                        <tr><td style="font-weight:500">Reasoning display</td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge-no">&mdash;</span></td><td><span class="badge-no">&mdash;</span></td></tr>
-                        <tr><td style="font-weight:500">Web search (proxy)</td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge-no">&mdash;</span></td><td><span class="badge-no">&mdash;</span></td></tr>
-                        <tr><td style="font-weight:500">Image processing</td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge badge-yes">Yes</span></td><td><span class="badge badge-yes">Yes</span></td></tr>
-                        <tr><td style="font-weight:500">Model slots</td><td>Sonnet / Opus / Haiku</td><td>Single</td><td>Build / Plan agents</td><td>Multi-select</td></tr>
-                        <tr><td style="font-weight:500">Config output</td><td>settings.json / script</td><td>config.toml / script</td><td>JSON config</td><td>settings.json</td></tr>
+                        <tr class="matrix-section"><td colspan="5">Protocol</td></tr>
+                        <tr>
+                            <td>Native API</td>
+                            <td>Anthropic Messages</td>
+                            <td>OpenAI Responses</td>
+                            <td>Chat Completions</td>
+                            <td>Chat Completions</td>
+                        </tr>
+                        <tr>
+                            <td>Translation needed</td>
+                            <td><span class="auto">auto-translated</span></td>
+                            <td><span class="auto">auto-translated</span></td>
+                            <td><span class="n">passthrough</span></td>
+                            <td><span class="n">passthrough</span></td>
+                        </tr>
+
+                        <tr class="matrix-section"><td colspan="5">Core features</td></tr>
+                        <tr>
+                            <td>Text + streaming</td>
+                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003;</td>
+                        </tr>
+                        <tr>
+                            <td>Tool calling</td>
+                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003;</td>
+                        </tr>
+                        <tr>
+                            <td>Multi-turn tool loops</td>
+                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003;</td>
+                        </tr>
+                        <tr>
+                            <td>Reasoning display</td>
+                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003;</td>
+                            <td class="n">&mdash;</td>
+                            <td class="n">&mdash;</td>
+                        </tr>
+
+                        <tr class="matrix-section"><td colspan="5">Proxy-side processing</td></tr>
+                        <tr>
+                            <td>Web search (Tavily)</td>
+                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003;</td>
+                            <td class="n">&mdash;</td>
+                            <td class="n">&mdash;</td>
+                        </tr>
+                        <tr>
+                            <td>Vision pipeline</td>
+                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003;</td>
+                        </tr>
+                        <tr>
+                            <td>Conversation compaction</td>
+                            <td class="n">&mdash;</td>
+                            <td class="y">&#10003;</td>
+                            <td class="n">&mdash;</td>
+                            <td class="n">&mdash;</td>
+                        </tr>
+
+                        <tr class="matrix-section"><td colspan="5">Configuration</td></tr>
+                        <tr>
+                            <td>Model slots</td>
+                            <td>Sonnet / Opus / Haiku</td>
+                            <td>Single model</td>
+                            <td>Build / Plan agents</td>
+                            <td>Multi-select</td>
+                        </tr>
+                        <tr>
+                            <td>Config output</td>
+                            <td>settings.json + script</td>
+                            <td>config.toml + script</td>
+                            <td>JSON config</td>
+                            <td>settings.json</td>
+                        </tr>
+                        <tr>
+                            <td>Setup guide</td>
+                            <td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/claude-code.md">Claude Code</a></td>
+                            <td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/codex.md">Codex CLI</a></td>
+                            <td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/opencode.md">OpenCode</a></td>
+                            <td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/qwen-code.md">Qwen Coder</a></td>
+                        </tr>
                     </tbody>
                 </table>
-                <p style="margin-top:16px;font-size:14px">Guides: <a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/claude-code.md">Claude Code</a> · <a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/codex.md">Codex</a> · <a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/opencode.md">OpenCode</a> · <a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/qwen-code.md">Qwen Code</a></p>
+
+                <p style="margin-top:16px;font-size:13px;color:var(--muted)">Web search works by intercepting server-side search tool calls, executing them via <a href="https://tavily.com">Tavily</a>, and injecting results back into the conversation. Vision pipeline routes images to a vision-capable model for description when the target model is text-only.</p>
             </div>
         </section>
 
+        <!-- Quick start -->
+        <section id="quickstart">
+            <div class="container">
+                <h2>Quick start</h2>
+                <p>Create a <code>config.yaml</code> with your models and keys:</p>
+                <div class="code-block">listen: ":8080"
+
+models:
+  - name: my-model
+    backend: http://192.168.1.10:8000/v1   <span style="color:#94a3b8"># vLLM, llama-server, Ollama, etc.</span>
+
+keys:
+  - key: sk-your-secret-key
+    name: admin</div>
+                <p>Run it:</p>
+                <div class="code-block"><span style="color:#94a3b8"># Docker</span>
+docker compose up -d
+
+<span style="color:#94a3b8"># Or binary</span>
+./go-llm-proxy -config config.yaml</div>
+                <p>Point any OpenAI or Anthropic-compatible client at <code>http://localhost:8080/v1</code>. That's it.</p>
+                <p style="font-size:14px">The built-in <strong>config generator</strong> at <code>GET /</code> creates ready-to-use configs for each coding agent. Enable it with <code>-serve-config-generator</code> or <code>serve_config_generator: true</code> in config.</p>
+            </div>
+        </section>
+
+        <!-- Features -->
+        <section id="features">
+            <div class="container">
+                <h2>Features</h2>
+                <table>
+                    <tr><td style="font-weight:600;white-space:nowrap">Protocol translation</td><td>Anthropic Messages API &harr; Chat Completions. OpenAI Responses API &harr; Chat Completions. Auto-detected per backend.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">Model multiplexing</td><td>Multiple models across multiple backends. Name rewriting, per-model timeouts, per-key model restrictions.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">Vision pipeline</td><td>Images sent to text-only models are described by a vision-capable model and replaced with text. Transparent to the client.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">Web search</td><td>Server-side search tools (Claude Code, Codex) executed at the proxy via Tavily. Works in both streaming and non-streaming modes.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">API key management</td><td>Issue proxy keys with per-key model restrictions. Backend credentials stay on the server.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">Usage monitoring</td><td>Per-request logging to SQLite. Token counts, latency, per-user breakdowns. Web dashboard and CLI reports.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">Config generator</td><td>Built-in web UI creates ready-to-use configs for Claude Code, Codex, OpenCode, and Qwen Coder.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">Hot reload</td><td>Config reloads on file save or SIGHUP. Add models or rotate keys without restarting.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">Security</td><td>Constant-time auth, IP rate limiting, SSRF protection, sanitized error responses, path allowlisting.</td></tr>
+                </table>
+            </div>
+        </section>
+
+        <!-- Backends -->
         <section id="backends">
             <div class="container">
                 <h2>Supported backends</h2>
-                <p>Anything that speaks OpenAI or Anthropic protocol works. Tested with:</p>
+                <p>Anything that speaks OpenAI Chat Completions or Anthropic Messages protocol works. Tested with:</p>
                 <div class="pill-list">
                     <span class="pill">vLLM</span>
                     <span class="pill">llama-server</span>
@@ -207,33 +347,31 @@ docker run --rm -p 8080:8080 -v ./config.yaml:/config/config.yaml:ro ghcr.io/yat
             </div>
         </section>
 
+        <!-- How it works -->
         <section>
             <div class="container">
                 <h2>How it works</h2>
                 <div class="code-block" style="font-size:12px;line-height:1.5"><span style="color:#94a3b8">Client request (any protocol)</span>
-  → Protocol handler parses request
-  → Translate to Chat Completions if needed
-  → <span style="color:#60a5fa">Pipeline: describe images, inject web search tool</span>
-  → Send to backend
-  → <span style="color:#60a5fa">Pipeline: execute web search if called, re-send</span>
-  → Translate response back to client protocol
-  → Stream to client</div>
-                <p>The pipeline is optional. Without <code>processors</code> configured, the proxy just translates and routes. With it, images and search work transparently on text-only backends.</p>
+  &rarr; Protocol handler parses request
+  &rarr; Translate to Chat Completions (if needed)
+  &rarr; <span style="color:#60a5fa">Pipeline: describe images, inject web search tool</span>
+  &rarr; Send to backend
+  &rarr; <span style="color:#60a5fa">Pipeline: execute web search if called, re-send</span>
+  &rarr; Translate response back to client protocol
+  &rarr; Stream to client</div>
+                <p>The pipeline is optional. Without <code>processors</code> configured, the proxy just translates and routes. With processors enabled, images and search work transparently on any backend.</p>
             </div>
         </section>
 
+        <!-- Documentation -->
         <section>
             <div class="container">
                 <h2>Documentation</h2>
                 <table>
                     <tr><td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/config-reference.md">Configuration reference</a></td><td>All config fields, modes, and examples</td></tr>
-                    <tr><td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/claude-code.md">Claude Code guide</a></td><td>Setup, translation details, capabilities</td></tr>
+                    <tr><td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/claude-code.md">Claude Code guide</a></td><td>Messages API translation, tool calling, web search</td></tr>
                     <tr><td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/codex.md">Codex CLI guide</a></td><td>Responses API translation, compaction, context windows</td></tr>
-                    <tr><td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/opencode.md">OpenCode guide</a></td><td>Multi-provider setup</td></tr>
-                    <tr><td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/qwen-code.md">Qwen Code guide</a></td><td>Multi-model configuration</td></tr>
                     <tr><td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/docker.md">Docker deployment</a></td><td>One config file, one command</td></tr>
-                    <tr><td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/deployment.md">Production deployment</a></td><td>systemd, nginx, TLS</td></tr>
-                    <tr><td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/usage.md">Usage monitoring</a></td><td>Logging, dashboard, CLI reports</td></tr>
                     <tr><td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/doc/security.md">Security</a></td><td>Hardening, rate limiting, deployment recommendations</td></tr>
                 </table>
             </div>
@@ -242,10 +380,10 @@ docker run --rm -p 8080:8080 -v ./config.yaml:/config/config.yaml:ro ghcr.io/yat
 
     <footer>
         <div class="container">
-            <p>Single binary. Three dependencies (<a href="https://github.com/fsnotify/fsnotify">fsnotify</a>, <a href="https://pkg.go.dev/gopkg.in/yaml.v3">yaml</a>, <a href="https://pkg.go.dev/modernc.org/sqlite">sqlite</a>). No Redis, no runtime, no nonsense.</p>
+            <p>Single binary. Three dependencies. No Redis, no runtime, no nonsense.</p>
             <p>
-                <a href="https://github.com/yatesdr/go-llm-proxy">GitHub</a> ·
-                <a href="https://github.com/yatesdr/go-llm-proxy/releases">Releases</a> ·
+                <a href="https://github.com/yatesdr/go-llm-proxy">GitHub</a> &middot;
+                <a href="https://github.com/yatesdr/go-llm-proxy/releases">Releases</a> &middot;
                 <a href="https://github.com/yatesdr/go-llm-proxy/blob/main/LICENSE">MIT License</a>
             </p>
         </div>
