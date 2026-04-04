@@ -513,6 +513,16 @@ harnessEl.addEventListener("change", function(){
       hint.textContent = "Enter a Tavily key for client-side search, or configure web_search_key on the proxy.";
       hint.style.color = "var(--muted)";
     }
+  } else if(h==="opencode"){
+    label.innerHTML = 'Tavily API Key <span style="font-weight:400;text-transform:none">(optional &mdash; client-side web search)</span>';
+    input.placeholder = "tvly-...";
+    if(HAS_MCP){
+      hint.textContent = "Enter a Tavily key to use client-side search. Proxy search is included in the config but disabled by default.";
+      hint.style.color = "var(--green)";
+    } else {
+      hint.textContent = "Enter a Tavily key for client-side search, or configure web_search_key on the proxy (supports Tavily and Brave).";
+      hint.style.color = "var(--muted)";
+    }
   } else {
     label.innerHTML = 'Tavily API Key <span style="font-weight:400;text-transform:none">(optional &mdash; client-side web search)</span>';
     input.placeholder = "tvly-...";
@@ -1197,7 +1207,7 @@ function genOpenCode(apiKey, tavily){
       type: "remote",
       url: PROXY_ORIGIN + "/mcp/sse",
       headers: { "Authorization": "Bearer " + apiKey },
-      enabled: true
+      enabled: tavily ? false : true
     };
   }
   if(tavily){
