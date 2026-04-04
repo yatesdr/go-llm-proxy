@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.3.0
+
+### Added
+- **Processing pipeline** for transparent content handling on text-only backends
+  - **Vision pipeline**: images sent to text-only models are described by a vision-capable model and replaced with text. Configurable via `processors.vision` in config.
+  - **Web search**: proxy intercepts server-side search tools (`web_search_20250305` for Claude Code, `web_search_preview` for Codex), executes via Tavily, and injects results. Configurable via `processors.web_search_key`. Works in both streaming and non-streaming modes with multi-iteration tool loops.
+  - **PDF processing**: text extraction via pure Go library with vision model fallback for scanned/image PDFs. Anthropic `type: "document"` blocks translated to text before sending to backend.
+  - **Per-model processor overrides**: `supports_vision`, `force_pipeline`, per-model `processors` block with `vision: none` to disable
+  - Auto-infer `supports_vision` on models referenced as vision processors
+  - SSE keepalive comments during pipeline processing to prevent client timeout
+- **MCP SSE endpoint** (`/mcp/sse`, `/mcp/messages`) exposing `web_search` tool for OpenCode, Qwen Code, and any MCP-compatible client
+- **Config generator restored** (full UI, ~1200 lines)
+  - Tool selector: Claude Code, Codex, OpenCode, Qwen Code
+  - Claude Code: Sonnet/Opus/Haiku model selectors, thinking toggles, `settings.json` and start scripts (.sh/.bat/.ps1)
+  - Codex: model, reasoning effort, context window selectors, `config.toml` and start scripts
+  - OpenCode: build/plan agent selectors with model checkboxes, `opencode.json`
+  - Qwen Code: default + additional model multi-select, `settings.json`
+  - Per-OS installation instructions, download buttons, copy-to-clipboard
+  - Proxy-side web search awareness: skips client Tavily MCP when proxy has `web_search_key`, uses proxy MCP endpoint for OpenCode
+  - SVG logo, "Data Safety" column, `CLAUDE_CODE_DISABLE_1M_CONTEXT` env var
+  - MCP config card shown when web search is configured
+- **Landing page redesign** with compatibility matrix, visual diagram, and coding agent focus
+
+### Changed
+- Consolidated `doc/` into `docs/` for GitHub Pages compatibility
+- Moved Docker files into `docker/` directory
+- Simplified `docker-compose.yml` to config-file-driven settings
+- Rewrote `README.md`, `config.yaml.example`, and all documentation for pipeline features
+- `docs/index.html` redesigned with hero section, compatibility matrix, and updated doc links
+
+### Fixed
+- **Streaming `content_block_stop` re-buffering**: tool_use stop events were re-buffered by `bufferOrEmit()` after replay, never reaching the client. Claude Code saw incomplete tool_use blocks and couldn't execute tools (Read, Bash, etc.). Fixed by emitting stop events directly after replay.
+- **Vision `[]map[string]any` type mismatch**: Messages API translation produces `[]map[string]any` message slices, but `processImages` only handled `[]any`. Images silently passed through unprocessed to text-only backends.
+- **Reasoning tokens consuming vision budget**: vision model calls with thinking enabled could produce empty content (all tokens spent on chain-of-thought). Fixed by disabling thinking for vision utility calls.
+- **Client context cancellation killing vision calls**: vision HTTP calls now use a dedicated 60s timeout detached from the client connection, surviving client disconnects during processing.
+- **Copy button on HTTP**: fallback to `execCommand("copy")` when `navigator.clipboard` API unavailable in non-secure contexts.
+- Config page logo sizing (missing `.header-logo` CSS class)
+
 ## v0.2.0
 
 ### Added
