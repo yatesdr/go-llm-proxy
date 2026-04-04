@@ -3,16 +3,31 @@ package pipeline
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"go-llm-proxy/internal/config"
 
 	"github.com/ledongthuc/pdf"
 )
+
+// pdfCache stores PDF data hash → extracted/described text so that PDFs are only
+// processed once. Subsequent requests containing the same PDF reuse the cached
+// result, avoiding repeated text extraction and vision model calls.
+var pdfCache sync.Map // map[string]string
+
+// ResetPDFCache clears the PDF description cache. Exported for testing.
+func ResetPDFCache() {
+	pdfCache.Range(func(key, _ any) bool {
+		pdfCache.Delete(key)
+		return true
+	})
+}
 
 // minTextLength is the minimum number of characters for text extraction to be
 // considered successful. Below this, the PDF is likely scanned/image-only and
@@ -85,6 +100,19 @@ func (p *Pipeline) processPDFs(ctx context.Context, chatReq map[string]any,
 				continue
 			}
 
+			// Check the cache first — avoid re-processing the same PDF
+			// on every conversational turn.
+			pdfCacheKey := fmt.Sprintf("%x", sha256.Sum256([]byte(b64Data)))
+			if cached, ok := pdfCache.Load(pdfCacheKey); ok {
+				slog.Debug("PDF cache hit", "filename", filename)
+				newContent = append(newContent, map[string]any{
+					"type": "text",
+					"text": cached.(string),
+				})
+				msgModified = true
+				continue
+			}
+
 			// Try standard base64 first, then URL-safe, then with whitespace stripped.
 			pdfBytes, err := decodePDFBase64(b64Data)
 			if err != nil {
@@ -115,9 +143,11 @@ func (p *Pipeline) processPDFs(ctx context.Context, chatReq map[string]any,
 				if filename != "" {
 					label = fmt.Sprintf("PDF: %s", filename)
 				}
+				result := fmt.Sprintf("[%s]\n\n%s", label, text)
+				pdfCache.Store(pdfCacheKey, result)
 				newContent = append(newContent, map[string]any{
 					"type": "text",
-					"text": fmt.Sprintf("[%s]\n\n%s", label, text),
+					"text": result,
 				})
 				slog.Debug("PDF text extracted",
 					"filename", filename,
@@ -134,9 +164,11 @@ func (p *Pipeline) processPDFs(ctx context.Context, chatReq map[string]any,
 					if filename != "" {
 						label = fmt.Sprintf("PDF: %s (scanned)", filename)
 					}
+					result := fmt.Sprintf("[%s]\n\n%s", label, desc)
+					pdfCache.Store(pdfCacheKey, result)
 					newContent = append(newContent, map[string]any{
 						"type": "text",
-						"text": fmt.Sprintf("[%s]\n\n%s", label, desc),
+						"text": result,
 					})
 					slog.Debug("PDF described via vision model",
 						"filename", filename,

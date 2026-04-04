@@ -190,6 +190,7 @@ func TestProcessImages_NoImages(t *testing.T) {
 }
 
 func TestProcessImages_ReplacesImageWithDescription(t *testing.T) {
+	ResetImageCache()
 	// Set up a mock vision model backend.
 	visionServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
@@ -254,7 +255,79 @@ func TestProcessImages_ReplacesImageWithDescription(t *testing.T) {
 	}
 }
 
+func TestProcessImages_CacheHit(t *testing.T) {
+	ResetImageCache()
+
+	callCount := 0
+	visionServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{
+				map[string]any{
+					"message": map[string]any{
+						"content": "A German Shepherd dog sitting on grass",
+					},
+				},
+			},
+		})
+	}))
+	defer visionServer.Close()
+
+	visionModel := &config.ModelConfig{
+		Name:    "vision",
+		Backend: visionServer.URL,
+		Model:   "vision",
+	}
+
+	p := &Pipeline{client: http.DefaultClient}
+	imageURL := "data:image/png;base64,uniqueTestImage123"
+	makeChatReq := func() map[string]any {
+		return map[string]any{
+			"messages": []any{
+				map[string]any{
+					"role": "user",
+					"content": []any{
+						map[string]any{
+							"type":      "image_url",
+							"image_url": map[string]any{"url": imageURL},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	// First call — should hit vision model.
+	result, err := p.processImages(context.Background(), makeChatReq(), visionModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if callCount != 1 {
+		t.Fatalf("expected 1 vision call, got %d", callCount)
+	}
+	msgs := result["messages"].([]any)
+	text := msgs[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if text != "[Image description: A German Shepherd dog sitting on grass]" {
+		t.Fatalf("unexpected description: %s", text)
+	}
+
+	// Second call — should use cache, NOT call vision model again.
+	result, err = p.processImages(context.Background(), makeChatReq(), visionModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if callCount != 1 {
+		t.Fatalf("expected still 1 vision call (cached), got %d", callCount)
+	}
+	msgs = result["messages"].([]any)
+	text = msgs[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if text != "[Image description: A German Shepherd dog sitting on grass]" {
+		t.Fatalf("unexpected cached description: %s", text)
+	}
+}
+
 func TestProcessImages_VisionModelFailure(t *testing.T) {
+	ResetImageCache()
 	// Vision model returns 500.
 	visionServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)
@@ -608,6 +681,7 @@ func TestPipeline_ProcessRequest_SkipsAnthropic(t *testing.T) {
 }
 
 func TestPipeline_ProcessRequest_ForcePipeline(t *testing.T) {
+	ResetImageCache()
 	// Set up a mock vision model backend.
 	visionServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{

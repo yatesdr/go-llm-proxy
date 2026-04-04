@@ -3,16 +3,31 @@ package pipeline
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"go-llm-proxy/internal/api"
 	"go-llm-proxy/internal/config"
 )
+
+// imageCache stores image URL hash → description so that images are only
+// processed once. Subsequent requests containing the same image reuse the
+// cached description, making follow-up turns fast.
+var imageCache sync.Map // map[string]string
+
+// ResetImageCache clears the image description cache. Exported for testing.
+func ResetImageCache() {
+	imageCache.Range(func(key, _ any) bool {
+		imageCache.Delete(key)
+		return true
+	})
+}
 
 // maxImagesPerRequest caps the number of images the vision processor will handle
 // in a single request. Beyond this, remaining images get a placeholder to prevent
@@ -86,6 +101,19 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 				continue
 			}
 
+			// Check the cache first — avoid re-processing the same image
+			// on every conversational turn.
+			cacheKey := hashImageURL(imageURL)
+			if cached, ok := imageCache.Load(cacheKey); ok {
+				slog.Debug("image cache hit", "vision_model", visionModel.Name)
+				newContent = append(newContent, map[string]any{
+					"type": "text",
+					"text": fmt.Sprintf("[Image description: %s]", cached.(string)),
+				})
+				msgModified = true
+				continue
+			}
+
 			// Send to vision model for description.
 			desc, err := p.describeImage(ctx, visionModel, imageURL)
 			if err != nil {
@@ -96,6 +124,7 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 					"text": "[Image could not be processed]",
 				})
 			} else {
+				imageCache.Store(cacheKey, desc)
 				newContent = append(newContent, map[string]any{
 					"type": "text",
 					"text": fmt.Sprintf("[Image description: %s]", desc),
@@ -115,6 +144,13 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 		chatReq["messages"] = messages
 	}
 	return chatReq, nil
+}
+
+// hashImageURL returns a hex-encoded SHA-256 hash of the image URL (or data URL).
+// This is used as the cache key for image descriptions.
+func hashImageURL(imageURL string) string {
+	h := sha256.Sum256([]byte(imageURL))
+	return fmt.Sprintf("%x", h)
 }
 
 // extractImageURL gets the URL string from an image_url content part.
@@ -148,7 +184,7 @@ func (p *Pipeline) describeImage(ctx context.Context, visionModel *config.ModelC
 				"content": []any{
 					map[string]any{
 						"type": "text",
-						"text": "Describe this image in detail for a coding assistant. Include all visible text, code, UI elements, and layout.",
+						"text": "Describe this image accurately and objectively. Include all visible subjects, objects, text, and relevant details. Be specific about what you observe.",
 					},
 					map[string]any{
 						"type": "image_url",
