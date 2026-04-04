@@ -65,10 +65,11 @@ Optional. Handles content that local backends don't support natively:
 ```yaml
 processors:
   vision: qwen-3.5              # vision model for image descriptions
+  ocr: minicpm-ocr              # fast model for PDF page text extraction (optional, falls back to vision)
   web_search_key: tvly-...      # Tavily API key for web search
 ```
 
-Without `processors`, the proxy just translates and routes. With it, images and search work on text-only backends.
+Without `processors`, the proxy just translates and routes. With it, images, PDFs, and search work on text-only backends.
 
 ## Documentation
 

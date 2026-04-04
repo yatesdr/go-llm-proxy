@@ -41,9 +41,10 @@ models:
   #   api_key: your-zhipu-key
 
 # ── Processing Pipeline ────────────────────────────────────────────────────────
-# Optional. Handles images and web search for backends that don't support them.
+# Optional. Handles images, PDFs, and web search for backends that don't support them.
 # processors:
 #   vision: my-vision-model          # model name from above (must support vision)
+#   ocr: my-fast-ocr-model           # optional: fast model for PDF page text extraction (falls back to vision)
 #   web_search_key: tvly-...         # Tavily API key — enables proxy-side web search
 
 # ── API Keys ───────────────────────────────────────────────────────────────────

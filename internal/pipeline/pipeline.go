@@ -74,6 +74,27 @@ func (p *Pipeline) resolveVisionProcessor(targetModel *config.ModelConfig) strin
 	return p.config.Get().Processors.Vision
 }
 
+// resolveOCRProcessor returns the model name to use for OCR processing
+// (PDF page images). Falls back to the vision processor if no OCR model is set.
+// Returns "" if both are disabled.
+func (p *Pipeline) resolveOCRProcessor(targetModel *config.ModelConfig) string {
+	// Per-model override takes precedence.
+	if targetModel.Processors != nil {
+		if targetModel.Processors.OCR == "none" {
+			return ""
+		}
+		if targetModel.Processors.OCR != "" {
+			return targetModel.Processors.OCR
+		}
+	}
+	// Fall back to global OCR config.
+	if ocr := p.config.Get().Processors.OCR; ocr != "" {
+		return ocr
+	}
+	// Fall back to vision processor.
+	return p.resolveVisionProcessor(targetModel)
+}
+
 // ResolveWebSearchKey returns the Tavily API key for the given target model.
 // Returns "" if web search is disabled for this model.
 func (p *Pipeline) ResolveWebSearchKey(targetModel *config.ModelConfig) string {
@@ -106,11 +127,18 @@ func (p *Pipeline) ProcessRequest(ctx context.Context, chatReq map[string]any,
 		visionModel = config.FindModel(cfg, visionModelName)
 	}
 
+	// Resolve the OCR model (used for PDF page images). Falls back to vision model.
+	ocrModelName := p.resolveOCRProcessor(targetModel)
+	var ocrModel *config.ModelConfig
+	if ocrModelName != "" {
+		ocrModel = config.FindModel(cfg, ocrModelName)
+	}
+
 	// Vision: route images to processor if target can't handle them natively.
 	// Skip if the vision model IS the target (avoid pointless round-trip).
 	if visionModel != nil && visionModel.Name != targetModel.Name && (!targetModel.SupportsVision || targetModel.ForcePipeline) {
 		var err error
-		chatReq, err = p.processImages(ctx, chatReq, visionModel)
+		chatReq, err = p.processImages(ctx, chatReq, visionModel, ocrModel)
 		if err != nil {
 			slog.Warn("vision processing error", "error", err)
 		}

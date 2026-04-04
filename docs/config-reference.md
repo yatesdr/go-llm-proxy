@@ -48,12 +48,14 @@ The `processors` block configures the proxy's content processing pipeline. This 
 ```yaml
 processors:
   vision: qwen-3.5              # model name for vision processing (must be in models list)
+  ocr: minicpm-ocr              # fast model for PDF page text extraction (falls back to vision)
   web_search_key: tvly-...      # Tavily API key for web search
 ```
 
 | Field | Default | Description |
 |---|---|---|
 | `vision` | — | Model name to use for describing images sent to text-only backends. Must be a vision-capable model defined in `models`. |
+| `ocr` | — | Model name for OCR/text extraction from PDF page images. Use a fast, lightweight vision model here. Falls back to `vision` if not set. |
 | `web_search_key` | — | [Tavily](https://tavily.com/) API key. When set, the proxy executes web searches on behalf of clients (Claude Code, Codex) transparently. |
 
 ### Per-model processor overrides
@@ -84,15 +86,17 @@ models:
 |---|---|---|
 | `supports_vision` | `false` | Set to `true` if the model handles images natively. Skips vision processing. |
 | `force_pipeline` | `false` | Run the pipeline even on native Anthropic backends. Use to force Tavily search instead of Anthropic's server-side search, or to test pipeline processing. |
-| `processors` | — | Per-model processor overrides. Set `vision: none` to disable, or `vision: other-model` to use a specific processor. |
+| `processors` | — | Per-model processor overrides. Set `vision: none` to disable, or `vision: other-model` to use a specific processor. Same for `ocr`. |
 
 ### How it works
 
-**Vision processing**: When a client sends an image to a text-only model, the proxy sends the image to the configured vision model with a description prompt, then replaces the image with the text description. The backend model receives only text.
+**Vision processing**: When a client sends an image to a text-only model, the proxy sends the image to the configured vision model with a description prompt, then replaces the image with the text description. The backend model receives only text. Images are processed concurrently (up to 5 in parallel) and cached by content hash so follow-up turns are instant.
+
+**OCR processing**: When clients read large PDFs, they often send pages as rendered images. The proxy detects these (tool result messages with 3+ images) and routes them to the `ocr` model with a text-extraction prompt instead of the general vision description prompt. If no `ocr` model is configured, the `vision` model is used as a fallback.
 
 **Web search**: When a client (Claude Code, Codex) includes a web search tool, the proxy converts it to a function tool that the backend can call. If the backend calls `web_search`, the proxy executes a Tavily search, injects the results, and re-sends to the backend. The client sees only the final response with search context incorporated.
 
-**PDF processing**: PDF content is extracted as text. If text extraction fails (scanned PDFs), the vision processor is used as a fallback.
+**PDF processing**: PDF content is extracted as text. If text extraction fails (scanned PDFs), the OCR/vision processor is used as a fallback.
 
 Native Anthropic backends skip the pipeline by default (images, search, and PDFs pass through to Anthropic's infrastructure). Set `force_pipeline: true` to override this.
 

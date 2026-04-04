@@ -142,6 +142,58 @@ func TestResolveVisionProcessor_NoConfig(t *testing.T) {
 	}
 }
 
+// --- resolveOCRProcessor tests ---
+
+func TestResolveOCRProcessor_GlobalOCR(t *testing.T) {
+	cfg := &config.Config{
+		Processors: config.ProcessorsConfig{Vision: "qwen-3.5", OCR: "minicpm-ocr"},
+	}
+	p := &Pipeline{config: config.NewTestConfigStore(cfg)}
+	model := &config.ModelConfig{Name: "test"}
+	if got := p.resolveOCRProcessor(model); got != "minicpm-ocr" {
+		t.Fatalf("expected minicpm-ocr, got %q", got)
+	}
+}
+
+func TestResolveOCRProcessor_FallsBackToVision(t *testing.T) {
+	cfg := &config.Config{
+		Processors: config.ProcessorsConfig{Vision: "qwen-3.5"},
+	}
+	p := &Pipeline{config: config.NewTestConfigStore(cfg)}
+	model := &config.ModelConfig{Name: "test"}
+	if got := p.resolveOCRProcessor(model); got != "qwen-3.5" {
+		t.Fatalf("expected qwen-3.5 (fallback to vision), got %q", got)
+	}
+}
+
+func TestResolveOCRProcessor_PerModelOverride(t *testing.T) {
+	cfg := &config.Config{
+		Processors: config.ProcessorsConfig{Vision: "qwen-3.5", OCR: "global-ocr"},
+	}
+	p := &Pipeline{config: config.NewTestConfigStore(cfg)}
+	model := &config.ModelConfig{
+		Name:       "test",
+		Processors: &config.ProcessorsConfig{OCR: "custom-ocr"},
+	}
+	if got := p.resolveOCRProcessor(model); got != "custom-ocr" {
+		t.Fatalf("expected custom-ocr, got %q", got)
+	}
+}
+
+func TestResolveOCRProcessor_PerModelNone(t *testing.T) {
+	cfg := &config.Config{
+		Processors: config.ProcessorsConfig{Vision: "qwen-3.5", OCR: "global-ocr"},
+	}
+	p := &Pipeline{config: config.NewTestConfigStore(cfg)}
+	model := &config.ModelConfig{
+		Name:       "test",
+		Processors: &config.ProcessorsConfig{OCR: "none"},
+	}
+	if got := p.resolveOCRProcessor(model); got != "" {
+		t.Fatalf("expected empty (disabled), got %q", got)
+	}
+}
+
 // --- resolveWebSearchKey tests ---
 
 func TestResolveWebSearchKey_GlobalDefault(t *testing.T) {
@@ -181,7 +233,7 @@ func TestProcessImages_NoImages(t *testing.T) {
 			},
 		},
 	}
-	result, err := p.processImages(context.Background(), chatReq, &config.ModelConfig{})
+	result, err := p.processImages(context.Background(), chatReq, &config.ModelConfig{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +282,7 @@ func TestProcessImages_ReplacesImageWithDescription(t *testing.T) {
 		},
 	}
 
-	result, err := p.processImages(context.Background(), chatReq, visionModel)
+	result, err := p.processImages(context.Background(), chatReq, visionModel, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +353,7 @@ func TestProcessImages_CacheHit(t *testing.T) {
 	}
 
 	// First call — should hit vision model.
-	result, err := p.processImages(context.Background(), makeChatReq(), visionModel)
+	result, err := p.processImages(context.Background(), makeChatReq(), visionModel, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +367,7 @@ func TestProcessImages_CacheHit(t *testing.T) {
 	}
 
 	// Second call — should use cache, NOT call vision model again.
-	result, err = p.processImages(context.Background(), makeChatReq(), visionModel)
+	result, err = p.processImages(context.Background(), makeChatReq(), visionModel, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +448,7 @@ func TestProcessImages_ConcurrentAndOCRMode(t *testing.T) {
 		},
 	}
 
-	result, err := p.processImages(context.Background(), chatReq, visionModel)
+	result, err := p.processImages(context.Background(), chatReq, visionModel, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -458,7 +510,7 @@ func TestProcessImages_VisionModelFailure(t *testing.T) {
 		},
 	}
 
-	result, err := p.processImages(context.Background(), chatReq, visionModel)
+	result, err := p.processImages(context.Background(), chatReq, visionModel, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

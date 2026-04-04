@@ -14,6 +14,7 @@ import (
 
 type ProcessorsConfig struct {
 	Vision       string `yaml:"vision"`         // model name for vision processing (empty = disabled)
+	OCR          string `yaml:"ocr"`            // model name for OCR/text extraction from PDF page images (falls back to vision)
 	WebSearchKey string `yaml:"web_search_key"` // Tavily API key (empty = web search disabled)
 }
 
@@ -263,11 +264,23 @@ func validateConfig(cfg *Config) error {
 		}
 	}
 
+	// Validate global OCR processor references a defined model.
+	if v := cfg.Processors.OCR; v != "" && v != "none" {
+		if !names[v] {
+			return fmt.Errorf("global processors.ocr references unknown model %q", v)
+		}
+	}
+
 	// Validate per-model processor overrides reference defined models.
 	for _, m := range cfg.Models {
 		if m.Processors != nil && m.Processors.Vision != "" && m.Processors.Vision != "none" {
 			if !names[m.Processors.Vision] {
 				return fmt.Errorf("model %q processors.vision references unknown model %q", m.Name, m.Processors.Vision)
+			}
+		}
+		if m.Processors != nil && m.Processors.OCR != "" && m.Processors.OCR != "none" {
+			if !names[m.Processors.OCR] {
+				return fmt.Errorf("model %q processors.ocr references unknown model %q", m.Name, m.Processors.OCR)
 			}
 		}
 	}

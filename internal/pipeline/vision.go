@@ -47,9 +47,10 @@ const (
 // processImages detects image content in the translated Chat Completions request,
 // sends each image to the vision model for description, and replaces the image_url
 // parts with text descriptions. Images are processed concurrently for speed, and
-// PDF page images (detected via tool result heuristics) use an OCR-focused prompt.
+// PDF page images (detected via tool result heuristics) use the OCR model with a
+// text-extraction prompt. ocrModel may be nil, in which case visionModel is used.
 func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
-	visionModel *config.ModelConfig) (map[string]any, error) {
+	visionModel *config.ModelConfig, ocrModel *config.ModelConfig) (map[string]any, error) {
 
 	// Normalize messages to []any — translation layers may produce []map[string]any.
 	var messages []any
@@ -139,11 +140,15 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 
 				prompt := visionPromptDescribe
 				maxTok := 1000
+				model := visionModel
 				if j.ocrMode {
 					prompt = visionPromptOCR
 					maxTok = 2000
+					if ocrModel != nil {
+						model = ocrModel
+					}
 				}
-				desc, err := p.describeImage(ctx, visionModel, j.url, prompt, maxTok)
+				desc, err := p.describeImage(ctx, model, j.url, prompt, maxTok)
 				results[idx] = jobResult{desc: desc, err: err}
 			}(i, job)
 		}
