@@ -435,7 +435,7 @@ select:focus,input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 
     <h2>Web Search</h2>
     <p style="margin-bottom:10px"><b>Claude Code</b> and <b>Codex</b> get web search automatically when the proxy has a search key configured (<a href="https://tavily.com">Tavily</a> or <a href="https://brave.com/search/api/">Brave Search</a>). No client-side setup needed.</p>
     <p style="margin-bottom:10px"><b>OpenCode</b> connects to the proxy's MCP endpoint for search &mdash; this is included in the generated config automatically.</p>
-    <p style="margin-bottom:10px"><b>Qwen Code</b> handles search client-side. Enter a Tavily key above to include search in the generated config. Qwen Code also supports Google Custom Search and DashScope:</p>
+    <p style="margin-bottom:10px"><b>Qwen Code</b> uses proxy search via MCP when the proxy has a search key configured (Tavily or Brave). For client-side search, enter a Tavily key above. Qwen Code also supports Google Custom Search and DashScope:</p>
     <pre style="background:var(--slate-bg);color:var(--slate-text);padding:14px;border-radius:6px;font-size:.82rem;overflow-x:auto;line-height:1.5">"webSearch": {
   "provider": [
     { "type": "tavily", "apiKey": "tvly-..." },
@@ -504,10 +504,15 @@ harnessEl.addEventListener("change", function(){
   var input = document.getElementById("tavilyKey");
   var hint = document.getElementById("tavilyHint");
   if(h==="qwen-code"){
-    label.innerHTML = 'Tavily API Key <span style="font-weight:400;text-transform:none">(optional &mdash; web search)</span>';
+    label.innerHTML = 'Tavily API Key <span style="font-weight:400;text-transform:none">(optional &mdash; client-side web search)</span>';
     input.placeholder = "tvly-...";
-    hint.textContent = "Qwen Code uses client-side Tavily search. Only Tavily keys are supported.";
-    hint.style.color = "var(--muted)";
+    if(HAS_MCP){
+      hint.textContent = "Proxy search will be added via MCP. Enter a Tavily key to also enable client-side search.";
+      hint.style.color = "var(--green)";
+    } else {
+      hint.textContent = "Enter a Tavily key for client-side search, or configure web_search_key on the proxy.";
+      hint.style.color = "var(--muted)";
+    }
   } else {
     label.innerHTML = 'Tavily API Key <span style="font-weight:400;text-transform:none">(optional &mdash; client-side web search)</span>';
     input.placeholder = "tvly-...";
@@ -1087,8 +1092,22 @@ function genQwenCode(apiKey, tavily){
 
   obj.env[envKeyName] = apiKey;
 
-  // Qwen Code always needs client-side search config — it doesn't use the proxy for search.
-  if(tavily){
+  // Search: prefer proxy MCP endpoint, fall back to client-side Tavily.
+  if(HAS_MCP){
+    obj.mcpServers = {
+      "proxy-search": {
+        url: PROXY_ORIGIN + "/mcp/sse",
+        headers: { "Authorization": "Bearer " + apiKey }
+      }
+    };
+    // Also add client-side Tavily if user entered a key (gives model two search options).
+    if(tavily){
+      obj.webSearch = {
+        provider: [{ type: "tavily", apiKey: tavily }],
+        "default": "tavily"
+      };
+    }
+  } else if(tavily){
     obj.webSearch = {
       provider: [{ type: "tavily", apiKey: tavily }],
       "default": "tavily"
