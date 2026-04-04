@@ -359,13 +359,39 @@
                 <div class="code-block">listen: ":8080"
 
 models:
+  <span style="color:#8893a4"># Your coding model (vLLM, llama-server, Ollama, etc.)</span>
   - name: my-model
-    backend: http://192.168.1.10:8000/v1   <span style="color:#8893a4"># vLLM, llama-server, Ollama, etc.</span>
+    backend: http://192.168.1.10:8000/v1
+    responses_mode: translate   <span style="color:#8893a4"># recommended for vLLM backends with Codex</span>
+
+  <span style="color:#8893a4"># Vision model — describes images for text-only backends</span>
+  - name: Qwen3-VL-8B
+    backend: http://192.168.1.10:8001/v1
+    supports_vision: true
+
+  <span style="color:#8893a4"># OCR model — fast text extraction from documents and scanned PDFs</span>
+  - name: paddleOCR
+    backend: http://192.168.1.10:8002/v1
+    supports_vision: true
+
+<span style="color:#8893a4"># Processing pipeline — handles images, PDFs, and web search transparently</span>
+processors:
+  vision: Qwen3-VL-8B           <span style="color:#8893a4"># any vision-capable model from above</span>
+  ocr: paddleOCR                <span style="color:#8893a4"># PaddleOCR-VL-1.5 (0.9B) — fast, accurate</span>
+  web_search_key: tvly-...      <span style="color:#8893a4"># Tavily API key (free: 1000 req/month)</span>
 
 keys:
   - key: sk-your-secret-key
     name: admin</div>
-                <p>Run it:</p>
+
+                <h3 style="margin-top:20px">Recommended processor models</h3>
+                <table style="font-size:13px;margin-top:8px">
+                    <tr><td style="font-weight:600;white-space:nowrap">Vision</td><td><a href="https://huggingface.co/Qwen/Qwen3-VL-8B">Qwen3-VL-8B</a> &mdash; best quality/speed balance for image description. Handles charts, screenshots, diagrams.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">OCR</td><td><a href="https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.5">PaddleOCR-VL-1.5</a> (0.9B) &mdash; purpose-built for document parsing. 94.5% accuracy, 109 languages, ~2s/page. Tiny VRAM footprint.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">Web search</td><td><a href="https://tavily.com">Tavily</a> &mdash; AI-optimized search API. Free tier includes 1,000 requests/month. Sign up for an API key and add it to <code>processors.web_search_key</code>.</td></tr>
+                </table>
+
+                <p style="margin-top:16px">Run it:</p>
                 <div class="code-block"><span style="color:#8893a4"># Docker</span>
 docker compose -f docker/docker-compose.yml up -d
 
