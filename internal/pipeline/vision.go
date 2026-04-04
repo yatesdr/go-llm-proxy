@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,9 +40,12 @@ const maxConcurrentVision = 5
 
 // Vision prompts — the describe prompt is for general images; the OCR prompt is
 // for PDF page images where text extraction is more useful than visual description.
+// The short OCR prompt is for dedicated OCR models (e.g., PaddleOCR-VL) that
+// respond to task-specific prefixes.
 const (
 	visionPromptDescribe = "Describe this image accurately and objectively. Include all visible subjects, objects, text, and relevant details. Be specific about what you observe."
 	visionPromptOCR      = "Extract all text from this page. Reproduce the text content verbatim, preserving structure (headings, paragraphs, lists, tables). Focus on text content, not visual layout."
+	ocrModelPrompt       = "OCR:"
 )
 
 // processImages detects image content in the translated Chat Completions request,
@@ -67,11 +71,20 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 		return chatReq, nil
 	}
 
-	// --- First pass: collect all images that need vision processing. ---
+	// --- First pass: collect all images that need processing. ---
+	//
+	// Each image may produce up to two jobs: a vision (describe) job and an
+	// OCR (text extraction) job. Cache keys use suffixes ":v" and ":o" to
+	// store results independently.
+	//
+	// For tool-role images (PDF pages, view_image output): OCR only.
+	// For user-role images: vision always + OCR if an OCR model is configured.
 	type imageJob struct {
-		url     string
-		key     string
-		ocrMode bool
+		url       string
+		cacheKey  string // hash + ":v" or ":o"
+		prompt    string
+		maxTokens int
+		model     *config.ModelConfig
 	}
 	var jobs []imageJob
 	seenKeys := map[string]bool{}
@@ -87,13 +100,8 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 			continue
 		}
 
-		// Detect document/OCR images: images in tool messages are typically
-		// scanned documents, PDF pages, or screenshots — use OCR model with
-		// text extraction prompt for better results. This covers both:
-		// - Claude Code's proxy-side PDF pipeline (many images in one tool msg)
-		// - Codex's view_image tool output (one image per tool msg)
 		role, _ := msgMap["role"].(string)
-		isPDFPages := role == "tool"
+		isToolRole := role == "tool"
 
 		for _, part := range content {
 			partMap, ok := part.(map[string]any)
@@ -111,15 +119,50 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 				continue
 			}
 
-			key := hashImageURL(url)
-			if _, ok := imageCache.Load(key); ok {
-				continue // already cached
+			hash := hashImageURL(url)
+
+			if isToolRole {
+				// Tool-role images (PDF pages, screenshots): OCR only.
+				ocrKey := hash + ":o"
+				if _, ok := imageCache.Load(ocrKey); ok {
+					continue
+				}
+				if seenKeys[ocrKey] {
+					continue
+				}
+				seenKeys[ocrKey] = true
+				ocrMdl := visionModel
+				ocrPrompt := visionPromptOCR
+				if ocrModel != nil {
+					ocrMdl = ocrModel
+					ocrPrompt = ocrModelPrompt
+				}
+				jobs = append(jobs, imageJob{
+					url: url, cacheKey: ocrKey,
+					prompt: ocrPrompt, maxTokens: 2000, model: ocrMdl,
+				})
+			} else {
+				// User-role images: vision description always.
+				vKey := hash + ":v"
+				if _, ok := imageCache.Load(vKey); !ok && !seenKeys[vKey] {
+					seenKeys[vKey] = true
+					jobs = append(jobs, imageJob{
+						url: url, cacheKey: vKey,
+						prompt: visionPromptDescribe, maxTokens: 1000, model: visionModel,
+					})
+				}
+				// Also run OCR if an OCR model is configured.
+				if ocrModel != nil {
+					oKey := hash + ":o"
+					if _, ok := imageCache.Load(oKey); !ok && !seenKeys[oKey] {
+						seenKeys[oKey] = true
+						jobs = append(jobs, imageJob{
+							url: url, cacheKey: oKey,
+							prompt: ocrModelPrompt, maxTokens: 2000, model: ocrModel,
+						})
+					}
+				}
 			}
-			if seenKeys[key] {
-				continue // already queued
-			}
-			seenKeys[key] = true
-			jobs = append(jobs, imageJob{url: url, key: key, ocrMode: isPDFPages})
 		}
 	}
 
@@ -140,18 +183,7 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
-
-				prompt := visionPromptDescribe
-				maxTok := 1000
-				model := visionModel
-				if j.ocrMode {
-					prompt = visionPromptOCR
-					maxTok = 2000
-					if ocrModel != nil {
-						model = ocrModel
-					}
-				}
-				desc, err := p.describeImage(ctx, model, j.url, prompt, maxTok)
+				desc, err := p.describeImage(ctx, j.model, j.url, j.prompt, j.maxTokens)
 				results[idx] = jobResult{desc: desc, err: err}
 			}(i, job)
 		}
@@ -160,11 +192,10 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 		// Cache successful results.
 		for i, r := range results {
 			if r.err != nil {
-				slog.Warn("failed to describe image via vision model",
-					"vision_model", visionModel.Name, "error", r.err,
-					"ocr_mode", jobs[i].ocrMode)
+				slog.Warn("failed to process image",
+					"model", jobs[i].model.Name, "cache_key", jobs[i].cacheKey, "error", r.err)
 			} else {
-				imageCache.Store(jobs[i].key, r.desc)
+				imageCache.Store(jobs[i].cacheKey, r.desc)
 			}
 		}
 	}
@@ -174,13 +205,13 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 	jobErrors := map[string]bool{}
 	for i, r := range results {
 		if r.err != nil {
-			jobErrors[jobs[i].key] = true
+			jobErrors[jobs[i].cacheKey] = true
 		} else {
-			jobDescriptions[jobs[i].key] = r.desc
+			jobDescriptions[jobs[i].cacheKey] = r.desc
 		}
 	}
 
-	// --- Second pass: replace images with descriptions. ---
+	// --- Second pass: replace images with combined descriptions. ---
 	imageCount = 0
 	anyModified := false
 	for i, msg := range messages {
@@ -193,9 +224,8 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 			continue
 		}
 
-		// Re-detect OCR mode for labeling.
 		role, _ := msgMap["role"].(string)
-		isPDFPages := role == "tool"
+		isToolRole := role == "tool"
 
 		msgModified := false
 		newContent := make([]any, 0, len(content))
@@ -230,36 +260,12 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 				continue
 			}
 
-			key := hashImageURL(imageURL)
-			label := "Image description"
-			if isPDFPages {
-				label = "Page text"
-			}
+			hash := hashImageURL(imageURL)
+			replacement := buildImageReplacement(hash, isToolRole, &imageCache, jobDescriptions)
 
-			// Check cache (includes results from concurrent processing above).
-			if cached, ok := imageCache.Load(key); ok {
-				newContent = append(newContent, map[string]any{
-					"type": "text",
-					"text": fmt.Sprintf("[%s: %s]", label, cached.(string)),
-				})
-				msgModified = true
-				continue
-			}
-
-			// Check job results directly (in case cache store was missed).
-			if desc, ok := jobDescriptions[key]; ok {
-				newContent = append(newContent, map[string]any{
-					"type": "text",
-					"text": fmt.Sprintf("[%s: %s]", label, desc),
-				})
-				msgModified = true
-				continue
-			}
-
-			// Job failed or image wasn't processed.
 			newContent = append(newContent, map[string]any{
 				"type": "text",
-				"text": "[Image could not be processed]",
+				"text": replacement,
 			})
 			msgModified = true
 		}
@@ -294,6 +300,60 @@ func normalizeContentParts(msgMap map[string]any) []any {
 		return parts
 	default:
 		return nil
+	}
+}
+
+// minOCRTextLength is the minimum character count for OCR output to be
+// considered meaningful. Below this, the OCR section is omitted (the image
+// likely has no text content).
+const minOCRTextLength = 20
+
+// buildImageReplacement constructs the replacement text for a single image,
+// combining vision description and/or OCR text extraction results.
+//
+// For tool-role images (PDF pages, screenshots): OCR text only.
+// For user-role images: vision description + OCR text (if meaningful).
+func buildImageReplacement(hash string, isToolRole bool, cache *sync.Map, jobDescs map[string]string) string {
+	// Helper to look up a result from cache or fresh job results.
+	lookup := func(cacheKey string) (string, bool) {
+		if cached, ok := cache.Load(cacheKey); ok {
+			return cached.(string), true
+		}
+		if desc, ok := jobDescs[cacheKey]; ok {
+			return desc, true
+		}
+		return "", false
+	}
+
+	vKey := hash + ":v"
+	oKey := hash + ":o"
+
+	if isToolRole {
+		// Tool-role: OCR only.
+		if ocrText, ok := lookup(oKey); ok {
+			return fmt.Sprintf("[Page text: %s]", ocrText)
+		}
+		return "[Image could not be processed]"
+	}
+
+	// User-role: vision description + optional OCR.
+	visionDesc, hasVision := lookup(vKey)
+	ocrText, hasOCR := lookup(oKey)
+
+	// Skip OCR section if too short (image has no meaningful text).
+	if hasOCR && len(strings.TrimSpace(ocrText)) < minOCRTextLength {
+		hasOCR = false
+	}
+
+	switch {
+	case hasVision && hasOCR:
+		return fmt.Sprintf("[# Image Description:\n%s\n\n# Image Text Content:\n%s]", visionDesc, ocrText)
+	case hasVision:
+		return fmt.Sprintf("[Image description: %s]", visionDesc)
+	case hasOCR:
+		return fmt.Sprintf("[Image text content: %s]", ocrText)
+	default:
+		return "[Image could not be processed]"
 	}
 }
 
@@ -418,6 +478,7 @@ func (p *Pipeline) describeImage(ctx context.Context, visionModel *config.ModelC
 
 	return desc, nil
 }
+
 
 // RequestContainsImageURLs checks if a translated Chat Completions request
 // contains any image_url content parts. Handles both []any and []map[string]any
