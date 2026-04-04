@@ -177,7 +177,7 @@
                     </div>
                     <div class="card">
                         <h3>Adds tools backends lack</h3>
-                        <p>Web search via Tavily, vision processing for text-only models &mdash; executed at the proxy, injected transparently into the conversation.</p>
+                        <p>Web search via Tavily, image description, PDF text extraction, OCR for scanned documents &mdash; executed at the proxy, injected transparently.</p>
                     </div>
                 </div>
 
@@ -250,7 +250,21 @@
                             <td class="na">N/A</td>
                         </tr>
                         <tr>
-                            <td>Vision pipeline</td>
+                            <td>Image description</td>
+                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003;</td>
+                        </tr>
+                        <tr>
+                            <td>PDF text extraction</td>
+                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003;</td>
+                        </tr>
+                        <tr>
+                            <td>PDF page OCR</td>
                             <td class="y">&#10003;</td>
                             <td class="y">&#10003;</td>
                             <td class="y">&#10003;</td>
@@ -296,7 +310,7 @@
                     </tbody>
                 </table>
 
-                <p style="margin-top:16px;font-size:13px;color:var(--muted)">Web search works by intercepting server-side search tool calls, executing them via <a href="https://tavily.com">Tavily</a>, and injecting results back into the conversation. Vision pipeline routes images to a vision-capable model for description when the target model is text-only &mdash; a vision model must be configured on the proxy, either a local model or any upstream provider.</p>
+                <p style="margin-top:16px;font-size:13px;color:var(--muted)">Web search intercepts server-side search tool calls, executes them via <a href="https://tavily.com">Tavily</a>, and injects results back into the conversation. Image description routes images to a vision-capable model when the target model is text-only. PDF text extraction runs locally in pure Go; scanned PDFs and page images are routed to a dedicated OCR model (or the vision model as fallback). All image and PDF results are cached by content hash for instant follow-up turns.</p>
             </div>
         </section>
 
@@ -332,8 +346,9 @@ docker compose -f docker/docker-compose.yml up -d
                 <table>
                     <tr><td style="font-weight:600;white-space:nowrap">Protocol translation</td><td>Anthropic Messages API &harr; Chat Completions. OpenAI Responses API &harr; Chat Completions. Auto-detected per backend.</td></tr>
                     <tr><td style="font-weight:600;white-space:nowrap">Model multiplexing</td><td>Multiple models across multiple backends. Name rewriting, per-model timeouts, per-key model restrictions.</td></tr>
-                    <tr><td style="font-weight:600;white-space:nowrap">Vision pipeline</td><td>Images sent to text-only models are described by a vision-capable model and replaced with text. Transparent to the client.</td></tr>
-                    <tr><td style="font-weight:600;white-space:nowrap">Web search</td><td>Server-side search tools (Claude Code, Codex) executed at the proxy via Tavily. Works in both streaming and non-streaming modes.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">Image description</td><td>Images sent to text-only models are described by a vision-capable model and replaced with text. Concurrent processing (up to 5 in parallel), cached by content hash for instant follow-up turns.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">PDF processing</td><td>Text extraction for native PDFs. OCR via dedicated fast model for scanned documents and page images. Results cached across turns.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">Web search</td><td>Server-side search tools (Claude Code, Codex) executed at the proxy via Tavily. Results displayed in client UI. Streaming and non-streaming modes.</td></tr>
                     <tr><td style="font-weight:600;white-space:nowrap">API key management</td><td>Issue proxy keys with per-key model restrictions. Backend credentials stay on the server.</td></tr>
                     <tr><td style="font-weight:600;white-space:nowrap">Usage monitoring</td><td>Per-request logging to SQLite. Token counts, latency, per-user breakdowns. Web dashboard and CLI reports.</td></tr>
                     <tr><td style="font-weight:600;white-space:nowrap">Config generator</td><td>Built-in web UI creates ready-to-use configs for Claude Code, Codex, OpenCode, and Qwen Coder.</td></tr>
@@ -367,12 +382,12 @@ docker compose -f docker/docker-compose.yml up -d
                 <div class="code-block" style="font-size:12px;line-height:1.5"><span style="color:#8893a4">Client request (any protocol)</span>
   &rarr; Protocol handler parses request
   &rarr; Translate to Chat Completions (if needed)
-  &rarr; <span style="color:#0969da">Pipeline: describe images, inject web search tool</span>
+  &rarr; <span style="color:#0969da">Pipeline: describe images, extract PDF text, OCR page images, inject search tool</span>
   &rarr; Send to backend
-  &rarr; <span style="color:#0969da">Pipeline: execute web search if called, re-send</span>
+  &rarr; <span style="color:#0969da">Pipeline: execute web search if called, re-send with results</span>
   &rarr; Translate response back to client protocol
   &rarr; Stream to client</div>
-                <p>The pipeline is optional. Without <code>processors</code> configured, the proxy just translates and routes. With processors enabled, images and search work transparently on any backend.</p>
+                <p>The pipeline is optional. Without <code>processors</code> configured, the proxy just translates and routes. With processors enabled, images, PDFs, and search work transparently on any backend.</p>
             </div>
         </section>
 
