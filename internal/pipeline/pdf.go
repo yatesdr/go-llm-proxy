@@ -180,10 +180,13 @@ func (p *Pipeline) processPDFs(ctx context.Context, chatReq map[string]any,
 					"filename", filename, "error", vErr)
 			}
 
-			// Both stages failed.
+			// Both stages failed — cache the failure so we don't re-attempt
+			// the same failing PDF on every conversational turn.
+			failResult := "[PDF content could not be extracted]"
+			pdfCache.Store(pdfCacheKey, failResult)
 			newContent = append(newContent, map[string]any{
 				"type": "text",
-				"text": "[PDF content could not be extracted]",
+				"text": failResult,
 			})
 			msgModified = true
 		}
