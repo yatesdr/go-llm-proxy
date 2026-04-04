@@ -47,8 +47,8 @@ The `processors` block configures the proxy's content processing pipeline. This 
 
 ```yaml
 processors:
-  vision: qwen-3.5              # model name for vision processing (must be in models list)
-  ocr: minicpm-ocr              # fast model for PDF page text extraction (falls back to vision)
+  vision: Qwen3-VL-8B           # model name for vision processing (must be in models list)
+  ocr: PaddleOCR-VL-1.5         # fast model for PDF/document text extraction (falls back to vision)
   web_search_key: tvly-...      # Tavily API key for web search
 ```
 
@@ -92,7 +92,7 @@ models:
 
 **Vision processing**: When a client sends an image to a text-only model, the proxy sends the image to the configured vision model with a description prompt, then replaces the image with the text description. The backend model receives only text. Images are processed concurrently (up to 5 in parallel) and cached by content hash so follow-up turns are instant.
 
-**OCR processing**: When clients read large PDFs, they often send pages as rendered images. The proxy detects these (tool result messages with 3+ images) and routes them to the `ocr` model with a text-extraction prompt instead of the general vision description prompt. If no `ocr` model is configured, the `vision` model is used as a fallback.
+**OCR processing**: Images in tool result messages (PDF page renders, Codex `view_image` output, screenshots) are routed to the `ocr` model with a text-extraction prompt instead of the general vision description prompt. This covers both proxy-side PDF pipelines and client-side image extraction. If no `ocr` model is configured, the `vision` model is used as a fallback.
 
 **Web search**: When a client (Claude Code, Codex) includes a web search tool, the proxy converts it to a function tool that the backend can call. If the backend calls `web_search`, the proxy executes a Tavily search, injects the results, and re-sends to the backend. The client sees only the final response with search context incorporated.
 
@@ -257,3 +257,74 @@ If validation fails, the old config stays active and an error is logged.
 | `-model-report` | Print per-model summary and exit |
 | `-report-days N` | Days to include in reports (default: 30) |
 | `-adduser` | Interactively create an API key |
+
+## Recommended configurations
+
+Tested recipes for each coding agent with full pipeline support.
+
+### Claude Code
+
+```yaml
+models:
+  # Opus slot — strong reasoning model
+  - name: glm-5.1
+    backend: https://api.z.ai/api/coding/paas/v4
+    api_key: your-zhipu-key
+
+  # Sonnet + Haiku slots — fast, capable all-rounder
+  - name: MiniMax-M2.5
+    backend: http://192.168.13.32:8000/v1
+    responses_mode: translate
+    timeout: 600
+
+  # Vision processor — general image description
+  - name: Qwen3-VL-8B
+    backend: http://192.168.13.30:8000/v1
+    supports_vision: true
+
+  # OCR processor — fast document text extraction
+  - name: PaddleOCR-VL-1.5
+    backend: http://192.168.13.30:8000/v1
+    supports_vision: true
+
+processors:
+  vision: Qwen3-VL-8B
+  ocr: PaddleOCR-VL-1.5
+  web_search_key: tvly-your-tavily-key
+```
+
+Claude Code model slot mapping: Opus → `glm-5.1`, Sonnet → `MiniMax-M2.5`, Haiku → `MiniMax-M2.5`.
+
+### Codex CLI
+
+```yaml
+models:
+  - name: MiniMax-M2.5
+    backend: http://192.168.13.32:8000/v1
+    responses_mode: translate    # required for vLLM backends
+    timeout: 600
+
+  - name: Qwen3-VL-8B
+    backend: http://192.168.13.30:8000/v1
+    supports_vision: true
+
+  - name: PaddleOCR-VL-1.5
+    backend: http://192.168.13.30:8000/v1
+    supports_vision: true
+
+processors:
+  vision: Qwen3-VL-8B
+  ocr: PaddleOCR-VL-1.5
+  web_search_key: tvly-your-tavily-key
+```
+
+Codex uses a single model. Set `responses_mode: translate` for any vLLM backend — vLLM's native `/v1/responses` endpoint bypasses the proxy pipeline, breaking web search, image, and PDF processing.
+
+### Processor model recommendations
+
+| Role | Recommended | Parameters | Notes |
+|---|---|---|---|
+| **Vision** | [Qwen3-VL-8B](https://huggingface.co/Qwen/Qwen3-VL-8B) | 8B | Best quality/speed balance for image description. Strong on charts, screenshots, diagrams. |
+| **OCR** | [PaddleOCR-VL-1.5](https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.5) | 0.9B | Purpose-built for document parsing. 94.5% accuracy, 109 languages, minimal VRAM. |
+| **OCR (alt)** | [DeepSeek-OCR 2](https://huggingface.co/deepseek-ai/DeepSeek-OCR) | 3B | Higher accuracy (97%), layout analysis, table extraction. ~2,500 tok/s on A100. |
+| **Vision (alt)** | [Qwen3-VL-2B](https://huggingface.co/Qwen/Qwen3-VL-2B) | 2B | Lighter alternative if GPU memory is tight. Good OCR (32 languages). |
