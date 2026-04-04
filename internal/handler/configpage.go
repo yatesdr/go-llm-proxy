@@ -1207,7 +1207,6 @@ function genOpenCode(apiKey, tavily){
       headers: { "Authorization": "Bearer " + tavily },
       enabled: true
     };
-    };
   }
   if(Object.keys(mcpObj).length) obj.mcp = mcpObj;
 
