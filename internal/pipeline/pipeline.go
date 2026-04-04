@@ -34,6 +34,7 @@ var processingSignatures = [][]byte{
 	[]byte(`"application/pdf"`),  // PDF media type
 	[]byte(`JVBERi0`),            // PDF magic bytes in base64
 	[]byte(`"type":"document"`),  // Anthropic document format
+	[]byte(`"pdf_data"`),         // Pipeline-internal PDF marker (after translation)
 }
 
 // BodyNeedsProcessing does a fast string scan to detect if the raw request body
@@ -115,8 +116,9 @@ func (p *Pipeline) ProcessRequest(ctx context.Context, chatReq map[string]any,
 		}
 	}
 
-	// PDF: text extraction with vision fallback for scanned pages.
-	if visionModel != nil {
+	// PDF: text extraction (always attempted) with vision fallback for scanned pages.
+	// visionModel may be nil — processPDFs handles that gracefully (skips Stage 2).
+	{
 		var err error
 		chatReq, err = p.processPDFs(ctx, chatReq, visionModel)
 		if err != nil {

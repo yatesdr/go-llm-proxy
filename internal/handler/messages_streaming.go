@@ -137,15 +137,8 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 		}
 	}
 
-	closeAllBlocks := func() {
-		closeReasoningBlock()
-		closeTextBlock()
-		for _, tc := range toolCalls {
-			if tc != nil {
-				bufferOrEmit("content_block_stop", map[string]any{"index": tc.blockIndex})
-			}
-		}
-	}
+	// Note: block closing after buffer replay uses emit() directly instead of
+	// bufferOrEmit to avoid re-buffering stop events. See the replay sections below.
 
 	var accumulatedContent strings.Builder
 
@@ -363,19 +356,33 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 
 			// Fall through to normal terminal event emission.
 		} else {
-			// Mixed or no-search: replay buffered events and close.
+			// Mixed or non-search tool calls: replay buffered events and close.
+			// Emit stop events directly — bufferOrEmit would re-buffer them.
+			slog.Debug("replaying buffered tool call events (non-search)", "count", len(toolCallBuffer))
 			for _, ev := range toolCallBuffer {
 				emit(ev.eventType, ev.data)
 			}
-			closeAllBlocks()
+			closeReasoningBlock()
+			closeTextBlock()
+			for _, tc := range toolCalls {
+				if tc != nil {
+					emit("content_block_stop", map[string]any{"index": tc.blockIndex})
+				}
+			}
 			toolCalls = nil // Already closed — prevent terminal double-close.
 		}
 	} else {
-		// Not a search case: replay any buffered events and close.
+		// Not a search case: replay any buffered events and close directly.
 		for _, ev := range toolCallBuffer {
 			emit(ev.eventType, ev.data)
 		}
-		closeAllBlocks()
+		closeReasoningBlock()
+		closeTextBlock()
+		for _, tc := range toolCalls {
+			if tc != nil {
+				emit("content_block_stop", map[string]any{"index": tc.blockIndex})
+			}
+		}
 		toolCalls = nil // Already closed — prevent terminal double-close.
 	}
 

@@ -161,6 +161,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Ar
 /* ---- Header ---- */
 .header{background:var(--slate-bg);color:#f1f5f9;padding:28px 0;text-align:center}
 .header-inner{display:flex;align-items:center;justify-content:center;gap:16px;flex-wrap:wrap}
+.header-logo{height:56px;width:auto;filter:brightness(0) invert(1);opacity:.92}
 .header-text h1{font-size:1.6rem;font-weight:700;letter-spacing:-.02em}
 .header-text p{color:var(--slate-muted);font-size:.9rem;margin-top:2px}
 

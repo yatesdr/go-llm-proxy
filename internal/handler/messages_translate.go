@@ -74,6 +74,13 @@ func translateAnthropicMessages(msgs []json.RawMessage) ([]map[string]any, error
 			continue
 		}
 
+		// Log raw message structure for debugging.
+		contentSnippet := string(msg.Content)
+		if len(contentSnippet) > 200 {
+			contentSnippet = contentSnippet[:200] + "..."
+		}
+		slog.Debug("raw anthropic message", "role", msg.Role, "content_prefix", contentSnippet)
+
 		switch msg.Role {
 		case "user":
 			result = append(result, translateUserMessage(msg.Content)...)
@@ -89,6 +96,7 @@ func translateAnthropicMessages(msgs []json.RawMessage) ([]map[string]any, error
 
 // translateUserMessage converts an Anthropic user message to one or more
 // Chat Completions messages. tool_result blocks become separate role:tool messages.
+// Handles text, image, document (PDF), tool_result, and thinking blocks.
 func translateUserMessage(content json.RawMessage) []map[string]any {
 	// String content: pass through directly.
 	var s string
@@ -109,6 +117,8 @@ func translateUserMessage(content json.RawMessage) []map[string]any {
 		var blockType string
 		json.Unmarshal(block["type"], &blockType)
 
+		slog.Debug("translating user content block", "type", blockType)
+
 		switch blockType {
 		case "text":
 			var text string
@@ -117,6 +127,10 @@ func translateUserMessage(content json.RawMessage) []map[string]any {
 
 		case "image":
 			userParts = append(userParts, translateImageBlock(block))
+
+		case "document":
+			slog.Info("translating document block", "keys", blockKeys(block))
+			userParts = append(userParts, translateDocumentBlock(block))
 
 		case "tool_result":
 			var toolUseID string
@@ -133,7 +147,8 @@ func translateUserMessage(content json.RawMessage) []map[string]any {
 			continue
 
 		default:
-			slog.Debug("skipping unknown user content block type", "type", blockType)
+			slog.Warn("skipping unknown user content block type", "type", blockType,
+				"keys", blockKeys(block))
 		}
 	}
 
@@ -252,6 +267,59 @@ func translateImageBlock(block map[string]json.RawMessage) map[string]any {
 		}
 	}
 	return map[string]any{"type": "text", "text": "[unsupported image format]"}
+}
+
+// blockKeys returns the JSON keys present in a content block (for debug logging).
+func blockKeys(block map[string]json.RawMessage) []string {
+	keys := make([]string, 0, len(block))
+	for k := range block {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// translateDocumentBlock converts an Anthropic document content block to a
+// pipeline-internal pdf_data part. The pipeline's processPDFs will extract text
+// or use vision fallback, then replace it with a text block before sending upstream.
+func translateDocumentBlock(block map[string]json.RawMessage) map[string]any {
+	var source struct {
+		Type      string `json:"type"`
+		MediaType string `json:"media_type"`
+		Data      string `json:"data"`
+	}
+	if err := json.Unmarshal(block["source"], &source); err != nil {
+		slog.Warn("document block: failed to parse source", "error", err,
+			"raw_source", string(block["source"]))
+		return map[string]any{"type": "text", "text": "[document: could not parse source]"}
+	}
+
+	slog.Info("document block source", "source_type", source.Type,
+		"media_type", source.MediaType, "data_len", len(source.Data))
+
+	// Handle base64 PDFs.
+	if source.Type == "base64" && (source.MediaType == "application/pdf" || source.MediaType == "") {
+		result := map[string]any{
+			"type": "pdf_data",
+			"data": source.Data,
+		}
+		// Preserve filename if present.
+		var title string
+		if json.Unmarshal(block["title"], &title) == nil && title != "" {
+			result["filename"] = title
+		}
+		// Also try "name" field (some Claude Code versions use this).
+		if title == "" {
+			var name string
+			if json.Unmarshal(block["name"], &name) == nil && name != "" {
+				result["filename"] = name
+			}
+		}
+		return result
+	}
+
+	slog.Warn("document block: unsupported format",
+		"source_type", source.Type, "media_type", source.MediaType)
+	return map[string]any{"type": "text", "text": "[unsupported document format: " + source.MediaType + "]"}
 }
 
 // extractToolResultContent extracts a string from a tool_result content field,
