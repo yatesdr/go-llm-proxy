@@ -65,9 +65,7 @@
         .d-cloud{background:#f5f3ff;color:#6d28d9;border:1px solid #c4b5fd}
         .d-service{background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5}
         .d-arrow{color:var(--muted);font-size:20px;font-weight:400}
-        .d-proxy-row{position:relative;display:flex;align-items:center;justify-content:center;margin-bottom:14px}
-        .d-proxy-side{position:absolute;right:0;display:flex;align-items:center;gap:10px}
-        @media(max-width:600px){.d-proxy-side{position:static;margin-top:8px}}
+        .d-proxy-row{display:flex;align-items:center;justify-content:center;gap:14px;margin-bottom:14px}
         .d-label{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px;text-align:center;margin-bottom:6px}
 
         /* Tables */
@@ -160,10 +158,8 @@
                     <div class="diagram-row"><span class="d-arrow">&darr;</span></div>
                     <div class="d-proxy-row">
                         <span class="d-box d-proxy">go-llm-proxy</span>
-                        <span class="d-proxy-side">
-                            <span class="d-arrow">&rarr;</span>
-                            <span class="d-box d-service">Web Search</span>
-                        </span>
+                        <span class="d-arrow">&rarr;</span>
+                        <span class="d-box d-service">Web Search</span>
                     </div>
                     <div class="diagram-row"><span class="d-arrow">&darr;</span></div>
                     <div class="d-label">Local backends</div>
