@@ -84,12 +84,14 @@ func (rl *RateLimiter) RecordFailure(ip string) {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
-	// Hard cap: if we're at capacity and this is a new IP, reject silently.
+	// Hard cap: if we're at capacity and this is a new IP, evict the oldest
+	// record before inserting. This prevents distributed attacks from exhausting
+	// the tracker and bypassing rate limiting for new source IPs.
 	rec, ok := rl.ips[ip]
 	if !ok {
 		if len(rl.ips) >= maxTrackedIPs {
-			slog.Warn("rate limiter at capacity, dropping new entry", "ip", ip)
-			return
+			slog.Warn("rate limiter at capacity, evicting oldest entry", "ip", ip)
+			rl.evictOldest()
 		}
 		rec = &ipRecord{}
 		rl.ips[ip] = rec
@@ -103,6 +105,24 @@ func (rl *RateLimiter) RecordFailure(ip string) {
 			"ip", ip,
 			"failures", rec.failures,
 		)
+	}
+}
+
+// evictOldest removes the IP record with the oldest lastFailure time.
+// Must be called with rl.mu held.
+func (rl *RateLimiter) evictOldest() {
+	var oldestIP string
+	var oldestTime time.Time
+	first := true
+	for ip, rec := range rl.ips {
+		if first || rec.lastFailure.Before(oldestTime) {
+			oldestIP = ip
+			oldestTime = rec.lastFailure
+			first = false
+		}
+	}
+	if oldestIP != "" {
+		delete(rl.ips, oldestIP)
 	}
 }
 

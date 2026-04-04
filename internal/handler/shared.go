@@ -14,9 +14,14 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	"go-llm-proxy/internal/api"
 	"go-llm-proxy/internal/config"
+	"go-llm-proxy/internal/httputil"
+	"go-llm-proxy/internal/pipeline"
+	"go-llm-proxy/internal/usage"
 )
 
 // AllowedPaths restricts which sub-paths can be proxied to backends.
@@ -178,9 +183,17 @@ func copyHeaders(dst, src http.Header, backendType string) {
 // sendChatCompletionsRequest sends a non-streaming Chat Completions request to a
 // model's backend and returns the parsed response. Used by the search tool loop
 // in both Messages and Responses handlers.
+//
+// A shallow copy of chatReq is made so that setting stream=false does not
+// mutate the caller's map.
 func sendChatCompletionsRequest(ctx context.Context, client *http.Client, chatReq map[string]any, model *config.ModelConfig) (*api.ChatResponse, error) {
-	chatReq["stream"] = false
-	chatBody, err := json.Marshal(chatReq)
+	reqCopy := make(map[string]any, len(chatReq))
+	for k, v := range chatReq {
+		reqCopy[k] = v
+	}
+	reqCopy["stream"] = false
+
+	chatBody, err := json.Marshal(reqCopy)
 	if err != nil {
 		return nil, fmt.Errorf("marshal chat request: %w", err)
 	}
@@ -216,4 +229,86 @@ func sendChatCompletionsRequest(ctx context.Context, client *http.Client, chatRe
 		return nil, fmt.Errorf("parse upstream response: %w", err)
 	}
 	return &chatResp, nil
+}
+
+// runPipelineWithKeepalives runs pipeline processing while sending SSE keepalives
+// to prevent client timeouts. Starts streaming headers, runs the pipeline, and
+// uses a mutex to prevent concurrent writes between the keepalive goroutine and
+// the main goroutine.
+//
+// Returns the processed chatReq, whether headers were sent, and any error.
+func runPipelineWithKeepalives(ctx context.Context, w http.ResponseWriter, pl *pipeline.Pipeline,
+	chatReq map[string]any, model *config.ModelConfig) (map[string]any, bool, error) {
+
+	httputil.SetSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+
+	// Mutex protects writes to w between the keepalive goroutine and the
+	// main goroutine after processing completes.
+	var mu sync.Mutex
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				mu.Lock()
+				fmt.Fprintf(w, ": keepalive\n\n")
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+				mu.Unlock()
+			}
+		}
+	}()
+
+	result, err := pl.ProcessRequest(ctx, chatReq, model)
+
+	// Signal the goroutine to stop writing, then take the lock to ensure
+	// it has finished any in-progress write before we return.
+	close(done)
+	mu.Lock()
+	mu.Unlock()
+
+	return result, true, err
+}
+
+// logUsageRecord logs a usage record for both Messages and Responses handlers.
+func logUsageRecord(ul *usage.UsageLogger, usageData *api.ChunkUsage, statusCode int, model, endpoint string,
+	requestBytes, responseBytes int64, keyName, keyHash string, startTime time.Time) {
+	if ul == nil {
+		return
+	}
+	var tokens usage.TokenUsage
+	if usageData != nil {
+		tokens = usage.TokenUsage{
+			InputTokens:  usageData.PromptTokens,
+			OutputTokens: usageData.CompletionTokens,
+			TotalTokens:  usageData.TotalTokens,
+		}
+	}
+	rec := usage.UsageRecord{
+		Timestamp:     startTime,
+		KeyHash:       keyHash,
+		KeyName:       keyName,
+		Model:         model,
+		Endpoint:      endpoint,
+		StatusCode:    statusCode,
+		RequestBytes:  requestBytes,
+		ResponseBytes: responseBytes,
+		InputTokens:   tokens.InputTokens,
+		OutputTokens:  tokens.OutputTokens,
+		TotalTokens:   tokens.TotalTokens,
+		DurationMS:    time.Since(startTime).Milliseconds(),
+	}
+	go ul.Log(rec)
 }

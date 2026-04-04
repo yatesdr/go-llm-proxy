@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.3.1
+
+### Security
+- **SSRF protection for vision pipeline** — image URLs are now validated before forwarding to vision backends. Blocks private/internal network ranges (RFC 1918, loopback, link-local, cloud metadata 169.254.x), non-http(s) schemes, and DNS-rebinding attacks. Data URIs are always allowed.
+- **Sanitize backend error responses** — the compact endpoint (`/v1/responses/compact`) was forwarding raw backend error bodies to clients, potentially leaking internal URLs, API keys, or infrastructure details. Now returns a generic error like all other endpoints.
+- **Sanitize internal error messages** — Go error strings from translation, pipeline processing, search, and vision model failures are now logged server-side only. Clients receive generic error messages without internal details.
+- **Rate limiter eviction at capacity** — when the IP tracker reaches its 100K entry limit, the oldest record is now evicted instead of silently dropping the new entry. Prevents distributed attacks from bypassing rate limiting.
+
+### Changed
+- Keepalive goroutine race condition fix consolidated into `runPipelineWithKeepalives()` with `sync.Mutex` (both Messages and Responses handlers)
+- Image and PDF caches migrated from `sync.Map` to `boundedCache` (max 1024 entries with full eviction)
+- Brave Search URL construction uses `url.QueryEscape` instead of manual string replacement
+- `sendChatCompletionsRequest` makes a shallow copy before setting `stream=false` to avoid mutating the caller's map
+- `WriteError` now returns context-appropriate error types (authentication_error, rate_limit_error, server_error) instead of always returning invalid_request_error
+- Context window detection uses `httputil.NewHTTPClient()` (redirect-refusing) instead of default `http.Client`
+- Usage logging deduplicated into shared `logUsageRecord()` helper
+- PDF processor uses `normalizeContentParts()` for consistent `[]any`/`[]map[string]any` handling
+
 ## v0.3.0
 
 ### Added

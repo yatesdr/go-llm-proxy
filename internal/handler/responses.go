@@ -265,7 +265,8 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	messages, err := translateInput(req.Input, req.Instructions)
 	if err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid input: "+err.Error())
+		slog.Error("responses input translation failed", "model", req.Model, "error", err)
+		httputil.WriteError(w, http.StatusBadRequest, "request translation failed")
 		return
 	}
 
@@ -277,39 +278,36 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	headersAlreadySent := false
 	if h.pipeline != nil && h.pipeline.ShouldProcess(model) {
 		if req.Stream && pipeline.RequestContainsImageURLs(chatReq) {
-			httputil.SetSecurityHeaders(w)
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.Header().Set("Cache-Control", "no-cache")
-			w.Header().Set("Connection", "keep-alive")
-			w.WriteHeader(http.StatusOK)
-			if f, ok := w.(http.Flusher); ok {
-				f.Flush()
-			}
-			headersAlreadySent = true
-
-			done := make(chan struct{})
-			go func() {
-				ticker := time.NewTicker(5 * time.Second)
-				defer ticker.Stop()
-				for {
-					select {
-					case <-done:
-						return
-					case <-ticker.C:
-						fmt.Fprintf(w, ": keepalive\n\n")
-						if f, ok := w.(http.Flusher); ok {
-							f.Flush()
-						}
-					}
-				}
-			}()
-			chatReq, err = h.pipeline.ProcessRequest(ctx, chatReq, model)
-			close(done)
+			chatReq, headersAlreadySent, err = runPipelineWithKeepalives(ctx, w, h.pipeline, chatReq, model)
 		} else {
 			chatReq, err = h.pipeline.ProcessRequest(ctx, chatReq, model)
 		}
 		if err != nil {
-			httputil.WriteError(w, http.StatusInternalServerError, "processing error: "+err.Error())
+			if headersAlreadySent {
+				// Headers already flushed at 200 — emit an SSE error event.
+				failedData, _ := json.Marshal(map[string]any{
+					"type": "response.failed",
+					"response": map[string]any{
+						"id":     api.RandomID("resp_"),
+						"object": "response",
+						"model":  req.Model,
+						"status": "failed",
+						"error": map[string]any{
+							"type":    "server_error",
+							"message": "internal processing error",
+						},
+						"output": []any{},
+					},
+					"sequence_number": 0,
+				})
+				fmt.Fprintf(w, "event: response.failed\ndata: %s\n\n", failedData)
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+			} else {
+				slog.Error("pipeline processing failed", "model", req.Model, "error", err)
+			httputil.WriteError(w, http.StatusInternalServerError, "internal processing error")
+			}
 			return
 		}
 	}
@@ -433,7 +431,8 @@ func (h *ResponsesHandler) handleNonStreaming(w http.ResponseWriter, resp *http.
 				return h.sendChatRequest(ctx, req, model)
 			}, 5)
 		if err != nil {
-			httputil.WriteError(w, http.StatusBadGateway, "search processing error: "+err.Error())
+			slog.Error("search processing failed", "model", req.Model, "error", err)
+			httputil.WriteError(w, http.StatusBadGateway, "search processing failed")
 			return
 		}
 		chatResp = *finalResp
@@ -527,30 +526,5 @@ func (h *ResponsesHandler) sendChatRequest(ctx context.Context, chatReq map[stri
 // --- Usage logging ---
 
 func (h *ResponsesHandler) logUsage(usageData *api.ChunkUsage, statusCode int, model string, requestBytes, responseBytes int64, keyName, keyHash string, startTime time.Time) {
-	if h.usage == nil {
-		return
-	}
-	var tokens usage.TokenUsage
-	if usageData != nil {
-		tokens = usage.TokenUsage{
-			InputTokens:  usageData.PromptTokens,
-			OutputTokens: usageData.CompletionTokens,
-			TotalTokens:  usageData.TotalTokens,
-		}
-	}
-	rec := usage.UsageRecord{
-		Timestamp:     startTime,
-		KeyHash:       keyHash,
-		KeyName:       keyName,
-		Model:         model,
-		Endpoint:      "/v1/responses",
-		StatusCode:    statusCode,
-		RequestBytes:  requestBytes,
-		ResponseBytes: responseBytes,
-		InputTokens:   tokens.InputTokens,
-		OutputTokens:  tokens.OutputTokens,
-		TotalTokens:   tokens.TotalTokens,
-		DurationMS:    time.Since(startTime).Milliseconds(),
-	}
-	go h.usage.Log(rec)
+	logUsageRecord(h.usage, usageData, statusCode, model, "/v1/responses", requestBytes, responseBytes, keyName, keyHash, startTime)
 }

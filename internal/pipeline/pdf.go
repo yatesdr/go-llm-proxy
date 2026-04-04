@@ -9,7 +9,6 @@ import (
 	"io"
 	"log/slog"
 	"strings"
-	"sync"
 
 	"go-llm-proxy/internal/config"
 
@@ -18,15 +17,13 @@ import (
 
 // pdfCache stores PDF data hash → extracted/described text so that PDFs are only
 // processed once. Subsequent requests containing the same PDF reuse the cached
-// result, avoiding repeated text extraction and vision model calls.
-var pdfCache sync.Map // map[string]string
+// result, avoiding repeated text extraction and vision model calls. Bounded to
+// prevent unbounded memory growth in long-running processes.
+var pdfCache = newBoundedCache()
 
 // ResetPDFCache clears the PDF description cache. Exported for testing.
 func ResetPDFCache() {
-	pdfCache.Range(func(key, _ any) bool {
-		pdfCache.Delete(key)
-		return true
-	})
+	pdfCache.Reset()
 }
 
 // minTextLength is the minimum number of characters for text extraction to be
@@ -68,8 +65,8 @@ func (p *Pipeline) processPDFs(ctx context.Context, chatReq map[string]any,
 		if !ok {
 			continue
 		}
-		content, ok := msgMap["content"].([]any)
-		if !ok {
+		content := normalizeContentParts(msgMap)
+		if content == nil {
 			continue
 		}
 
@@ -107,7 +104,7 @@ func (p *Pipeline) processPDFs(ctx context.Context, chatReq map[string]any,
 				slog.Debug("PDF cache hit", "filename", filename)
 				newContent = append(newContent, map[string]any{
 					"type": "text",
-					"text": cached.(string),
+					"text": cached,
 				})
 				msgModified = true
 				continue

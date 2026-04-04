@@ -22,10 +22,28 @@ func WriteError(w http.ResponseWriter, status int, message string) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"error": map[string]any{
 			"message": message,
-			"type":    "invalid_request_error",
+			"type":    errorTypeForStatus(status),
 			"code":    http.StatusText(status),
 		},
 	})
+}
+
+// errorTypeForStatus maps HTTP status codes to OpenAI-compatible error types.
+func errorTypeForStatus(status int) string {
+	switch {
+	case status == http.StatusUnauthorized:
+		return "authentication_error"
+	case status == http.StatusForbidden:
+		return "permission_error"
+	case status == http.StatusNotFound:
+		return "not_found_error"
+	case status == http.StatusTooManyRequests:
+		return "rate_limit_error"
+	case status >= 500:
+		return "server_error"
+	default:
+		return "invalid_request_error"
+	}
 }
 
 // WriteAnthropicError sends an Anthropic-compatible error response.

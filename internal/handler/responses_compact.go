@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -92,7 +93,8 @@ func (h *ResponsesHandler) HandleCompact(w http.ResponseWriter, r *http.Request)
 
 	messages, err := translateInput(req.Input, req.Instructions)
 	if err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid input: "+err.Error())
+		slog.Error("compact input translation failed", "model", req.Model, "error", err)
+		httputil.WriteError(w, http.StatusBadRequest, "request translation failed")
 		return
 	}
 
@@ -144,10 +146,11 @@ func (h *ResponsesHandler) HandleCompact(w http.ResponseWriter, r *http.Request)
 
 	if resp.StatusCode >= 400 {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, api.MaxResponseBodySize))
-		httputil.SetSecurityHeaders(w)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(resp.StatusCode)
-		w.Write(errBody)
+		slog.Error("compact upstream returned error",
+			"model", req.Model, "status", resp.StatusCode, "body", string(errBody))
+		// Sanitized error: never forward raw backend error bodies to the client.
+		// They may contain internal URLs, backend API keys, or infrastructure details.
+		httputil.WriteError(w, resp.StatusCode, fmt.Sprintf("backend returned HTTP %d", resp.StatusCode))
 		return
 	}
 

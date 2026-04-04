@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"go-llm-proxy/internal/httputil"
 )
 
 // DetectContextWindows queries each backend's models endpoint to discover
@@ -15,7 +17,8 @@ import (
 // Runs asynchronously — failures are logged but never block startup.
 func DetectContextWindows(cs *ConfigStore) {
 	cfg := cs.Get()
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := httputil.NewHTTPClient()
+	client.Timeout = 10 * time.Second
 
 	for i := range cfg.Models {
 		m := &cfg.Models[i]

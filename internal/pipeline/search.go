@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -258,10 +259,10 @@ func (p *Pipeline) executeBraveSearch(ctx context.Context, apiKey, query string)
 	searchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	url := fmt.Sprintf("https://api.search.brave.com/res/v1/web/search?q=%s&count=5",
-		strings.ReplaceAll(strings.ReplaceAll(query, " ", "+"), "&", "%26"))
+	searchURL := fmt.Sprintf("https://api.search.brave.com/res/v1/web/search?q=%s&count=5",
+		url.QueryEscape(query))
 
-	req, err := http.NewRequestWithContext(searchCtx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(searchCtx, "GET", searchURL, nil)
 	if err != nil {
 		return "", nil, fmt.Errorf("build brave request: %w", err)
 	}

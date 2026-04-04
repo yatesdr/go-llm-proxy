@@ -126,7 +126,8 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	chatReq, err := buildChatRequestFromAnthropic(req, model.Model)
 	if err != nil {
-		httputil.WriteAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "translation error: "+err.Error())
+		slog.Error("messages translation failed", "model", req.Model, "error", err)
+		httputil.WriteAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "request translation failed")
 		return
 	}
 
@@ -136,41 +137,28 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	headersAlreadySent := false
 	if h.pipeline != nil && h.pipeline.ShouldProcess(model) {
 		if req.Stream && pipeline.RequestContainsImageURLs(chatReq) {
-			// Start streaming headers early so keepalives can flow.
-			httputil.SetSecurityHeaders(w)
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.Header().Set("Cache-Control", "no-cache")
-			w.Header().Set("Connection", "keep-alive")
-			w.WriteHeader(http.StatusOK)
-			if f, ok := w.(http.Flusher); ok {
-				f.Flush()
-			}
-			headersAlreadySent = true
-
-			// Send keepalives every 5s until processing completes.
-			done := make(chan struct{})
-			go func() {
-				ticker := time.NewTicker(5 * time.Second)
-				defer ticker.Stop()
-				for {
-					select {
-					case <-done:
-						return
-					case <-ticker.C:
-						fmt.Fprintf(w, ": keepalive\n\n")
-						if f, ok := w.(http.Flusher); ok {
-							f.Flush()
-						}
-					}
-				}
-			}()
-			chatReq, err = h.pipeline.ProcessRequest(ctx, chatReq, model)
-			close(done)
+			chatReq, headersAlreadySent, err = runPipelineWithKeepalives(ctx, w, h.pipeline, chatReq, model)
 		} else {
 			chatReq, err = h.pipeline.ProcessRequest(ctx, chatReq, model)
 		}
 		if err != nil {
-			httputil.WriteAnthropicError(w, http.StatusInternalServerError, "api_error", "processing error: "+err.Error())
+			if headersAlreadySent {
+				// Headers already flushed at 200 — emit an SSE error event.
+				errData, _ := json.Marshal(map[string]any{
+					"type": "error",
+					"error": map[string]any{
+						"type":    "api_error",
+						"message": "internal processing error",
+					},
+				})
+				fmt.Fprintf(w, "event: error\ndata: %s\n\n", errData)
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+			} else {
+				slog.Error("pipeline processing failed", "model", req.Model, "error", err)
+			httputil.WriteAnthropicError(w, http.StatusInternalServerError, "api_error", "internal processing error")
+			}
 			return
 		}
 	}
@@ -393,7 +381,8 @@ func (h *MessagesHandler) handleNonStreaming(w http.ResponseWriter, resp *http.R
 				return h.sendChatRequest(ctx, req, model)
 			}, 5)
 		if err != nil {
-			httputil.WriteAnthropicError(w, http.StatusBadGateway, "api_error", "search processing error: "+err.Error())
+			slog.Error("search processing failed", "model", req.Model, "error", err)
+			httputil.WriteAnthropicError(w, http.StatusBadGateway, "api_error", "search processing failed")
 			return
 		}
 		chatResp = *finalResp
@@ -481,30 +470,5 @@ func (h *MessagesHandler) sendChatRequest(ctx context.Context, chatReq map[strin
 // --- Usage logging ---
 
 func (h *MessagesHandler) logUsage(usageData *api.ChunkUsage, statusCode int, model string, requestBytes, responseBytes int64, keyName, keyHash string, startTime time.Time) {
-	if h.usage == nil {
-		return
-	}
-	var tokens usage.TokenUsage
-	if usageData != nil {
-		tokens = usage.TokenUsage{
-			InputTokens:  usageData.PromptTokens,
-			OutputTokens: usageData.CompletionTokens,
-			TotalTokens:  usageData.TotalTokens,
-		}
-	}
-	rec := usage.UsageRecord{
-		Timestamp:     startTime,
-		KeyHash:       keyHash,
-		KeyName:       keyName,
-		Model:         model,
-		Endpoint:      "/v1/messages",
-		StatusCode:    statusCode,
-		RequestBytes:  requestBytes,
-		ResponseBytes: responseBytes,
-		InputTokens:   tokens.InputTokens,
-		OutputTokens:  tokens.OutputTokens,
-		TotalTokens:   tokens.TotalTokens,
-		DurationMS:    time.Since(startTime).Milliseconds(),
-	}
-	go h.usage.Log(rec)
+	logUsageRecord(h.usage, usageData, statusCode, model, "/v1/messages", requestBytes, responseBytes, keyName, keyHash, startTime)
 }

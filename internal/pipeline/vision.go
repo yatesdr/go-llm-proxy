@@ -8,7 +8,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,15 +21,13 @@ import (
 
 // imageCache stores image URL hash → description so that images are only
 // processed once. Subsequent requests containing the same image reuse the
-// cached description, making follow-up turns fast.
-var imageCache sync.Map // map[string]string
+// cached description, making follow-up turns fast. Bounded to prevent
+// unbounded memory growth in long-running processes.
+var imageCache = newBoundedCache()
 
 // ResetImageCache clears the image description cache. Exported for testing.
 func ResetImageCache() {
-	imageCache.Range(func(key, _ any) bool {
-		imageCache.Delete(key)
-		return true
-	})
+	imageCache.Reset()
 }
 
 // maxImagesPerRequest caps the number of images the vision processor will handle
@@ -115,6 +116,12 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 
 			url := extractImageURL(partMap)
 			if url == "" {
+				continue
+			}
+
+			// Block SSRF: reject URLs targeting internal/private networks.
+			if !isSSRFSafe(url) {
+				slog.Warn("blocked image URL targeting internal network", "url_prefix", url[:min(len(url), 60)])
 				continue
 			}
 
@@ -252,7 +259,7 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 			}
 
 			hash := hashImageURL(imageURL)
-			replacement := buildImageReplacement(hash, isToolRole, &imageCache, jobDescriptions)
+			replacement := buildImageReplacement(hash, isToolRole, imageCache, jobDescriptions)
 
 			newContent = append(newContent, map[string]any{
 				"type": "text",
@@ -298,11 +305,11 @@ func normalizeContentParts(msgMap map[string]any) []any {
 //
 // For tool-role images (PDF pages, screenshots): OCR text only.
 // For user-role images: vision description only.
-func buildImageReplacement(hash string, isToolRole bool, cache *sync.Map, jobDescs map[string]string) string {
+func buildImageReplacement(hash string, isToolRole bool, cache *boundedCache, jobDescs map[string]string) string {
 	// Helper to look up a result from cache or fresh job results.
 	lookup := func(cacheKey string) (string, bool) {
 		if cached, ok := cache.Load(cacheKey); ok {
-			return cached.(string), true
+			return cached, true
 		}
 		if desc, ok := jobDescs[cacheKey]; ok {
 			return desc, true
@@ -350,8 +357,80 @@ func extractImageURL(part map[string]any) string {
 	if !ok {
 		return ""
 	}
-	url, _ := iu["url"].(string)
-	return url
+	u, _ := iu["url"].(string)
+	return u
+}
+
+// isSSRFSafe validates that an image URL is safe to forward to a backend model.
+// Blocks internal/private network targets to prevent SSRF attacks where a user
+// could make the vision backend fetch internal services or cloud metadata.
+// Data URIs are always allowed (processed in-memory, no network fetch).
+func isSSRFSafe(imageURL string) bool {
+	// Data URIs are always safe — no network request is made.
+	if strings.HasPrefix(imageURL, "data:") {
+		return true
+	}
+
+	parsed, err := url.Parse(imageURL)
+	if err != nil {
+		return false
+	}
+
+	// Only allow http and https schemes.
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return false
+	}
+
+	hostname := parsed.Hostname()
+	if hostname == "" {
+		return false
+	}
+
+	// Block well-known metadata hostnames.
+	if hostname == "metadata.google.internal" {
+		return false
+	}
+
+	ip := net.ParseIP(hostname)
+	if ip == nil {
+		// Hostname — resolve to check for internal IPs.
+		addrs, err := net.LookupHost(hostname)
+		if err != nil || len(addrs) == 0 {
+			// Can't resolve — block to be safe.
+			return false
+		}
+		// Check all resolved addresses.
+		for _, addr := range addrs {
+			if resolved := net.ParseIP(addr); resolved != nil && isPrivateIP(resolved) {
+				return false
+			}
+		}
+		return true
+	}
+
+	return !isPrivateIP(ip)
+}
+
+// isPrivateIP returns true if the IP is in a private, loopback, link-local,
+// or cloud metadata range that should not be accessible via user-supplied URLs.
+func isPrivateIP(ip net.IP) bool {
+	privateRanges := []string{
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"127.0.0.0/8",
+		"169.254.0.0/16", // link-local + cloud metadata (169.254.169.254)
+		"::1/128",
+		"fc00::/7",       // IPv6 unique local
+		"fe80::/10",      // IPv6 link-local
+	}
+	for _, cidr := range privateRanges {
+		_, network, _ := net.ParseCIDR(cidr)
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // describeImage sends an image to a vision-capable model and returns a text description.
@@ -421,7 +500,8 @@ func (p *Pipeline) describeImage(ctx context.Context, visionModel *config.ModelC
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("vision model returned %d: %s", resp.StatusCode, string(respBody))
+		slog.Error("vision model error", "status", resp.StatusCode, "body", string(respBody))
+		return "", fmt.Errorf("vision model returned HTTP %d", resp.StatusCode)
 	}
 
 	var chatResp struct {
