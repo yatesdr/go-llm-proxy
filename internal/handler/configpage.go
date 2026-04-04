@@ -1240,7 +1240,7 @@ if (HAS_MCP) {
   var mcpCard = document.createElement("div");
   mcpCard.className = "card";
   mcpCard.innerHTML = '<h2>Web Search (MCP)</h2>' +
-    '<p style="margin-bottom:12px">This proxy provides web search via MCP. Add to your client config:</p>' +
+    '<p style="margin-bottom:12px">This proxy provides web search via MCP for clients that need it. Add to your OpenCode config:</p>' +
     '<pre style="background:var(--slate-bg);color:var(--slate-text);padding:14px;border-radius:6px;font-size:.82rem;overflow-x:auto;line-height:1.5">' +
     '// OpenCode (~/.config/opencode/opencode.json)\n' +
     '"mcp": {\n' +
@@ -1250,13 +1250,11 @@ if (HAS_MCP) {
     '    "headers": { "Authorization": "Bearer &lt;your-proxy-key&gt;" },\n' +
     '    "enabled": true\n' +
     '  }\n' +
-    '}\n\n' +
-    '// Codex (~/.codex/config.toml)\n' +
-    '[mcp_servers.proxy-search]\n' +
-    'url = "' + PROXY_ORIGIN + '/mcp/sse"\n' +
-    'headers = { Authorization = "Bearer &lt;your-proxy-key&gt;" }' +
+    '}' +
     '</pre>' +
-    '<p class="hint" style="margin-top:8px">Replace &lt;your-proxy-key&gt; with your API key. Claude Code and Codex get web search automatically via the proxy &mdash; MCP is for clients like OpenCode that don\'t use the Responses or Messages API search tools.</p>';
+    '<p class="hint" style="margin-top:8px">Replace &lt;your-proxy-key&gt; with your API key.<br>' +
+    '<b>Claude Code</b> and <b>Codex</b> get web search automatically via the proxy &mdash; no MCP needed.<br>' +
+    '<b>Qwen Code</b> uses client-side Tavily &mdash; configure via the Tavily key field above.</p>';
   document.querySelector(".container").appendChild(mcpCard);
 }
 </script>
