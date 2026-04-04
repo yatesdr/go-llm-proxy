@@ -193,7 +193,7 @@
                     </div>
                     <div class="card">
                         <h3>Adds tools backends lack</h3>
-                        <p>Web search via Tavily, image description, PDF text extraction, OCR for scanned documents &mdash; executed at the proxy, injected transparently.</p>
+                        <p>Web search via Tavily or Brave Search, image description, PDF text extraction, OCR for scanned documents &mdash; executed at the proxy, injected transparently.</p>
                     </div>
                 </div>
 
@@ -296,7 +296,7 @@
 
                         <tr class="matrix-section"><td colspan="5">Proxy-side processing (<a href="https://github.com/yatesdr/go-llm-proxy/blob/main/docs/pipeline.md" style="text-transform:none;font-weight:400;letter-spacing:0">details</a>)</td></tr>
                         <tr>
-                            <td>Web search (Tavily)</td>
+                            <td>Web search (Tavily / Brave)</td>
                             <td class="y">&#10003; proxy</td>
                             <td class="y">&#10003; proxy</td>
                             <td class="y">&#10003; MCP</td>
@@ -405,7 +405,7 @@ models:
 processors:
   vision: Qwen3-VL-8B           <span style="color:#8893a4"># any vision-capable model from above</span>
   ocr: paddleOCR                <span style="color:#8893a4"># PaddleOCR-VL-1.5 (0.9B) — fast, accurate</span>
-  web_search_key: tvly-...      <span style="color:#8893a4"># Tavily API key (free: 1000 req/month)</span>
+  web_search_key: tvly-...      <span style="color:#8893a4"># Tavily or Brave Search key (auto-detected)</span>
 
 keys:
   - key: sk-your-secret-key
@@ -438,7 +438,7 @@ docker compose -f docker/docker-compose.yml up -d</div>
                     <tr><td style="font-weight:600;white-space:nowrap">Model multiplexing</td><td>Multiple models across multiple backends. Name rewriting, per-model timeouts, per-key model restrictions.</td></tr>
                     <tr><td style="font-weight:600;white-space:nowrap">Image description</td><td>Images sent to text-only models are described by a vision-capable model and replaced with text. Concurrent processing (up to 5 in parallel), cached by content hash for instant follow-up turns.</td></tr>
                     <tr><td style="font-weight:600;white-space:nowrap">PDF processing</td><td>Text extraction for native PDFs. OCR via dedicated fast model for scanned documents and page images. Results cached across turns.</td></tr>
-                    <tr><td style="font-weight:600;white-space:nowrap">Web search</td><td>Server-side search tools (Claude Code, Codex) executed at the proxy via Tavily. Results displayed in client UI. Streaming and non-streaming modes.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">Web search</td><td>Server-side search tools (Claude Code, Codex) executed at the proxy via <a href="https://tavily.com">Tavily</a> or <a href="https://brave.com/search/api/">Brave Search</a> (auto-detected from key prefix). Results displayed in client UI. Streaming and non-streaming modes.</td></tr>
                     <tr><td style="font-weight:600;white-space:nowrap">Context tracking</td><td>Token usage from backends reported to clients for context window tracking. Token counting endpoint planned for per-section breakdowns.</td></tr>
                     <tr><td style="font-weight:600;white-space:nowrap">API key management</td><td>Issue proxy keys with per-key model restrictions. Backend credentials stay on the server.</td></tr>
                     <tr><td style="font-weight:600;white-space:nowrap">Usage monitoring</td><td>Per-request logging to SQLite. Token counts, latency, per-user breakdowns. Web dashboard and CLI reports.</td></tr>
