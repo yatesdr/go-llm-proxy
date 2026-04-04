@@ -43,9 +43,9 @@ const maxPDFPages = 20
 
 // processPDFs detects PDF content in the translated Chat Completions request,
 // extracts text, and replaces the PDF with text content blocks. Falls back to
-// the vision model for scanned/image-heavy PDFs.
+// the OCR model (or vision model) for scanned/image-heavy PDFs.
 func (p *Pipeline) processPDFs(ctx context.Context, chatReq map[string]any,
-	visionModel *config.ModelConfig) (map[string]any, error) {
+	visionModel *config.ModelConfig, ocrModel *config.ModelConfig) (map[string]any, error) {
 
 	// Normalize messages to []any (same pattern as processImages).
 	var messages []any
@@ -156,9 +156,16 @@ func (p *Pipeline) processPDFs(ctx context.Context, chatReq map[string]any,
 				continue
 			}
 
-			// Stage 2: vision fallback for scanned/image PDFs.
-			if visionModel != nil {
-				desc, vErr := p.describePDFViaVision(ctx, visionModel, pdfBytes, filename)
+			// Stage 2: OCR/vision fallback for scanned/image PDFs.
+			// Prefer dedicated OCR model if configured; fall back to vision model.
+			fallbackModel := ocrModel
+			fallbackPrompt := ocrModelPrompt
+			if fallbackModel == nil {
+				fallbackModel = visionModel
+				fallbackPrompt = visionPromptOCR
+			}
+			if fallbackModel != nil {
+				desc, vErr := p.describePDFViaVision(ctx, fallbackModel, pdfBytes, filename, fallbackPrompt)
 				if vErr == nil && len(strings.TrimSpace(desc)) > 0 {
 					label := "PDF content (scanned)"
 					if filename != "" {
@@ -170,13 +177,14 @@ func (p *Pipeline) processPDFs(ctx context.Context, chatReq map[string]any,
 						"type": "text",
 						"text": result,
 					})
-					slog.Debug("PDF described via vision model",
+					slog.Debug("PDF described via OCR/vision model",
+						"model", fallbackModel.Name,
 						"filename", filename,
 						"desc_len", len(desc))
 					msgModified = true
 					continue
 				}
-				slog.Warn("vision fallback failed for PDF",
+				slog.Warn("OCR/vision fallback failed for PDF",
 					"filename", filename, "error", vErr)
 			}
 
@@ -260,18 +268,16 @@ func extractPDFText(data []byte) (text string, err error) {
 }
 
 // describePDFViaVision sends the first N pages of a PDF as a base64 document
-// to the vision model for description. This handles scanned PDFs where text
-// extraction produces little/no content.
-func (p *Pipeline) describePDFViaVision(ctx context.Context, visionModel *config.ModelConfig, pdfBytes []byte, filename string) (string, error) {
-	// Send the full PDF as a base64 data URL to the vision model.
+// to the OCR or vision model for text extraction. This handles scanned PDFs
+// where text extraction produces little/no content.
+func (p *Pipeline) describePDFViaVision(ctx context.Context, model *config.ModelConfig, pdfBytes []byte, filename string, prompt string) (string, error) {
+	// Send the full PDF as a base64 data URL to the model.
 	// Many vision models (including Qwen) can handle PDF pages as images
-	// when sent as data URLs. We send the PDF as a single image_url
-	// which the vision model can attempt to OCR.
+	// when sent as data URLs.
 	b64 := base64.StdEncoding.EncodeToString(pdfBytes)
 	dataURL := "data:application/pdf;base64," + b64
 
-	// Use OCR prompt for PDF fallback — we want text extraction, not visual description.
-	desc, err := p.describeImage(ctx, visionModel, dataURL, visionPromptOCR, 2000)
+	desc, err := p.describeImage(ctx, model, dataURL, prompt, 2000)
 	if err != nil {
 		return "", fmt.Errorf("vision PDF fallback: %w", err)
 	}

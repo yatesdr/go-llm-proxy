@@ -144,11 +144,11 @@ func (p *Pipeline) ProcessRequest(ctx context.Context, chatReq map[string]any,
 		}
 	}
 
-	// PDF: text extraction (always attempted) with vision fallback for scanned pages.
-	// visionModel may be nil — processPDFs handles that gracefully (skips Stage 2).
+	// PDF: text extraction (always attempted) with OCR/vision fallback for scanned pages.
+	// Prefers ocrModel for scanned PDFs; falls back to visionModel if no OCR model configured.
 	{
 		var err error
-		chatReq, err = p.processPDFs(ctx, chatReq, visionModel)
+		chatReq, err = p.processPDFs(ctx, chatReq, visionModel, ocrModel)
 		if err != nil {
 			slog.Warn("PDF processing error", "error", err)
 		}

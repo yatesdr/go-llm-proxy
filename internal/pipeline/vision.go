@@ -9,7 +9,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -142,7 +141,10 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 					prompt: ocrPrompt, maxTokens: 2000, model: ocrMdl,
 				})
 			} else {
-				// User-role images: vision description always.
+				// User-role images: vision description only.
+				// OCR is skipped for user-attached photos — dedicated OCR models
+				// hallucinate on natural images. Text in photos is captured
+				// adequately by the vision model's description.
 				vKey := hash + ":v"
 				if _, ok := imageCache.Load(vKey); !ok && !seenKeys[vKey] {
 					seenKeys[vKey] = true
@@ -150,17 +152,6 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 						url: url, cacheKey: vKey,
 						prompt: visionPromptDescribe, maxTokens: 1000, model: visionModel,
 					})
-				}
-				// Also run OCR if an OCR model is configured.
-				if ocrModel != nil {
-					oKey := hash + ":o"
-					if _, ok := imageCache.Load(oKey); !ok && !seenKeys[oKey] {
-						seenKeys[oKey] = true
-						jobs = append(jobs, imageJob{
-							url: url, cacheKey: oKey,
-							prompt: ocrModelPrompt, maxTokens: 2000, model: ocrModel,
-						})
-					}
 				}
 			}
 		}
@@ -303,16 +294,10 @@ func normalizeContentParts(msgMap map[string]any) []any {
 	}
 }
 
-// minOCRTextLength is the minimum character count for OCR output to be
-// considered meaningful. Below this, the OCR section is omitted (the image
-// likely has no text content).
-const minOCRTextLength = 20
-
-// buildImageReplacement constructs the replacement text for a single image,
-// combining vision description and/or OCR text extraction results.
+// buildImageReplacement constructs the replacement text for a single image.
 //
 // For tool-role images (PDF pages, screenshots): OCR text only.
-// For user-role images: vision description + OCR text (if meaningful).
+// For user-role images: vision description only.
 func buildImageReplacement(hash string, isToolRole bool, cache *sync.Map, jobDescs map[string]string) string {
 	// Helper to look up a result from cache or fresh job results.
 	lookup := func(cacheKey string) (string, bool) {
@@ -325,36 +310,19 @@ func buildImageReplacement(hash string, isToolRole bool, cache *sync.Map, jobDes
 		return "", false
 	}
 
-	vKey := hash + ":v"
-	oKey := hash + ":o"
-
 	if isToolRole {
 		// Tool-role: OCR only.
-		if ocrText, ok := lookup(oKey); ok {
+		if ocrText, ok := lookup(hash + ":o"); ok {
 			return fmt.Sprintf("[Page text: %s]", ocrText)
 		}
 		return "[Image could not be processed]"
 	}
 
-	// User-role: vision description + optional OCR.
-	visionDesc, hasVision := lookup(vKey)
-	ocrText, hasOCR := lookup(oKey)
-
-	// Skip OCR section if too short (image has no meaningful text).
-	if hasOCR && len(strings.TrimSpace(ocrText)) < minOCRTextLength {
-		hasOCR = false
-	}
-
-	switch {
-	case hasVision && hasOCR:
-		return fmt.Sprintf("[# Image Description:\n%s\n\n# Image Text Content:\n%s]", visionDesc, ocrText)
-	case hasVision:
+	// User-role: vision description only.
+	if visionDesc, ok := lookup(hash + ":v"); ok {
 		return fmt.Sprintf("[Image description: %s]", visionDesc)
-	case hasOCR:
-		return fmt.Sprintf("[Image text content: %s]", ocrText)
-	default:
-		return "[Image could not be processed]"
 	}
+	return "[Image could not be processed]"
 }
 
 // countImageURLParts counts image_url parts in a content array.
