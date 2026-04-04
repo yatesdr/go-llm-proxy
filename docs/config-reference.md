@@ -111,7 +111,7 @@ Some coding agents (Claude Code, Codex) expect server-side features from the API
 | Web search results | Emulated | `server_tool_use` + `web_search_tool_result` blocks emitted for Claude Code UI |
 | Extended thinking | Supported | Reasoning tokens translated to thinking blocks |
 | Prompt caching | Passthrough | `cache_control` fields forwarded to backends that support them; stripped otherwise |
-| Token counting endpoint | Planned | `countTokens` API endpoint for per-section token breakdowns |
+| Token counting endpoint | Not supported | Chat Completions backends have no equivalent; Claude Code falls back to local estimates |
 | Advisor tool | Not supported | Server-side reviewer model — requires Anthropic API |
 | Tool search / deferral | Not supported | `tool_reference` blocks — requires Anthropic API |
 | Files API | Not supported | File upload/download — requires Anthropic API |
