@@ -505,7 +505,7 @@ harnessEl.addEventListener("change", function(){
     hint.textContent = "Qwen Code uses client-side search. Enter your Tavily key to enable web search.";
     hint.style.color = "var(--muted)";
   } else if(HAS_WEB_SEARCH){
-    hint.textContent = "Proxy already has web search configured. Client-side Tavily MCP is optional.";
+    hint.textContent = "Proxy has web search configured. Enter a key here to use your own instead (reduces proxy load).";
     hint.style.color = "var(--green)";
   } else {
     hint.textContent = "";
@@ -743,7 +743,8 @@ function genClaudeCode(apiKey, tavily){
   };
 
   var fn = "settings.json";
-  // Only add client-side Tavily MCP if proxy doesn't have search
+  // Only add client-side Tavily MCP if proxy doesn't handle search.
+  // When proxy has search, it intercepts the tool server-side — client MCP would conflict.
   var useTavily = tavily && !HAS_WEB_SEARCH;
   var tavilyJSON = useTavily ? JSON.stringify({type:"http",url:"https://mcp.tavily.com/mcp",headers:{"Authorization":"Bearer "+tavily}}) : "";
   var tavilyStep = useTavily
@@ -785,7 +786,7 @@ function genClaudeCodeCommand(apiKey, tavily){
   var vars = claudeEnvVars(apiKey);
   var settingsJSON = JSON.stringify({attribution:{commit:"",pr:""}});
 
-  // Only add client-side Tavily MCP if proxy doesn't have search
+  // Only add client-side Tavily MCP if proxy doesn't handle search
   var useTavily = tavily && !HAS_WEB_SEARCH;
   var tavilyMcpJSON = useTavily ? JSON.stringify({type:"http",url:"https://mcp.tavily.com/mcp",headers:{"Authorization":"Bearer "+tavily}}) : "";
 
@@ -868,7 +869,8 @@ function codexToml(modelId, effort, apiKey, tavily){
   var toml = 'model = "' + modelId + '"\n' +
     'model_provider = "go-llm-proxy"\n' +
     'model_reasoning_effort = "' + effort + '"\n';
-  // Only disable web_search when proxy doesn't handle it
+  // Disable built-in web_search when proxy doesn't handle it (client MCP or no search).
+  // When proxy has search, leave it enabled so proxy-side search works.
   if(!HAS_WEB_SEARCH){
     toml += 'web_search = "disabled"\n';
   }
@@ -884,7 +886,7 @@ function codexToml(modelId, effort, apiKey, tavily){
     '# Or use an environment variable instead:\n' +
     '# env_key = "OPENAI_API_KEY"\n';
 
-  // Only add client-side Tavily MCP if proxy doesn't have search
+  // Only add client-side Tavily MCP if proxy doesn't handle search
   if(tavily && !HAS_WEB_SEARCH){
     toml += '\n[mcp_servers.tavily]\n' +
       'url = "https://mcp.tavily.com/mcp"\n' +
@@ -906,20 +908,20 @@ function genCodex(apiKey, tavily){
   var unixSteps = [
     'Create the config directory:<br><code>mkdir -p ~/.codex</code>',
     'Save the generated file as:<br><code>~/.codex/config.toml</code>',
-    'The API key' + (tavily && !HAS_WEB_SEARCH ? 's are' : ' is') + ' embedded in the config. To use environment variables instead, ' +
+    'The API key' + (tavily ? 's are' : ' is') + ' embedded in the config. To use environment variables instead, ' +
       'edit the file and swap the commented lines, then set:<br>' +
       '<code>export OPENAI_API_KEY=' + esc(apiKey) + '</code>' +
-      (tavily && !HAS_WEB_SEARCH ? '<br><code>export TAVILY_API_KEY=' + esc(tavily) + '</code>' : ''),
+      (tavily ? '<br><code>export TAVILY_API_KEY=' + esc(tavily) + '</code>' : ''),
     'Restart Codex for changes to take effect.' + searchNote
   ];
 
   var winSteps = [
     'Create the config directory:<br><code>mkdir %USERPROFILE%\\.codex</code>',
     'Save the generated file as:<br><code>%USERPROFILE%\\.codex\\config.toml</code>',
-    'The API key' + (tavily && !HAS_WEB_SEARCH ? 's are' : ' is') + ' embedded in the config. To use environment variables instead, ' +
+    'The API key' + (tavily ? 's are' : ' is') + ' embedded in the config. To use environment variables instead, ' +
       'edit the file and swap the commented lines, then set:<br>' +
       '<code>setx OPENAI_API_KEY ' + esc(apiKey) + '</code>' +
-      (tavily && !HAS_WEB_SEARCH ? '<br><code>setx TAVILY_API_KEY ' + esc(tavily) + '</code>' : ''),
+      (tavily ? '<br><code>setx TAVILY_API_KEY ' + esc(tavily) + '</code>' : ''),
     'Restart Codex for changes to take effect.' + searchNote
   ];
 
