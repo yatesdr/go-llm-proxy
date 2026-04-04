@@ -327,4 +327,4 @@ Codex uses a single model. Set `responses_mode: translate` for any vLLM backend 
 | **Vision** | [Qwen3-VL-8B](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct) | 8B | Best quality/speed balance for image description. Strong on charts, screenshots, diagrams. |
 | **OCR** | [PaddleOCR-VL-1.5](https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.5) | 0.9B | Purpose-built for document parsing. 94.5% accuracy, 109 languages, minimal VRAM. |
 | **OCR (alt)** | [DeepSeek-OCR 2](https://huggingface.co/deepseek-ai/DeepSeek-OCR) | 3B | Higher accuracy (97%), layout analysis, table extraction. ~2,500 tok/s on A100. |
-| **Vision (alt)** | [Qwen3-VL-2B](https://huggingface.co/Qwen/Qwen3-VL-2B) | 2B | Lighter alternative if GPU memory is tight. Good OCR (32 languages). |
+| **Vision (alt)** | [Qwen3-VL-2B](https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct) | 2B | Lighter alternative if GPU memory is tight. Good OCR (32 languages). |

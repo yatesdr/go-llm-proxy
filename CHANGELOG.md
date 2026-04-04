@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.4.0
+
+### Added
+- **Full Codex CLI compatibility** — all pipeline features (web search, image description, PDF OCR) tested and working end-to-end with Codex
+  - Recognize `web_search` tool type (current Codex) in addition to legacy `web_search_preview`
+  - Emit proper `reasoning` output items with streaming `reasoning_summary_text.delta` events for Codex's thinking display
+  - Emit `web_search_call` output items for Codex's native search UI
+  - Handle structured `function_call_output` (arrays/objects) from Codex's `view_image` tool — was silently dropping image data
+  - Handle `mcp_tool_call_output` and `mcp_list_tools` item types in Responses API input translation
+  - Enrich usage format with `input_tokens_details` / `output_tokens_details` fields
+- **Dual vision + OCR image pipeline**
+  - User-attached images: vision model description only (no OCR — dedicated OCR models hallucinate on photos)
+  - Tool output images (Codex `view_image`, screenshots): dedicated OCR model with `OCR:` prompt
+  - Scanned PDFs (Claude Code `processPDFs` fallback): OCR model preferred over vision model, ~17x faster with PaddleOCR-VL
+  - Separate cache keys per mode (`:v` for vision, `:o` for OCR)
+- **Brave Search API support** — auto-detected from `web_search_key` prefix (`BSA` → Brave, `tvly-` → Tavily). No new config fields needed
+- **Proxy MCP search for Qwen Code** — config generator adds proxy `/mcp/sse` endpoint to Qwen Code's `mcpServers`, enabling Brave Search support via proxy
+- **Pipeline documentation** (`docs/pipeline.md`) — comprehensive reference for image, PDF, and web search behavior per coding client
+- **Recommended model recipes** in quick start and config-reference — Qwen3-VL-8B for vision, PaddleOCR-VL-1.5 for OCR, Tavily/Brave for search
+
+### Changed
+- Landing page diagram: split local/cloud backends, add Web Search service, add cloud API passthrough example
+- Compatibility matrix: distinguish proxy-side vs client-side features, show OCR model usage, all four clients support web search
+- Config generator: per-client search key hints, Qwen Code proxy MCP integration, OpenCode prioritizes client-side Tavily over proxy MCP when key entered
+- Renamed "Qwen Coder" → "Qwen Code" throughout
+
+### Fixed
+- **Responses API `[]map[string]any` content type mismatch** — vision pipeline failed to detect images from Responses API translation path. Added `normalizeContentParts()` to handle both `[]any` and `[]map[string]any`
+- **Structured tool output silently dropped** — `inputItem.Output` was typed as `string` but Codex `view_image` returns `[{type: input_image, ...}]`. Changed to `json.RawMessage` with `translateToolOutput()` for arrays/objects
+- **OCR not triggering for Codex PDFs** — heuristic required 3+ images per tool message; Codex sends 1 per `view_image`. Changed to trigger OCR for all tool-role images
+- **Config generator syntax error** — stray closing brace in OpenCode MCP config broke the page
+
 ## v0.3.0
 
 ### Added
