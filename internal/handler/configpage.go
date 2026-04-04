@@ -512,10 +512,10 @@ harnessEl.addEventListener("change", function(){
     label.innerHTML = 'Tavily API Key <span style="font-weight:400;text-transform:none">(optional &mdash; client-side web search)</span>';
     input.placeholder = "tvly-...";
     if(HAS_WEB_SEARCH){
-      hint.textContent = "Proxy already handles web search (Tavily or Brave). Enter a Tavily key here for client-side search instead.";
+      hint.textContent = "Proxy has web search configured. Enter a Tavily key to also enable client-side search with your own key.";
       hint.style.color = "var(--green)";
     } else {
-      hint.textContent = "Enter a Tavily key for client-side web search, or configure web_search_key on the proxy (supports Tavily and Brave).";
+      hint.textContent = "Enter a Tavily key for client-side search, or configure web_search_key on the proxy (supports Tavily and Brave).";
       hint.style.color = "var(--muted)";
     }
   }
@@ -752,9 +752,8 @@ function genClaudeCode(apiKey, tavily){
   };
 
   var fn = "settings.json";
-  // Only add client-side Tavily MCP if proxy doesn't handle search.
-  // When proxy has search, it intercepts the tool server-side — client MCP would conflict.
-  var useTavily = tavily && !HAS_WEB_SEARCH;
+  // Add client-side Tavily MCP when user enters a key.
+  var useTavily = !!tavily;
   var tavilyJSON = useTavily ? JSON.stringify({type:"http",url:"https://mcp.tavily.com/mcp",headers:{"Authorization":"Bearer "+tavily}}) : "";
   var tavilyStep = useTavily
     ? 'Install Tavily web search:<br><code>claude mcp remove tavily -s user 2&gt;/dev/null; claude mcp add-json tavily \'' + esc(tavilyJSON) + '\' -s user</code>'
@@ -795,8 +794,8 @@ function genClaudeCodeCommand(apiKey, tavily){
   var vars = claudeEnvVars(apiKey);
   var settingsJSON = JSON.stringify({attribution:{commit:"",pr:""}});
 
-  // Only add client-side Tavily MCP if proxy doesn't handle search
-  var useTavily = tavily && !HAS_WEB_SEARCH;
+  // Add client-side Tavily MCP when user enters a key.
+  var useTavily = !!tavily;
   var tavilyMcpJSON = useTavily ? JSON.stringify({type:"http",url:"https://mcp.tavily.com/mcp",headers:{"Authorization":"Bearer "+tavily}}) : "";
 
   var shLines = ["#!/usr/bin/env bash", "# go-llm-proxy: Claude Code start script", ""];
@@ -895,8 +894,8 @@ function codexToml(modelId, effort, apiKey, tavily){
     '# Or use an environment variable instead:\n' +
     '# env_key = "OPENAI_API_KEY"\n';
 
-  // Only add client-side Tavily MCP if proxy doesn't handle search
-  if(tavily && !HAS_WEB_SEARCH){
+  // Add client-side Tavily MCP when user enters a key.
+  if(tavily){
     toml += '\n[mcp_servers.tavily]\n' +
       'url = "https://mcp.tavily.com/mcp"\n' +
       '# Tavily key embedded directly:\n' +
@@ -948,7 +947,7 @@ function genCodex(apiKey, tavily){
 function genCodexCommand(apiKey, tavily){
   var modelId = document.getElementById("codexModel").value;
   var effort = document.getElementById("codexEffort").value;
-  var useTavily = tavily && !HAS_WEB_SEARCH;
+  var useTavily = !!tavily;
 
   var ctxWindow = getCodexCtxWindow();
   var cfgFlags = [
