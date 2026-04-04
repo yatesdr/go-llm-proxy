@@ -431,6 +431,22 @@ select:focus,input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 
     </div>
   </div>
 
+  <div class="card" style="margin-top:24px">
+    <h2>Web Search</h2>
+    <p style="margin-bottom:10px"><b>Claude Code</b> and <b>Codex</b> get web search automatically when the proxy has a search key configured (<a href="https://tavily.com">Tavily</a> or <a href="https://brave.com/search/api/">Brave Search</a>). No client-side setup needed.</p>
+    <p style="margin-bottom:10px"><b>OpenCode</b> connects to the proxy's MCP endpoint for search &mdash; this is included in the generated config automatically.</p>
+    <p style="margin-bottom:10px"><b>Qwen Code</b> handles search client-side. Enter a Tavily key above to include search in the generated config. Qwen Code also supports Google Custom Search and DashScope:</p>
+    <pre style="background:var(--slate-bg);color:var(--slate-text);padding:14px;border-radius:6px;font-size:.82rem;overflow-x:auto;line-height:1.5">"webSearch": {
+  "provider": [
+    { "type": "tavily", "apiKey": "tvly-..." },
+    { "type": "google", "apiKey": "...", "searchEngineId": "..." },
+    { "type": "dashscope" }
+  ],
+  "default": "tavily"
+}</pre>
+    <p class="hint" style="margin-top:8px">DashScope is available automatically for Qwen OAuth users. Google requires a <a href="https://developers.google.com/custom-search/v1/overview">Custom Search API</a> key and engine ID.</p>
+  </div>
+
 </div>
 
 <script>
