@@ -15,6 +15,7 @@ import (
 	"go-llm-proxy/internal/api"
 	"go-llm-proxy/internal/config"
 	"go-llm-proxy/internal/httputil"
+	"go-llm-proxy/internal/pipeline"
 )
 
 // toolCallState tracks an in-progress tool call during streaming.
@@ -50,6 +51,11 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 	seq := 0
 	outputIdx := 0
 	upstreamModel := req.Model
+
+	// Reasoning accumulation state.
+	reasoningID := ""
+	var reasoningBuf strings.Builder
+	reasoningStarted := false
 
 	// Message accumulation state.
 	msgID := ""
@@ -218,6 +224,30 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 		}
 	}
 
+	finishReasoning := func() {
+		if !reasoningStarted {
+			return
+		}
+		text := reasoningBuf.String()
+		item := map[string]any{
+			"id":   reasoningID,
+			"type": "reasoning",
+			"summary": []any{map[string]any{
+				"type": "summary_text",
+				"text": text,
+			}},
+		}
+		emit("response.output_item.done", map[string]any{
+			"item":            item,
+			"output_index":    outputIdx,
+			"sequence_number": seq,
+		})
+		seq++
+		outputItems = append(outputItems, item)
+		outputIdx++
+		reasoningStarted = false
+	}
+
 	// Read and translate the upstream SSE stream.
 	// Usage is extracted from the parsed chunks, so no response buffering is needed.
 	var responseBytes int64
@@ -276,18 +306,46 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 		// reasoning item at the same output_index. Instead, startMsg() is
 		// called lazily when the first content delta arrives.
 
-		// Reasoning delta — send SSE comments to keep the connection alive
-		// during the model's thinking phase. Full reasoning events confuse
-		// some Codex versions, so we use protocol-level keepalives instead.
+		// Reasoning delta — emit as a Responses API reasoning output item.
+		// This gives Codex its native reasoning/thinking display.
 		if delta.Reasoning != nil && *delta.Reasoning != "" {
-			// SSE comment: keeps the TCP connection alive without producing
-			// a client-visible event. Codex (and all SSE clients) ignore these.
-			fmt.Fprintf(w, ": reasoning\n\n")
-			flusher.Flush()
+			if !reasoningStarted {
+				reasoningID = api.RandomID("rs_")
+				emit("response.output_item.added", map[string]any{
+					"item": map[string]any{
+						"id":      reasoningID,
+						"type":    "reasoning",
+						"summary": []any{},
+					},
+					"output_index":    outputIdx,
+					"sequence_number": seq,
+				})
+				seq++
+				emit("response.reasoning_summary_part.added", map[string]any{
+					"item_id":         reasoningID,
+					"output_index":    outputIdx,
+					"summary_index":   0,
+					"sequence_number": seq,
+				})
+				seq++
+				reasoningStarted = true
+			}
+			reasoningBuf.WriteString(*delta.Reasoning)
+			emit("response.reasoning_summary_text.delta", map[string]any{
+				"delta":           *delta.Reasoning,
+				"item_id":         reasoningID,
+				"output_index":    outputIdx,
+				"summary_index":   0,
+				"sequence_number": seq,
+			})
+			seq++
 		}
 
 		// Content delta.
 		if delta.Content != nil && *delta.Content != "" {
+			if reasoningStarted {
+				finishReasoning()
+			}
 			if !msgStarted {
 				startMsg()
 			}
@@ -308,7 +366,10 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 		// Tool call deltas.
 		for _, tc := range delta.ToolCalls {
 			if tc.ID != "" {
-				// New tool call — finish the message first if open.
+				// New tool call — finish reasoning and message first if open.
+				if reasoningStarted {
+					finishReasoning()
+				}
 				if msgStarted {
 					finishMsg()
 				}
@@ -415,9 +476,10 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 			var newChatReq map[string]any
 			var searchErr error
 
+			var searchResults []pipeline.SearchCallResult
 			go func() {
 				defer close(searchDone)
-				newChatReq, _, searchErr = h.pipeline.ExecuteSearchAndResend(
+				newChatReq, searchResults, searchErr = h.pipeline.ExecuteSearchAndResend(
 					ctx, chatReq, model, searchCalls, textBuf.String())
 			}()
 
@@ -439,6 +501,33 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 			if searchErr != nil {
 				slog.Warn("streaming search execution failed", "error", searchErr)
 			} else if newChatReq != nil {
+				// Emit web_search_call output items so Codex shows native search UI.
+				for _, sr := range searchResults {
+					if sr.Error != "" {
+						continue
+					}
+					wsID := api.RandomID("ws_")
+					wsItem := map[string]any{
+						"id":     wsID,
+						"type":   "web_search_call",
+						"status": "completed",
+					}
+					if sr.Query != "" {
+						wsItem["action"] = map[string]any{
+							"type":  "search",
+							"query": sr.Query,
+						}
+					}
+					emit("response.output_item.done", map[string]any{
+						"item":            wsItem,
+						"output_index":    outputIdxBeforeTools,
+						"sequence_number": seq,
+					})
+					seq++
+					outputItems = append(outputItems, wsItem)
+					outputIdxBeforeTools++
+				}
+
 				// Reset state for re-stream.
 				outputIdx = outputIdxBeforeTools
 				toolCalls = nil
@@ -474,6 +563,9 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 	}
 
 	// Finalize pending items.
+	if reasoningStarted {
+		finishReasoning()
+	}
 	if msgStarted {
 		finishMsg()
 	}
@@ -507,9 +599,11 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 		var usageObj any
 		if usageData != nil {
 			usageObj = map[string]any{
-				"input_tokens":  usageData.PromptTokens,
-				"output_tokens": usageData.CompletionTokens,
-				"total_tokens":  usageData.TotalTokens,
+				"input_tokens":          usageData.PromptTokens,
+				"input_tokens_details":  nil,
+				"output_tokens":         usageData.CompletionTokens,
+				"output_tokens_details": nil,
+				"total_tokens":          usageData.TotalTokens,
 			}
 		}
 

@@ -663,6 +663,9 @@ func TestIsSearchServerTool(t *testing.T) {
 	if !isSearchServerTool("web_search_preview") {
 		t.Fatal("expected true for web_search_preview")
 	}
+	if !isSearchServerTool("web_search") {
+		t.Fatal("expected true for web_search (Codex current)")
+	}
 	if isSearchServerTool("code_execution") {
 		t.Fatal("expected false for code_execution")
 	}

@@ -44,7 +44,7 @@ type inputItem struct {
 	Name      string          `json:"name"`
 	Arguments string          `json:"arguments"` // function_call
 	Input     string          `json:"input"`     // custom_tool_call
-	Output    string          `json:"output"`    // *_output items
+	Output    json.RawMessage `json:"output"`    // *_output items (string, array, or object)
 	Action    json.RawMessage `json:"action"`    // local_shell_call
 	Status    string          `json:"status"`
 }
@@ -128,16 +128,18 @@ func translateInput(input json.RawMessage, instructions string) ([]map[string]an
 				})
 			}
 
-		case item.Type == "function_call_output" || item.Type == "local_shell_call_output" || item.Type == "custom_tool_call_output":
+		case item.Type == "function_call_output" || item.Type == "local_shell_call_output" ||
+			item.Type == "custom_tool_call_output" || item.Type == "mcp_tool_call_output":
 			messages = append(messages, map[string]any{
 				"role":         "tool",
 				"tool_call_id": item.CallID,
-				"content":      item.Output,
+				"content":      translateToolOutput(item.Output),
 			})
 
 		case item.Type == "reasoning" || item.Type == "compaction" ||
 			item.Type == "tool_search_call" || item.Type == "tool_search_output" ||
-			item.Type == "web_search_call" || item.Type == "image_generation_call":
+			item.Type == "web_search_call" || item.Type == "image_generation_call" ||
+			item.Type == "mcp_list_tools":
 			continue // no Chat Completions equivalent
 
 		case item.Role != "":
@@ -233,6 +235,98 @@ func translateContentForChat(content json.RawMessage, role string) any {
 		return translated
 	}
 	return ""
+}
+
+// --- Tool output translation ---
+
+// translateToolOutput converts a Responses API tool output value into Chat Completions
+// content. Handles three formats:
+//   - string: passed through as-is (common case)
+//   - array: content items like [{"type":"input_image","image_url":"data:..."}] — translated
+//     to Chat Completions multimodal content parts
+//   - object: structured output like {"content":"text","success":true} or
+//     {"content":[...],"success":true} — content field extracted and translated
+func translateToolOutput(raw json.RawMessage) any {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+
+	// Try string first (most common).
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+
+	// Try array of content items.
+	var arr []map[string]json.RawMessage
+	if json.Unmarshal(raw, &arr) == nil {
+		return translateOutputContentItems(arr)
+	}
+
+	// Try object with content + success fields.
+	var obj struct {
+		Content json.RawMessage `json:"content"`
+		Success *bool           `json:"success"`
+	}
+	if json.Unmarshal(raw, &obj) == nil && len(obj.Content) > 0 {
+		// Content can be a string or an array.
+		var contentStr string
+		if json.Unmarshal(obj.Content, &contentStr) == nil {
+			return contentStr
+		}
+		var contentArr []map[string]json.RawMessage
+		if json.Unmarshal(obj.Content, &contentArr) == nil {
+			return translateOutputContentItems(contentArr)
+		}
+	}
+
+	// Fallback: pass raw JSON as string.
+	return string(raw)
+}
+
+// translateOutputContentItems converts Responses API content items (input_text, input_image)
+// to Chat Completions format (text, image_url).
+func translateOutputContentItems(items []map[string]json.RawMessage) []map[string]any {
+	var parts []map[string]any
+	for _, item := range items {
+		var partType string
+		json.Unmarshal(item["type"], &partType)
+
+		switch partType {
+		case "input_text":
+			var text string
+			json.Unmarshal(item["text"], &text)
+			parts = append(parts, map[string]any{
+				"type": "text",
+				"text": text,
+			})
+		case "input_image":
+			var url string
+			json.Unmarshal(item["image_url"], &url)
+			part := map[string]any{
+				"type":      "image_url",
+				"image_url": map[string]any{"url": url},
+			}
+			if detail, ok := item["detail"]; ok {
+				var d string
+				json.Unmarshal(detail, &d)
+				if d != "" {
+					part["image_url"].(map[string]any)["detail"] = d
+				}
+			}
+			parts = append(parts, part)
+		default:
+			// Pass through unknown types as-is.
+			var part map[string]any
+			raw, _ := json.Marshal(item)
+			json.Unmarshal(raw, &part)
+			parts = append(parts, part)
+		}
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	return parts
 }
 
 // --- Tool translation ---

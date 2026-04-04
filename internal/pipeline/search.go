@@ -44,7 +44,8 @@ func newWebSearchToolDef() map[string]any {
 func isSearchServerTool(toolType string) bool {
 	switch toolType {
 	case "web_search_20250305", // Claude Code (Anthropic)
-		"web_search_preview",     // Codex (OpenAI Responses API)
+		"web_search",                    // Codex (current)
+		"web_search_preview",            // Codex (legacy)
 		"web_search_preview_2025_03_11": // Codex alternate
 		return true
 	}

@@ -82,15 +82,18 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 		if !ok {
 			continue
 		}
-		content, ok := msgMap["content"].([]any)
-		if !ok {
+		content := normalizeContentParts(msgMap)
+		if content == nil {
 			continue
 		}
 
-		// Detect PDF page images: tool role with many images.
+		// Detect document/OCR images: images in tool messages are typically
+		// scanned documents, PDF pages, or screenshots — use OCR model with
+		// text extraction prompt for better results. This covers both:
+		// - Claude Code's proxy-side PDF pipeline (many images in one tool msg)
+		// - Codex's view_image tool output (one image per tool msg)
 		role, _ := msgMap["role"].(string)
-		imgCount := countImageURLParts(content)
-		isPDFPages := role == "tool" && imgCount >= 3
+		isPDFPages := role == "tool"
 
 		for _, part := range content {
 			partMap, ok := part.(map[string]any)
@@ -185,15 +188,14 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 		if !ok {
 			continue
 		}
-		content, ok := msgMap["content"].([]any)
-		if !ok {
+		content := normalizeContentParts(msgMap)
+		if content == nil {
 			continue
 		}
 
 		// Re-detect OCR mode for labeling.
 		role, _ := msgMap["role"].(string)
-		imgCount := countImageURLParts(content)
-		isPDFPages := role == "tool" && imgCount >= 3
+		isPDFPages := role == "tool"
 
 		msgModified := false
 		newContent := make([]any, 0, len(content))
@@ -273,6 +275,26 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 		chatReq["messages"] = messages
 	}
 	return chatReq, nil
+}
+
+// normalizeContentParts converts a message's content field to []any, handling
+// both []any (from messages_translate) and []map[string]any (from responses_translate).
+// Returns nil if content is not an array type. If the content was []map[string]any,
+// it is also updated in the message map for downstream consistency.
+func normalizeContentParts(msgMap map[string]any) []any {
+	switch c := msgMap["content"].(type) {
+	case []any:
+		return c
+	case []map[string]any:
+		parts := make([]any, len(c))
+		for i, p := range c {
+			parts[i] = p
+		}
+		msgMap["content"] = parts
+		return parts
+	default:
+		return nil
+	}
 }
 
 // countImageURLParts counts image_url parts in a content array.
@@ -426,8 +448,8 @@ func hasImageURLParts(msg any) bool {
 	if !ok {
 		return false
 	}
-	parts, ok := m["content"].([]any)
-	if !ok {
+	parts := normalizeContentParts(m)
+	if parts == nil {
 		return false
 	}
 	for _, part := range parts {

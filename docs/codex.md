@@ -218,10 +218,12 @@ These limitations apply only to **translated backends** (Chat Completions). Nati
 
 The translation layer targets **Codex CLI and coding-agent workflows**: text generation, function calling, and tool use. It is not a spec-complete generic Responses API adapter. Specifically:
 
-- **Non-function tools are converted or dropped.** `web_search_preview` is converted to a proxy-side function tool when `web_search_key` is configured in the `processors` block (the proxy executes Tavily searches transparently). Other server-side tools (`code_interpreter`, `file_search`) are dropped since Chat Completions backends cannot execute them.
-- **Some input item types are dropped.** `reasoning`, `compaction`, `tool_search_call`, `web_search_call`, and `image_generation_call` items in conversation history are skipped during translation since they have no Chat Completions equivalent. These are either Codex-internal state or server-side features. This does not affect normal conversation flow — Codex handles their absence gracefully.
+- **Non-function tools are converted or dropped.** `web_search_preview` is converted to a proxy-side function tool when `web_search_key` is configured in the `processors` block (the proxy executes Tavily searches transparently and emits `web_search_call` output items for Codex's native search UI). Other server-side tools (`code_interpreter`, `file_search`) are dropped since Chat Completions backends cannot execute them.
+- **Reasoning is fully supported.** Backend reasoning tokens (`delta.reasoning` in Chat Completions) are translated to Responses API `reasoning` output items with streaming `reasoning_summary_text.delta` events, giving Codex its native thinking display.
+- **Compaction is fully supported.** The proxy's `/v1/responses/compact` endpoint uses a summarization fallback for Chat Completions backends — not protocol-equivalent to OpenAI's encrypted compaction, but functionally equivalent for maintaining conversation context.
+- **All tool call output types are supported.** `function_call_output`, `local_shell_call_output`, `custom_tool_call_output`, and `mcp_tool_call_output` are all translated to Chat Completions `tool` messages.
+- **Some input item types are dropped.** `compaction`, `tool_search_call`, `tool_search_output`, `web_search_call`, `image_generation_call`, and `mcp_list_tools` items from conversation history are skipped during translation since they have no Chat Completions equivalent. These only appear in history from previous native OpenAI sessions — the proxy never produces them, so this is a non-issue in practice.
 - **Assistant content is simplified.** Structured content arrays on assistant messages are reduced to concatenated text from `output_text` parts. Other content types (e.g., images from `image_generation_call`) are not preserved through translation.
-- **Encrypted compaction is not available.** The summarization fallback preserves conversation context but is not protocol-equivalent to OpenAI's encrypted compaction.
 
 ### Backend compatibility
 

@@ -492,9 +492,11 @@ func (h *ResponsesHandler) handleNonStreaming(w http.ResponseWriter, resp *http.
 	var usageObj any
 	if chatResp.Usage != nil {
 		usageObj = map[string]any{
-			"input_tokens":  chatResp.Usage.PromptTokens,
-			"output_tokens": chatResp.Usage.CompletionTokens,
-			"total_tokens":  chatResp.Usage.TotalTokens,
+			"input_tokens":          chatResp.Usage.PromptTokens,
+			"input_tokens_details":  nil,
+			"output_tokens":         chatResp.Usage.CompletionTokens,
+			"output_tokens_details": nil,
+			"total_tokens":          chatResp.Usage.TotalTokens,
 		}
 	}
 
