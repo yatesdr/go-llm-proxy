@@ -267,9 +267,8 @@ func (p *Pipeline) describePDFViaVision(ctx context.Context, visionModel *config
 	b64 := base64.StdEncoding.EncodeToString(pdfBytes)
 	dataURL := "data:application/pdf;base64," + b64
 
-	// describeImage uses its own generic prompt. For PDFs the vision model
-	// will see the PDF pages as images and describe what it sees.
-	desc, err := p.describeImage(ctx, visionModel, dataURL)
+	// Use OCR prompt for PDF fallback — we want text extraction, not visual description.
+	desc, err := p.describeImage(ctx, visionModel, dataURL, visionPromptOCR, 2000)
 	if err != nil {
 		return "", fmt.Errorf("vision PDF fallback: %w", err)
 	}

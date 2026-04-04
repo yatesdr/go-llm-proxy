@@ -34,9 +34,20 @@ func ResetImageCache() {
 // a single request from triggering unbounded outbound HTTP calls.
 const maxImagesPerRequest = 10
 
+// maxConcurrentVision limits how many concurrent vision model calls are made.
+const maxConcurrentVision = 5
+
+// Vision prompts — the describe prompt is for general images; the OCR prompt is
+// for PDF page images where text extraction is more useful than visual description.
+const (
+	visionPromptDescribe = "Describe this image accurately and objectively. Include all visible subjects, objects, text, and relevant details. Be specific about what you observe."
+	visionPromptOCR      = "Extract all text from this page. Reproduce the text content verbatim, preserving structure (headings, paragraphs, lists, tables). Focus on text content, not visual layout."
+)
+
 // processImages detects image content in the translated Chat Completions request,
 // sends each image to the vision model for description, and replaces the image_url
-// parts with text descriptions.
+// parts with text descriptions. Images are processed concurrently for speed, and
+// PDF page images (detected via tool result heuristics) use an OCR-focused prompt.
 func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 	visionModel *config.ModelConfig) (map[string]any, error) {
 
@@ -55,7 +66,114 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 		return chatReq, nil
 	}
 
+	// --- First pass: collect all images that need vision processing. ---
+	type imageJob struct {
+		url     string
+		key     string
+		ocrMode bool
+	}
+	var jobs []imageJob
+	seenKeys := map[string]bool{}
+
 	imageCount := 0
+	for _, msg := range messages {
+		msgMap, ok := msg.(map[string]any)
+		if !ok {
+			continue
+		}
+		content, ok := msgMap["content"].([]any)
+		if !ok {
+			continue
+		}
+
+		// Detect PDF page images: tool role with many images.
+		role, _ := msgMap["role"].(string)
+		imgCount := countImageURLParts(content)
+		isPDFPages := role == "tool" && imgCount >= 3
+
+		for _, part := range content {
+			partMap, ok := part.(map[string]any)
+			if !ok || partMap["type"] != "image_url" {
+				continue
+			}
+
+			imageCount++
+			if imageCount > maxImagesPerRequest {
+				continue
+			}
+
+			url := extractImageURL(partMap)
+			if url == "" {
+				continue
+			}
+
+			key := hashImageURL(url)
+			if _, ok := imageCache.Load(key); ok {
+				continue // already cached
+			}
+			if seenKeys[key] {
+				continue // already queued
+			}
+			seenKeys[key] = true
+			jobs = append(jobs, imageJob{url: url, key: key, ocrMode: isPDFPages})
+		}
+	}
+
+	// --- Process all uncached images concurrently. ---
+	type jobResult struct {
+		desc string
+		err  error
+	}
+	results := make([]jobResult, len(jobs))
+
+	if len(jobs) > 0 {
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, maxConcurrentVision)
+
+		for i, job := range jobs {
+			wg.Add(1)
+			go func(idx int, j imageJob) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				prompt := visionPromptDescribe
+				maxTok := 1000
+				if j.ocrMode {
+					prompt = visionPromptOCR
+					maxTok = 2000
+				}
+				desc, err := p.describeImage(ctx, visionModel, j.url, prompt, maxTok)
+				results[idx] = jobResult{desc: desc, err: err}
+			}(i, job)
+		}
+		wg.Wait()
+
+		// Cache successful results.
+		for i, r := range results {
+			if r.err != nil {
+				slog.Warn("failed to describe image via vision model",
+					"vision_model", visionModel.Name, "error", r.err,
+					"ocr_mode", jobs[i].ocrMode)
+			} else {
+				imageCache.Store(jobs[i].key, r.desc)
+			}
+		}
+	}
+
+	// Build a lookup from cache key → result for jobs that just completed.
+	jobDescriptions := map[string]string{}
+	jobErrors := map[string]bool{}
+	for i, r := range results {
+		if r.err != nil {
+			jobErrors[jobs[i].key] = true
+		} else {
+			jobDescriptions[jobs[i].key] = r.desc
+		}
+	}
+
+	// --- Second pass: replace images with descriptions. ---
+	imageCount = 0
 	anyModified := false
 	for i, msg := range messages {
 		msgMap, ok := msg.(map[string]any)
@@ -66,6 +184,11 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 		if !ok {
 			continue
 		}
+
+		// Re-detect OCR mode for labeling.
+		role, _ := msgMap["role"].(string)
+		imgCount := countImageURLParts(content)
+		isPDFPages := role == "tool" && imgCount >= 3
 
 		msgModified := false
 		newContent := make([]any, 0, len(content))
@@ -90,7 +213,6 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 				continue
 			}
 
-			// Extract image URL for the vision model.
 			imageURL := extractImageURL(partMap)
 			if imageURL == "" {
 				newContent = append(newContent, map[string]any{
@@ -101,35 +223,37 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 				continue
 			}
 
-			// Check the cache first — avoid re-processing the same image
-			// on every conversational turn.
-			cacheKey := hashImageURL(imageURL)
-			if cached, ok := imageCache.Load(cacheKey); ok {
-				slog.Debug("image cache hit", "vision_model", visionModel.Name)
+			key := hashImageURL(imageURL)
+			label := "Image description"
+			if isPDFPages {
+				label = "Page text"
+			}
+
+			// Check cache (includes results from concurrent processing above).
+			if cached, ok := imageCache.Load(key); ok {
 				newContent = append(newContent, map[string]any{
 					"type": "text",
-					"text": fmt.Sprintf("[Image description: %s]", cached.(string)),
+					"text": fmt.Sprintf("[%s: %s]", label, cached.(string)),
 				})
 				msgModified = true
 				continue
 			}
 
-			// Send to vision model for description.
-			desc, err := p.describeImage(ctx, visionModel, imageURL)
-			if err != nil {
-				slog.Warn("failed to describe image via vision model",
-					"vision_model", visionModel.Name, "error", err)
+			// Check job results directly (in case cache store was missed).
+			if desc, ok := jobDescriptions[key]; ok {
 				newContent = append(newContent, map[string]any{
 					"type": "text",
-					"text": "[Image could not be processed]",
+					"text": fmt.Sprintf("[%s: %s]", label, desc),
 				})
-			} else {
-				imageCache.Store(cacheKey, desc)
-				newContent = append(newContent, map[string]any{
-					"type": "text",
-					"text": fmt.Sprintf("[Image description: %s]", desc),
-				})
+				msgModified = true
+				continue
 			}
+
+			// Job failed or image wasn't processed.
+			newContent = append(newContent, map[string]any{
+				"type": "text",
+				"text": "[Image could not be processed]",
+			})
 			msgModified = true
 		}
 
@@ -144,6 +268,18 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 		chatReq["messages"] = messages
 	}
 	return chatReq, nil
+}
+
+// countImageURLParts counts image_url parts in a content array.
+func countImageURLParts(content []any) int {
+	n := 0
+	for _, part := range content {
+		p, ok := part.(map[string]any)
+		if ok && p["type"] == "image_url" {
+			n++
+		}
+	}
+	return n
 }
 
 // hashImageURL returns a hex-encoded SHA-256 hash of the image URL (or data URL).
@@ -164,8 +300,10 @@ func extractImageURL(part map[string]any) string {
 }
 
 // describeImage sends an image to a vision-capable model and returns a text description.
-// It uses the Pipeline's HTTP client (which has redirect protection).
-func (p *Pipeline) describeImage(ctx context.Context, visionModel *config.ModelConfig, imageURL string) (string, error) {
+// The prompt and maxTokens control the style of description (general vs OCR).
+func (p *Pipeline) describeImage(ctx context.Context, visionModel *config.ModelConfig,
+	imageURL, prompt string, maxTokens int) (string, error) {
+
 	// Use a dedicated timeout instead of the caller's context. The caller's
 	// context is tied to the client connection, which may be closed (e.g. Claude
 	// Code retry) before the vision model finishes. A 60s timeout gives large
@@ -184,7 +322,7 @@ func (p *Pipeline) describeImage(ctx context.Context, visionModel *config.ModelC
 				"content": []any{
 					map[string]any{
 						"type": "text",
-						"text": "Describe this image accurately and objectively. Include all visible subjects, objects, text, and relevant details. Be specific about what you observe.",
+						"text": prompt,
 					},
 					map[string]any{
 						"type": "image_url",
@@ -195,7 +333,7 @@ func (p *Pipeline) describeImage(ctx context.Context, visionModel *config.ModelC
 				},
 			},
 		},
-		"max_completion_tokens": 1000,
+		"max_completion_tokens": maxTokens,
 		// Disable reasoning/thinking for vision utility calls — we want all
 		// tokens spent on the description, not internal chain-of-thought.
 		"chat_template_kwargs": map[string]any{"enable_thinking": false},

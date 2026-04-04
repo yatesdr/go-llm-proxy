@@ -3,10 +3,13 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"go-llm-proxy/internal/api"
 	"go-llm-proxy/internal/config"
@@ -323,6 +326,105 @@ func TestProcessImages_CacheHit(t *testing.T) {
 	text = msgs[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
 	if text != "[Image description: A German Shepherd dog sitting on grass]" {
 		t.Fatalf("unexpected cached description: %s", text)
+	}
+}
+
+func TestProcessImages_ConcurrentAndOCRMode(t *testing.T) {
+	ResetImageCache()
+
+	var mu sync.Mutex
+	var maxConcurrent, current int
+	prompts := map[string]bool{} // track prompts received
+
+	visionServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		current++
+		if current > maxConcurrent {
+			maxConcurrent = current
+		}
+		mu.Unlock()
+
+		// Parse the request to check the prompt.
+		var req map[string]any
+		json.NewDecoder(r.Body).Decode(&req)
+		msgs := req["messages"].([]any)
+		content := msgs[0].(map[string]any)["content"].([]any)
+		prompt := content[0].(map[string]any)["text"].(string)
+		mu.Lock()
+		prompts[prompt] = true
+		mu.Unlock()
+
+		// Simulate some work to verify concurrency.
+		time.Sleep(50 * time.Millisecond)
+
+		mu.Lock()
+		current--
+		mu.Unlock()
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{
+				map[string]any{
+					"message": map[string]any{"content": "Page text here"},
+				},
+			},
+		})
+	}))
+	defer visionServer.Close()
+
+	visionModel := &config.ModelConfig{
+		Name:    "vision",
+		Backend: visionServer.URL,
+		Model:   "vision",
+	}
+
+	// Build a tool message with 5 images (simulating PDF pages).
+	images := make([]any, 5)
+	for i := range images {
+		images[i] = map[string]any{
+			"type":      "image_url",
+			"image_url": map[string]any{"url": fmt.Sprintf("data:image/jpeg;base64,pdfpage%d", i)},
+		}
+	}
+
+	p := &Pipeline{client: http.DefaultClient}
+	chatReq := map[string]any{
+		"messages": []any{
+			map[string]any{
+				"role":    "tool",
+				"content": images,
+			},
+		},
+	}
+
+	result, err := p.processImages(context.Background(), chatReq, visionModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify all 5 images were processed.
+	msgs := result["messages"].([]any)
+	content := msgs[0].(map[string]any)["content"].([]any)
+	if len(content) != 5 {
+		t.Fatalf("expected 5 parts, got %d", len(content))
+	}
+
+	// Verify OCR prompt was used (tool role + 5 images = PDF page detection).
+	if !prompts[visionPromptOCR] {
+		t.Fatal("expected OCR prompt for PDF page images")
+	}
+	if prompts[visionPromptDescribe] {
+		t.Fatal("did not expect describe prompt for PDF page images")
+	}
+
+	// Verify labeling uses "Page text" not "Image description".
+	text := content[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text, "[Page text:") {
+		t.Fatalf("expected [Page text: ...] label, got: %s", text)
+	}
+
+	// Verify concurrency happened (at least 2 concurrent with 5 images).
+	if maxConcurrent < 2 {
+		t.Fatalf("expected concurrent processing, but max concurrent was %d", maxConcurrent)
 	}
 }
 
