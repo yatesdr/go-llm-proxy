@@ -483,9 +483,12 @@ harnessEl.addEventListener("change", function(){
   document.getElementById("outputFormatField").classList.toggle("hidden", h!=="claude-code" && h!=="codex");
   generateBtn.disabled = !h;
   document.getElementById("outputArea").classList.remove("visible");
-  // Update Tavily hint based on proxy-side search availability
+  // Update Tavily hint based on proxy-side search availability and selected harness
   var hint = document.getElementById("tavilyHint");
-  if(HAS_WEB_SEARCH){
+  if(h==="qwen-code"){
+    hint.textContent = "Qwen Code uses client-side search. Enter your Tavily key to enable web search.";
+    hint.style.color = "var(--muted)";
+  } else if(HAS_WEB_SEARCH){
     hint.textContent = "Proxy already has web search configured. Client-side Tavily MCP is optional.";
     hint.style.color = "var(--green)";
   } else {
@@ -1058,7 +1061,8 @@ function genQwenCode(apiKey, tavily){
 
   obj.env[envKeyName] = apiKey;
 
-  if(tavily && !HAS_WEB_SEARCH){
+  // Qwen Code always needs client-side search config — it doesn't use the proxy for search.
+  if(tavily){
     obj.webSearch = {
       provider: [{ type: "tavily", apiKey: tavily }],
       "default": "tavily"
