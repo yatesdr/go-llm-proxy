@@ -1,6 +1,6 @@
 # go-llm-proxy
 
-A single-binary LLM proxy that translates between API protocols, routes requests across backends, and runs upstream tools locally to enable commonly used features for local back-ends like llama-server and vllm.  Adds web search (via Tavily key), and routes vision requests to a specified vision model to give you full capability in your harness tooling.
+A single-binary LLM proxy targeting compatibility and native behaviros with common coding agents such as Claude Codex, Codex, OpenCode, Qwen, and Claw.    It proxies as you'd expect a proxy to for local models and upstream providers, ranslates between API protocols, routes requests across backends, and runs upstream tools locally to enable commonly used features for local back-ends like llama-server and vllm.  Adds web search (via Tavily key), and routes vision requests to a specified vision model to give you full capability in your harness tooling.
 
 ## Common Use Cases
 You need data security and self-host models or have upstream secure vendors (Azure, Bedrock, etc) that don't have all the expected supported tooling you're used to.   You want to use glm-5.1 for planning and MiniMax-M2.5 for implementation and agent work, with qwen-3.5 as your vision processor;  you want to connect using claude code and codex and have it 'just work'.  You upload a pdf and it works, you upload an image and that works too.  Call for a web search?  The proxy intercepts natively and sends it through tavily.
