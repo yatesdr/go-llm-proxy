@@ -364,11 +364,16 @@ models:
     backend: http://192.168.1.10:8000/v1
     responses_mode: translate   <span style="color:#8893a4"># recommended for vLLM backends with Codex</span>
 
-  <span style="color:#8893a4"># Cloud API passthrough — no translation needed</span>
+  <span style="color:#8893a4"># Cloud API — native Anthropic passthrough</span>
   - name: MiniMax-M2.5
     backend: https://api.minimax.io/anthropic
     api_key: your-minimax-key
     type: anthropic
+
+  <span style="color:#8893a4"># Cloud API — auto-translated from any protocol</span>
+  - name: glm-5.1
+    backend: https://api.z.ai/api/coding/paas/v4
+    api_key: your-zhipu-key
 
   <span style="color:#8893a4"># Vision model — describes images for text-only backends</span>
   - name: Qwen3-VL-8B
