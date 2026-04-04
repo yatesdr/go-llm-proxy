@@ -517,7 +517,7 @@ harnessEl.addEventListener("change", function(){
     label.innerHTML = 'Tavily API Key <span style="font-weight:400;text-transform:none">(optional &mdash; client-side web search)</span>';
     input.placeholder = "tvly-...";
     if(HAS_MCP){
-      hint.textContent = "Enter a Tavily key to use client-side search. Proxy search is included in the config but disabled by default.";
+      hint.textContent = "Proxy has web search configured. Optionally enter a Tavily key to use client-side search and disable proxy MCP search.";
       hint.style.color = "var(--green)";
     } else {
       hint.textContent = "Enter a Tavily key for client-side search, or configure web_search_key on the proxy (supports Tavily and Brave).";
