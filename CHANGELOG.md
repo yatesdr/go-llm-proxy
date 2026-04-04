@@ -123,7 +123,7 @@ All notable changes to this project will be documented in this file.
 - Usage dashboard `?days` parameter capped at 365 to prevent expensive queries
 - Responses API streaming handler enforces `maxResponseBodySize` (100 MB) matching the main proxy handler
 
-## v1.0.0
+## v0.1.0
 
 ### Added
 - OpenAI and Anthropic API passthrough proxy with model routing
