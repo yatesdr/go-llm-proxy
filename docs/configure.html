@@ -1,0 +1,1443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coding Assistant Config Generator — go-llm-proxy</title>
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#f4f6f9;--surface:#fff;--border:#d8dde5;
+  --text:#1b2033;--muted:#5c6377;
+  --blue:#1a56db;--blue-hover:#1648b8;--blue-light:#e8effc;
+  --green:#047857;--green-bg:#ecfdf5;
+  --amber:#b45309;--amber-bg:#fffbeb;
+  --indigo:#4338ca;--indigo-bg:#eef2ff;
+  --slate-bg:#0f172a;--slate-text:#e2e8f0;--slate-muted:#94a3b8;
+  --radius:8px;
+  --shadow:0 1px 3px rgba(0,0,0,.07),0 1px 2px rgba(0,0,0,.05);
+}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;min-height:100vh}
+
+/* ---- Header ---- */
+.header{padding:28px 0 24px;border-bottom:1px solid var(--border);margin-bottom:0}
+.header-inner{max-width:840px;margin:0 auto;padding:0 20px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px}
+.header-left{display:flex;align-items:center;gap:12px}
+.logo-icon{width:40px;height:40px;background:var(--blue);border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.header-text h1{font-size:1.35rem;font-weight:700;letter-spacing:-.02em;color:var(--text)}
+.header-text p{color:var(--muted);font-size:.85rem;margin-top:1px}
+.header-nav{display:flex;gap:20px}
+.header-nav a{color:var(--muted);text-decoration:none;font-size:.88rem;transition:color .2s}
+.header-nav a:hover{color:var(--blue)}
+
+/* ---- Layout ---- */
+.container{max-width:840px;margin:0 auto;padding:28px 20px 60px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px;margin-bottom:22px;box-shadow:var(--shadow)}
+.card h2{font-size:1.05rem;font-weight:600;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+
+/* ---- Form ---- */
+label{display:block;font-size:.78rem;font-weight:600;color:var(--muted);margin-bottom:3px;text-transform:uppercase;letter-spacing:.04em}
+select,input[type="text"],input[type="password"],input[type="number"]{width:100%;padding:9px 11px;font-size:.92rem;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);transition:border-color .15s;font-family:inherit}
+select:focus,input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(26,86,219,.1)}
+.field{margin-bottom:14px}
+.field-row{display:flex;gap:14px}
+.field-row .field{flex:1}
+.hint{font-size:.78rem;color:var(--muted);margin-top:2px}
+
+/* ---- Table ---- */
+.model-table{width:100%;border-collapse:collapse;font-size:.88rem;margin-top:6px}
+.model-table th{text-align:left;font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);padding:7px 10px;border-bottom:2px solid var(--border)}
+.model-table td{padding:9px 10px;border-bottom:1px solid var(--border);vertical-align:middle}
+.model-table tr:last-child td{border-bottom:none}
+.model-table tr:hover td{background:#f9fafb}
+
+/* ---- Badges ---- */
+.badge{display:inline-block;font-size:.72rem;font-weight:600;padding:2px 8px;border-radius:99px;white-space:nowrap}
+.badge-safe{background:var(--green-bg);color:var(--green)}
+.badge-warn{background:var(--amber-bg);color:var(--amber)}
+.badge-proto-oai{background:#f0fdf4;color:#166534}
+.badge-proto-ant{background:var(--indigo-bg);color:var(--indigo)}
+.badge-vision{background:#dbeafe;color:#1e40af}
+
+/* ---- Checkboxes ---- */
+.checkbox-group{margin-top:6px}
+.checkbox-group label{display:flex;align-items:center;gap:8px;font-size:.88rem;font-weight:400;text-transform:none;letter-spacing:0;color:var(--text);padding:5px 0;cursor:pointer}
+.checkbox-group input[type="checkbox"]{width:16px;height:16px;accent-color:var(--blue)}
+
+/* ---- Buttons ---- */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:10px 22px;font-size:.92rem;font-weight:600;border:none;border-radius:6px;cursor:pointer;transition:background .15s,transform .1s;font-family:inherit}
+.btn:active{transform:scale(.98)}
+.btn-primary{background:var(--blue);color:#fff}
+.btn-primary:hover{background:var(--blue-hover)}
+.btn-primary:disabled{opacity:.5;cursor:not-allowed}
+.btn-row{display:flex;gap:12px;align-items:center;margin-top:6px}
+
+/* ---- Preset buttons ---- */
+.preset-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;margin-bottom:14px}
+.preset-btn{display:inline-flex;align-items:center;padding:5px 14px;font-size:.82rem;font-weight:500;border:1px solid var(--border);border-radius:99px;cursor:pointer;background:#f8fafc;color:var(--text);transition:background .15s,border-color .15s,transform .1s;font-family:inherit}
+.preset-btn:hover{background:var(--blue-light);border-color:var(--blue);color:var(--blue)}
+.preset-btn:active{transform:scale(.96)}
+.preset-btn.flash{background:var(--green-bg);border-color:var(--green);color:var(--green)}
+
+/* ---- Add model form ---- */
+.add-model-row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
+.add-model-row .field{margin-bottom:0}
+.add-model-row .field.grow{flex:2}
+.add-model-row .field.shrink{flex:1}
+.btn-add{padding:9px 18px;font-size:.88rem;font-weight:600;border:none;border-radius:6px;cursor:pointer;background:var(--green);color:#fff;transition:background .15s;font-family:inherit}
+.btn-add:hover{background:#065f46}
+.btn-remove{padding:4px 10px;font-size:.78rem;font-weight:500;border:1px solid #fecaca;border-radius:5px;cursor:pointer;background:#fef2f2;color:#b91c1c;transition:background .15s;font-family:inherit}
+.btn-remove:hover{background:#fee2e2}
+
+/* ---- Empty state ---- */
+.empty-state{text-align:center;padding:24px;color:var(--muted);font-size:.9rem}
+
+/* ---- Output ---- */
+.output-area{display:none}
+.output-area.visible{display:block}
+.code-block{position:relative;background:var(--slate-bg);color:var(--slate-text);border-radius:6px;padding:16px 16px 16px 16px;font-family:"SF Mono","Cascadia Code","Fira Code",Consolas,monospace;font-size:.8rem;line-height:1.55;overflow-x:auto;white-space:pre;margin-top:8px}
+.copy-btn{position:absolute;top:8px;right:8px;background:rgba(255,255,255,.1);color:var(--slate-muted);border:none;border-radius:4px;padding:4px 10px;font-size:.72rem;cursor:pointer;font-family:inherit;transition:background .15s}
+.copy-btn:hover{background:rgba(255,255,255,.2);color:#e2e8f0}
+.file-path{display:inline-block;background:#f1f5f9;padding:2px 10px;border-radius:4px;font-family:"SF Mono",Consolas,monospace;font-size:.8rem;color:var(--text);margin:4px 0}
+
+/* ---- Tabs ---- */
+.tabs{display:flex;border-bottom:2px solid var(--border);margin-bottom:14px;gap:0}
+.tab{padding:7px 18px;font-size:.88rem;font-weight:500;color:var(--muted);cursor:pointer;border:none;background:none;border-bottom:2px solid transparent;margin-bottom:-2px;transition:color .15s,border-color .15s;font-family:inherit}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--blue);border-bottom-color:var(--blue);font-weight:600}
+.tab-content{display:none}
+.tab-content.active{display:block}
+.cmd-tab{display:none}
+.cmd-tab.active{display:block}
+
+/* ---- Install steps ---- */
+.install-steps{font-size:.88rem;line-height:1.7}
+.install-steps ol{padding-left:20px}
+.install-steps li{margin-bottom:8px}
+.install-steps code{background:#f1f5f9;padding:1px 6px;border-radius:3px;font-family:"SF Mono",Consolas,monospace;font-size:.8rem}
+
+.dl-btn{display:inline-flex;align-items:center;gap:5px;padding:6px 14px;font-size:.82rem;font-weight:600;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--blue);cursor:pointer;font-family:inherit;transition:background .15s;text-decoration:none;margin-top:8px;margin-right:6px}
+.dl-btn:hover{background:#f1f5f9}
+.dl-btn svg{width:14px;height:14px;fill:currentColor}
+.hidden{display:none}
+
+/* ---- Placeholder note ---- */
+.placeholder-note{background:var(--amber-bg);border:1px solid #fde68a;border-radius:6px;padding:10px 14px;font-size:.84rem;color:var(--amber);margin-top:12px;line-height:1.5}
+.placeholder-note code{background:rgba(180,83,9,.08);padding:1px 5px;border-radius:3px;font-family:"SF Mono",Consolas,monospace;font-size:.78rem}
+
+/* ---- Toast ---- */
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);background:var(--slate-bg);color:var(--slate-text);padding:8px 20px;border-radius:8px;font-size:.88rem;font-weight:500;opacity:0;transition:transform .3s ease,opacity .3s ease;z-index:1000;pointer-events:none}
+.toast.show{transform:translateX(-50%) translateY(0);opacity:1}
+
+@media(max-width:600px){.field-row{flex-direction:column;gap:0}.container{padding:14px 12px 48px}.card{padding:16px}.header-inner{flex-direction:column;align-items:flex-start}.header-nav{gap:16px}.add-model-row{flex-direction:column}.add-model-row .field.grow,.add-model-row .field.shrink{flex:none;width:100%}}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-inner">
+    <div class="header-left">
+      <div class="logo-icon"><svg viewBox="0 0 40 40" width="26" height="26" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="sun" x1="50%" y1="0%" x2="50%" y2="100%"><stop offset="0%" stop-color="#fbbf24"/><stop offset="100%" stop-color="#f59e0b"/></linearGradient></defs><path d="M20 11 L20 8" stroke="#fbbf24" stroke-width="1.5" stroke-linecap="round"/><path d="M15.2 12.8 L13.1 10.7" stroke="#fbbf24" stroke-width="1.5" stroke-linecap="round"/><path d="M24.8 12.8 L26.9 10.7" stroke="#fbbf24" stroke-width="1.5" stroke-linecap="round"/><circle cx="20" cy="17" r="4.5" fill="url(#sun)"/><path d="M8 30 L16 18 L21 23 L27 15 L35 30 Z" fill="#fff" opacity="0.95"/><path d="M3 30 L12 20 L18 26 L18 30 Z" fill="rgba(255,255,255,0.6)"/></svg></div>
+      <div class="header-text">
+        <h1>Coding Assistant Config Generator</h1>
+        <p>Generate configs for Claude Code, Codex, OpenCode, and Qwen Code</p>
+      </div>
+    </div>
+    <nav class="header-nav">
+      <a href="index.html">Home</a>
+      <a href="https://github.com/yatesdr/go-llm-proxy" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- Intro -->
+  <div class="card">
+    <h2>About</h2>
+    <p style="font-size:.92rem;margin-bottom:8px">This tool generates ready-to-use configuration files and start commands for AI coding assistants. Works with any OpenAI-compatible endpoint &mdash; <a href="https://github.com/yatesdr/go-llm-proxy">go-llm-proxy</a>, vLLM, llama-server, Ollama, LiteLLM, or cloud APIs. Prefer not to edit config files? Use the "Start command" output to get a shell script you can run directly.</p>
+    <p style="font-size:.88rem;color:var(--muted)">Everything runs client-side. No data is sent to, retained, or collected by any server.</p>
+  </div>
+
+  <!-- Endpoint Setup -->
+  <div class="card">
+    <h2>Endpoint Setup</h2>
+    <div class="field">
+      <label for="baseUrl">Base URL / Proxy Location</label>
+      <input type="text" id="baseUrl" placeholder="http://localhost:8080/v1" value="">
+      <div class="hint">Your OpenAI-compatible endpoint. Include <code>/v1</code> if required by your server.</div>
+    </div>
+    <div class="checkbox-group" style="margin-top:4px">
+      <label style="font-weight:500"><input type="checkbox" id="chkIsProxy"> Endpoint is <a href="https://github.com/yatesdr/go-llm-proxy" style="font-weight:600;text-transform:none;letter-spacing:0">go-llm-proxy</a></label>
+    </div>
+    <div id="proxyBlurb" style="margin:8px 0 4px 28px;padding:10px 14px;border:1px solid var(--border);border-radius:6px;font-size:.86rem;line-height:1.6;color:var(--muted);background:#f8fafc;transition:all .2s">
+      <b>go-llm-proxy</b> provides protocol translation between coding assistants and local backends, plus transparent vision/OCR image processing, PDF text extraction, and web search interception for Claude Code, Codex, OpenCode, and Qwen Code. <a href="https://github.com/yatesdr/go-llm-proxy" style="color:var(--muted);transition:color .2s" id="proxyBlurbLink">Learn more &rarr;</a>
+    </div>
+    <div class="checkbox-group" id="proxySubOptions" style="margin-left:28px;opacity:.45;pointer-events:none;transition:opacity .2s">
+      <label><input type="checkbox" id="chkWebSearch"> Web search enabled on proxy (Tavily/Brave)</label>
+      <label><input type="checkbox" id="chkMCP"> MCP endpoint enabled (<code>/mcp/sse</code>)</label>
+      <label><input type="checkbox" id="chkTavily"> Include Tavily MCP placeholder in output</label>
+    </div>
+  </div>
+
+  <!-- Models -->
+  <div class="card">
+    <h2>Models</h2>
+
+    <div class="add-model-row">
+      <div class="field grow">
+        <label for="addModelName">Model Name</label>
+        <input type="text" id="addModelName" placeholder="e.g. qwen3-32b">
+      </div>
+      <div class="field shrink">
+        <label for="addModelProto">Protocol</label>
+        <select id="addModelProto">
+          <option value="openai">OpenAI</option>
+          <option value="anthropic">Anthropic</option>
+        </select>
+      </div>
+      <div class="field shrink">
+        <label for="addModelCtx">Context Window</label>
+        <input type="number" id="addModelCtx" placeholder="optional" min="0" step="1024">
+      </div>
+      <button class="btn-add" onclick="addModelFromForm()">Add</button>
+    </div>
+
+    <div style="margin-top:16px">
+      <label style="margin-bottom:6px">Quick Add Presets</label>
+      <div class="preset-row" id="presetRow"></div>
+    </div>
+
+    <div id="modelTableWrap">
+      <div class="empty-state" id="emptyState">No models added yet. Use the form above or click a preset to add models.</div>
+      <table class="model-table hidden" id="modelTable">
+        <thead><tr><th>Model</th><th>Protocol</th><th>Context Window</th><th></th></tr></thead>
+        <tbody id="modelTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Configuration form -->
+  <div class="card">
+    <h2>Generate Configuration</h2>
+
+    <div class="field">
+      <label for="harness">Coding Assistant</label>
+      <select id="harness">
+        <option value="">Select a coding assistant&hellip;</option>
+        <option value="claude-code">Claude Code</option>
+        <option value="codex">Codex</option>
+        <option value="qwen-code">Qwen Code</option>
+        <option value="opencode">OpenCode</option>
+      </select>
+    </div>
+
+    <!-- Claude Code model selectors (Sonnet/Opus/Haiku) -->
+    <div id="claudeSelectors" class="hidden">
+      <div class="field-row">
+        <div class="field">
+          <label for="sonnetModel">Sonnet <span style="font-weight:400;text-transform:none">(default model)</span></label>
+          <select id="sonnetModel"></select>
+          <label style="display:inline-flex;align-items:center;gap:5px;margin-top:5px;font-size:.82rem;font-weight:400;text-transform:none;letter-spacing:0;cursor:pointer"><input type="checkbox" id="sonnetThinking" checked style="width:14px;height:14px;accent-color:var(--blue)"> Thinking</label>
+        </div>
+        <div class="field">
+          <label for="opusModel">Opus <span style="font-weight:400;text-transform:none">(large model)</span></label>
+          <select id="opusModel"></select>
+          <label style="display:inline-flex;align-items:center;gap:5px;margin-top:5px;font-size:.82rem;font-weight:400;text-transform:none;letter-spacing:0;cursor:pointer"><input type="checkbox" id="opusThinking" checked style="width:14px;height:14px;accent-color:var(--blue)"> Thinking</label>
+        </div>
+        <div class="field">
+          <label for="haikuModel">Haiku <span style="font-weight:400;text-transform:none">(fast model)</span></label>
+          <select id="haikuModel"></select>
+          <label style="display:inline-flex;align-items:center;gap:5px;margin-top:5px;font-size:.82rem;font-weight:400;text-transform:none;letter-spacing:0;cursor:pointer"><input type="checkbox" id="haikuThinking" style="width:14px;height:14px;accent-color:var(--blue)"> Thinking</label>
+        </div>
+      </div>
+    </div>
+
+    <!-- OpenCode model selectors (build/plan + model list) -->
+    <div id="openCodeSelectors" class="hidden">
+      <div class="field-row">
+        <div class="field">
+          <label for="buildModel">Build Agent <span style="font-weight:400;text-transform:none">(coding)</span></label>
+          <select id="buildModel"></select>
+        </div>
+        <div class="field">
+          <label for="planModel">Plan Agent <span style="font-weight:400;text-transform:none">(reasoning)</span></label>
+          <select id="planModel"></select>
+        </div>
+      </div>
+      <div class="field" style="margin-top:12px">
+        <label>Available Models <span style="font-weight:400;text-transform:none">(included in config)</span></label>
+        <div class="checkbox-group" id="ocAdditionalModels"></div>
+      </div>
+    </div>
+
+    <!-- Multi-select (qwen-code) -->
+    <div id="multiSelectors" class="hidden">
+      <div class="field">
+        <label>Default Model</label>
+        <select id="defaultModel"></select>
+      </div>
+      <div class="field" style="margin-top:12px">
+        <label>Additional Models <span style="font-weight:400;text-transform:none">(available via /model)</span></label>
+        <div class="checkbox-group" id="additionalModels"></div>
+      </div>
+    </div>
+
+    <!-- Codex model selectors -->
+    <div id="codexSelectors" class="hidden">
+      <div class="field-row">
+        <div class="field">
+          <label for="codexModel">Model</label>
+          <select id="codexModel"></select>
+        </div>
+        <div class="field">
+          <label for="codexEffort">Reasoning Effort</label>
+          <select id="codexEffort">
+            <option value="high">High</option>
+            <option value="medium" selected>Medium</option>
+            <option value="low">Low</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="codexCtxWindow">Context Window</label>
+          <select id="codexCtxWindow">
+            <option value="auto" selected>Auto-detect</option>
+            <option value="8192">8K</option>
+            <option value="16384">16K</option>
+            <option value="32768">32K</option>
+            <option value="65536">64K</option>
+            <option value="131072">128K</option>
+            <option value="196608">192K</option>
+            <option value="262144">256K</option>
+            <option value="524288">512K</option>
+            <option value="1048576">1M</option>
+          </select>
+          <div class="hint" id="codexCtxHint"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Output format (claude-code + codex) -->
+    <div id="outputFormatField" class="hidden">
+      <div class="field">
+        <label>Output Format</label>
+        <div style="display:flex;gap:8px;margin-top:4px">
+          <label class="checkbox-group" style="padding:0;display:inline-flex;cursor:pointer">
+            <input type="radio" name="outputFormat" value="config" checked style="width:16px;height:16px;accent-color:var(--blue)">
+            <span style="font-size:.9rem">Configuration file</span>
+          </label>
+          <label class="checkbox-group" style="padding:0;display:inline-flex;cursor:pointer;margin-left:12px">
+            <input type="radio" name="outputFormat" value="command" style="width:16px;height:16px;accent-color:var(--blue)">
+            <span style="font-size:.9rem">Start command (shell script)</span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-primary" id="generateBtn" disabled onclick="generate()">Generate Config</button>
+    </div>
+  </div>
+
+  <!-- Output -->
+  <div class="output-area" id="outputArea">
+    <div class="card">
+      <h2 id="configTitle">Configuration File</h2>
+      <div id="configOutput"></div>
+      <div class="placeholder-note" id="placeholderNote">
+        Replace <code>&lt;YOUR-API-KEY&gt;</code> placeholders with your actual credentials after copying.
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Installation Instructions</h2>
+      <div class="tabs" id="osTabs">
+        <button class="tab active" data-os="macos" onclick="switchOS('macos')">macOS</button>
+        <button class="tab" data-os="linux" onclick="switchOS('linux')">Linux</button>
+        <button class="tab" data-os="windows" onclick="switchOS('windows')">Windows</button>
+      </div>
+      <div class="tab-content active" id="os-macos"></div>
+      <div class="tab-content" id="os-linux"></div>
+      <div class="tab-content" id="os-windows"></div>
+    </div>
+  </div>
+
+  <!-- Web Search -->
+  <div class="card" style="margin-top:24px">
+    <h2>Web Search</h2>
+    <p style="margin-bottom:10px">Local LLM backends don't support the web search tools that coding assistants request. <a href="https://github.com/yatesdr/go-llm-proxy">go-llm-proxy</a> solves this by intercepting search tool calls, executing them via <a href="https://tavily.com">Tavily</a> or <a href="https://brave.com/search/api/">Brave Search</a>, and injecting results back into the conversation &mdash; transparently, with no client-side setup.</p>
+
+    <p style="margin-bottom:6px"><b>With go-llm-proxy configured:</b></p>
+    <ul style="margin:0 0 12px 20px;font-size:.92rem;line-height:1.7">
+      <li><b>Claude Code</b> and <b>Codex</b> get native web search automatically &mdash; the proxy intercepts <code>web_search</code> tool calls and returns results in the format each client expects</li>
+      <li><b>OpenCode</b> and <b>Qwen Code</b> connect to the proxy's MCP endpoint for search, alongside any other MCP-compatible agent</li>
+    </ul>
+
+    <p style="margin-bottom:6px"><b>Without a proxy</b>, you can configure client-side search directly:</p>
+    <ul style="margin:0 0 12px 20px;font-size:.92rem;line-height:1.7">
+      <li><b>Claude Code</b> &mdash; add a Tavily MCP server via <code>claude mcp add</code></li>
+      <li><b>Codex</b> &mdash; add a Tavily MCP server in <code>config.toml</code></li>
+      <li><b>OpenCode</b> &mdash; add a Tavily MCP server in <code>opencode.json</code></li>
+      <li><b>Qwen Code</b> &mdash; supports Tavily, Google Custom Search, and DashScope natively:</li>
+    </ul>
+    <pre style="background:var(--slate-bg);color:var(--slate-text);padding:14px;border-radius:6px;font-size:.82rem;overflow-x:auto;line-height:1.5">"webSearch": {
+  "provider": [
+    { "type": "tavily", "apiKey": "tvly-..." },
+    { "type": "google", "apiKey": "...", "searchEngineId": "..." },
+    { "type": "dashscope" }
+  ],
+  "default": "tavily"
+}</pre>
+    <p class="hint" style="margin-top:8px">DashScope is available automatically for Qwen OAuth users. Google requires a <a href="https://developers.google.com/custom-search/v1/overview">Custom Search API</a> key and engine ID.</p>
+  </div>
+
+  <!-- Vision & OCR -->
+  <div class="card">
+    <h2>Images, PDFs &amp; Vision</h2>
+    <p style="margin-bottom:10px">If you're pointing a coding assistant directly at vLLM or llama-server, image and PDF features silently fail on text-only models. You're limited to models with native vision support, or you lose screenshots, paste-image, and document reading entirely.</p>
+
+    <p style="margin-bottom:6px"><a href="https://github.com/yatesdr/go-llm-proxy">go-llm-proxy</a> is a free, open-source single binary you run alongside your backend. It sits between your coding assistant and your inference server and handles this transparently:</p>
+    <ul style="margin:0 0 12px 20px;font-size:.92rem;line-height:1.7">
+      <li>Images are routed to a vision model on your own hardware, described as text, and passed to your main model</li>
+      <li>PDFs are text-extracted locally. Scanned pages fall back to an OCR model you choose</li>
+      <li>User photos and tool output (screenshots, <code>view_image</code>) are handled separately &mdash; document-tuned models like PaddleOCR-VL process pages ~17x faster than general vision models</li>
+      <li>Per-model config &mdash; use different vision/OCR processors per model, or disable for models that handle images natively</li>
+    </ul>
+    <p style="font-size:.88rem;color:var(--muted)">Everything runs on your machines. The proxy is a ~15MB binary with no dependencies, no cloud services, no accounts.</p>
+  </div>
+
+  <!-- Footer -->
+  <div style="text-align:center;padding:24px 0 0;color:var(--muted);font-size:.84rem">
+    <div id="counterDisplay" style="display:none;margin-bottom:8px;font-size:.82rem">
+      <span style="display:inline-flex;align-items:center;gap:6px;background:#f1f5f9;border:1px solid var(--border);border-radius:99px;padding:4px 14px">
+        <span style="font-size:.7rem">&#9881;</span>
+        <span id="counterValue">0</span> configs generated
+      </span>
+    </div>
+    Built for the local LLM community. <a href="https://github.com/yatesdr/go-llm-proxy" style="color:var(--blue)">go-llm-proxy on GitHub</a>
+  </div>
+
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ---- Counter API ----
+// Set this to your Cloudflare Worker URL after deploying cloudflare-counter/.
+var COUNTER_URL = "https://config-counter.derek-yates.workers.dev";
+
+function loadCounter(){
+  if(!COUNTER_URL) return;
+  fetch(COUNTER_URL + "/count").then(function(r){ return r.json(); }).then(function(d){
+    if(d.count > 0){
+      document.getElementById("counterValue").textContent = d.count.toLocaleString();
+      document.getElementById("counterDisplay").style.display = "block";
+    }
+  }).catch(function(){});
+}
+
+function incrementCounter(){
+  if(!COUNTER_URL) return;
+  fetch(COUNTER_URL + "/increment", { method: "POST" }).then(function(r){ return r.json(); }).then(function(d){
+    document.getElementById("counterValue").textContent = d.count.toLocaleString();
+    document.getElementById("counterDisplay").style.display = "block";
+  }).catch(function(){});
+}
+
+loadCounter();
+
+// ---- Model data store ----
+var MODELS = [];
+var nextModelId = 1;
+
+// ---- Presets ----
+var PRESETS = [
+  { name: "qwen3-32b", protocol: "openai", context_window: 131072 },
+  { name: "qwen3-235b-a22b", protocol: "openai", context_window: 131072 },
+  { name: "llama-4-scout", protocol: "openai", context_window: 131072 },
+  { name: "deepseek-r1", protocol: "openai", context_window: 131072 },
+  { name: "gemma-3-27b", protocol: "openai", context_window: 131072 },
+  { name: "mistral-small-3.2", protocol: "openai", context_window: 131072 }
+];
+
+// ---- URL helpers ----
+function getBaseUrl(){
+  return (document.getElementById("baseUrl").value.trim()) || "http://localhost:8080/v1";
+}
+
+function getProxyUrl(){
+  // Ensure URL ends with /v1
+  var url = getBaseUrl().replace(/\/+$/, "");
+  if(!url.endsWith("/v1")) url += "/v1";
+  return url;
+}
+
+function getProxyOrigin(){
+  // Strip /v1 suffix if present
+  var url = getBaseUrl().replace(/\/+$/, "");
+  if(url.endsWith("/v1")) url = url.slice(0, -3);
+  return url;
+}
+
+// ---- Feature flags ----
+function isGoLLMProxy(){ return document.getElementById("chkIsProxy").checked; }
+function hasWebSearch(){ return document.getElementById("chkWebSearch").checked; }
+function hasMCP(){ return document.getElementById("chkMCP").checked; }
+function hasTavilyPlaceholder(){ return document.getElementById("chkTavily").checked; }
+
+// Provider name used in generated configs — branded when proxy, generic otherwise.
+function providerName(){ return isGoLLMProxy() ? "go-llm-proxy" : "custom-endpoint"; }
+function providerDisplayName(){ return isGoLLMProxy() ? "Go-LLM-Proxy" : "Custom Endpoint"; }
+
+// Build a summary of proxy features for install instructions.
+function proxyFeatureNotes(){
+  if(!isGoLLMProxy() && !hasWebSearch()) return "";
+  var notes = [];
+  if(isGoLLMProxy()) notes.push("protocol translation");
+  if(hasWebSearch()) notes.push("web search");
+  if(isGoLLMProxy()) notes.push("vision/OCR processing");
+  return " The proxy handles " + notes.join(", ") + " automatically &mdash; no client-side setup needed.";
+}
+
+// Master "is go-llm-proxy" checkbox controls sub-options enabled state.
+document.getElementById("chkIsProxy").addEventListener("change", function(){
+  var checked = this.checked;
+  var blurb = document.getElementById("proxyBlurb");
+  var sub = document.getElementById("proxySubOptions");
+  var link = document.getElementById("proxyBlurbLink");
+  if(checked){
+    blurb.style.background = "var(--green-bg)";
+    blurb.style.borderColor = "#a7f3d0";
+    blurb.style.color = "#065f46";
+    link.style.color = "#047857";
+    sub.style.opacity = "1";
+    sub.style.pointerEvents = "auto";
+    document.getElementById("chkWebSearch").checked = true;
+    document.getElementById("chkMCP").checked = true;
+  } else {
+    blurb.style.background = "#f8fafc";
+    blurb.style.borderColor = "var(--border)";
+    blurb.style.color = "var(--muted)";
+    link.style.color = "var(--muted)";
+    sub.style.opacity = ".45";
+    sub.style.pointerEvents = "none";
+  }
+});
+
+// ---- Escape helper ----
+function esc(s){ var d=document.createElement("div"); d.textContent=s; return d.innerHTML; }
+
+// ---- Toast ----
+function showToast(msg){
+  var t = document.getElementById("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  setTimeout(function(){ t.classList.remove("show"); }, 1500);
+}
+
+// ---- Model management ----
+function addModel(name, protocol, contextWindow){
+  name = name.trim();
+  if(!name) return;
+  // Check for duplicates
+  for(var i=0; i<MODELS.length; i++){
+    if(MODELS[i].id === name) return false;
+  }
+  MODELS.push({
+    _uid: nextModelId++,
+    id: name,
+    protocol: protocol || "openai",
+    context_window: contextWindow || 0
+  });
+  renderModelTable();
+  updateGenerateBtn();
+  return true;
+}
+
+function removeModel(uid){
+  MODELS = MODELS.filter(function(m){ return m._uid !== uid; });
+  renderModelTable();
+  updateGenerateBtn();
+  // Re-populate selectors if a harness is selected
+  var h = harnessEl.value;
+  if(h) harnessEl.dispatchEvent(new Event("change"));
+}
+
+function addModelFromForm(){
+  var nameEl = document.getElementById("addModelName");
+  var protoEl = document.getElementById("addModelProto");
+  var ctxEl = document.getElementById("addModelCtx");
+  var name = nameEl.value.trim();
+  if(!name){ nameEl.focus(); return; }
+  var ctx = parseInt(ctxEl.value, 10) || 0;
+  var added = addModel(name, protoEl.value, ctx);
+  if(added === false){
+    showToast("Model already exists: " + name);
+    return;
+  }
+  nameEl.value = "";
+  ctxEl.value = "";
+  showToast("Added: " + name);
+  // Re-populate selectors if a harness is selected
+  var h = harnessEl.value;
+  if(h) harnessEl.dispatchEvent(new Event("change"));
+}
+
+function addPreset(preset, btnEl){
+  var added = addModel(preset.name, preset.protocol, preset.context_window);
+  if(added === false){
+    showToast("Already added: " + preset.name);
+    return;
+  }
+  // Flash the button
+  btnEl.classList.add("flash");
+  setTimeout(function(){ btnEl.classList.remove("flash"); }, 600);
+  showToast("Added: " + preset.name);
+  // Re-populate selectors if a harness is selected
+  var h = harnessEl.value;
+  if(h) harnessEl.dispatchEvent(new Event("change"));
+}
+
+function renderModelTable(){
+  var tbody = document.getElementById("modelTableBody");
+  var table = document.getElementById("modelTable");
+  var empty = document.getElementById("emptyState");
+
+  if(MODELS.length === 0){
+    table.classList.add("hidden");
+    empty.classList.remove("hidden");
+    return;
+  }
+  table.classList.remove("hidden");
+  empty.classList.add("hidden");
+
+  tbody.innerHTML = "";
+  for(var i = 0; i < MODELS.length; i++){
+    var m = MODELS[i];
+    var row = document.createElement("tr");
+    var ctxDisplay = m.context_window > 0 ? m.context_window.toLocaleString() : "&mdash;";
+    row.innerHTML = '<td><strong>' + esc(m.id) + '</strong></td>' +
+      '<td><span class="badge ' + (m.protocol === "anthropic" ? "badge-proto-ant" : "badge-proto-oai") + '">' + m.protocol + '</span></td>' +
+      '<td>' + ctxDisplay + '</td>' +
+      '<td><button class="btn-remove" data-uid="' + m._uid + '">Remove</button></td>';
+    tbody.appendChild(row);
+  }
+
+  // Attach remove handlers
+  var btns = tbody.querySelectorAll(".btn-remove");
+  for(var j = 0; j < btns.length; j++){
+    btns[j].addEventListener("click", function(){
+      removeModel(parseInt(this.dataset.uid, 10));
+    });
+  }
+}
+
+// ---- Populate preset buttons ----
+(function(){
+  var row = document.getElementById("presetRow");
+  PRESETS.forEach(function(p){
+    var btn = document.createElement("button");
+    btn.className = "preset-btn";
+    btn.textContent = p.name;
+    btn.addEventListener("click", function(){ addPreset(p, btn); });
+    row.appendChild(btn);
+  });
+})();
+
+// ---- Allow Enter key in add-model name field ----
+document.getElementById("addModelName").addEventListener("keydown", function(e){
+  if(e.key === "Enter"){ e.preventDefault(); addModelFromForm(); }
+});
+
+// ---- Model lookup ----
+function getModel(id){
+  for(var i=0; i<MODELS.length; i++) if(MODELS[i].id === id) return MODELS[i];
+  return null;
+}
+
+function chatModels(){ return MODELS.filter(function(m){ return !m.id.toLowerCase().match(/embed/); }); }
+
+function optionText(m){
+  var tags = [];
+  if(m.protocol === "anthropic") tags.push("Anthropic API");
+  return m.id + (tags.length ? "  [" + tags.join(", ") + "]" : "");
+}
+
+// ---- Harness change ----
+var harnessEl    = document.getElementById("harness");
+var claudeSel    = document.getElementById("claudeSelectors");
+var openCodeSel  = document.getElementById("openCodeSelectors");
+var multiSel     = document.getElementById("multiSelectors");
+var codexSel     = document.getElementById("codexSelectors");
+var generateBtn  = document.getElementById("generateBtn");
+
+function updateGenerateBtn(){
+  var h = harnessEl.value;
+  generateBtn.disabled = !h || MODELS.length === 0;
+}
+
+harnessEl.addEventListener("change", function(){
+  var h = this.value;
+  claudeSel.classList.toggle("hidden", h !== "claude-code");
+  openCodeSel.classList.toggle("hidden", h !== "opencode");
+  multiSel.classList.toggle("hidden", h !== "qwen-code");
+  codexSel.classList.toggle("hidden", h !== "codex");
+  document.getElementById("outputFormatField").classList.toggle("hidden", h !== "claude-code" && h !== "codex");
+  updateGenerateBtn();
+  document.getElementById("outputArea").classList.remove("visible");
+
+  if(h === "claude-code") populateClaudeSelects();
+  if(h === "codex") populateCodexSelects();
+  if(h === "opencode") populateOpenCodeSelects();
+  if(h === "qwen-code") populateMultiSelects();
+});
+
+function populateSelects(ids, defaults){
+  var cms = chatModels();
+  ids.forEach(function(id){
+    var sel = document.getElementById(id);
+    sel.innerHTML = "";
+    cms.forEach(function(m){
+      var o = document.createElement("option"); o.value = m.id; o.textContent = optionText(m);
+      sel.appendChild(o);
+    });
+  });
+  Object.keys(defaults).forEach(function(id){ setDefault(id, defaults[id]); });
+}
+
+function populateClaudeSelects(){
+  populateSelects(["sonnetModel", "opusModel", "haikuModel"], {});
+}
+
+function populateCodexSelects(){
+  var cms = chatModels().filter(function(m){ return m.protocol !== "anthropic"; });
+  var sel = document.getElementById("codexModel");
+  sel.innerHTML = "";
+  cms.forEach(function(m){
+    var o = document.createElement("option"); o.value = m.id; o.textContent = optionText(m);
+    sel.appendChild(o);
+  });
+  sel.addEventListener("change", updateCodexCtxHint);
+  updateCodexCtxHint();
+}
+
+function updateCodexCtxHint(){
+  var m = getModel(document.getElementById("codexModel").value);
+  var hint = document.getElementById("codexCtxHint");
+  var sel = document.getElementById("codexCtxWindow");
+  var detected = m && m.context_window > 0;
+  if(detected){
+    var label = m.context_window >= 1024 ? Math.round(m.context_window / 1024) + "K" : m.context_window;
+    hint.textContent = "Detected: " + label + " tokens";
+    hint.style.color = "";
+    sel.style.borderColor = "";
+  } else {
+    hint.textContent = "Not detected \u2014 set manually for best results";
+    hint.style.color = "var(--amber)";
+    sel.style.borderColor = "var(--amber)";
+  }
+}
+
+function getCodexCtxWindow(){
+  var sel = document.getElementById("codexCtxWindow");
+  if(sel.value === "auto"){
+    var m = getModel(document.getElementById("codexModel").value);
+    return (m && m.context_window > 0) ? m.context_window : 0;
+  }
+  return parseInt(sel.value, 10);
+}
+
+// Sync checkboxes: check+disable models selected in dropdowns
+function syncCheckboxes(containerId, selectIds){
+  var selected = {};
+  selectIds.forEach(function(id){ selected[document.getElementById(id).value] = true; });
+  var cbs = document.querySelectorAll("#" + containerId + " input[type=checkbox]");
+  for(var i = 0; i < cbs.length; i++){
+    if(selected[cbs[i].value]){
+      cbs[i].checked = true;
+      cbs[i].disabled = true;
+    } else {
+      cbs[i].disabled = false;
+    }
+  }
+}
+
+function buildCheckboxGroup(containerId, selectIds){
+  var container = document.getElementById(containerId);
+  container.innerHTML = "";
+  chatModels().forEach(function(m){
+    var label = document.createElement("label");
+    var cb = document.createElement("input"); cb.type = "checkbox"; cb.value = m.id; cb.checked = true;
+    label.appendChild(cb);
+    var proto = m.protocol === "anthropic"
+      ? ' <span class="badge badge-proto-ant" style="margin-left:4px">Anthropic</span>' : '';
+    var span = document.createElement("span");
+    span.innerHTML = esc(m.id) + proto;
+    label.appendChild(span);
+    container.appendChild(label);
+  });
+  var sync = function(){ syncCheckboxes(containerId, selectIds); };
+  sync();
+  selectIds.forEach(function(id){ document.getElementById(id).onchange = sync; });
+}
+
+function populateOpenCodeSelects(){
+  populateSelects(["buildModel", "planModel"], {});
+  buildCheckboxGroup("ocAdditionalModels", ["buildModel", "planModel"]);
+}
+
+function populateMultiSelects(){
+  var cms = chatModels();
+  var defSel = document.getElementById("defaultModel");
+  defSel.innerHTML = "";
+  cms.forEach(function(m){
+    var o = document.createElement("option"); o.value = m.id; o.textContent = optionText(m);
+    defSel.appendChild(o);
+  });
+  buildCheckboxGroup("additionalModels", ["defaultModel"]);
+}
+
+function setDefault(id, val){ var s = document.getElementById(id); for(var i = 0; i < s.options.length; i++) if(s.options[i].value === val){ s.value = val; return; } }
+function selectedAdditional(){ var r = []; var cbs = document.querySelectorAll("#additionalModels input:checked"); for(var i = 0; i < cbs.length; i++) r.push(cbs[i].value); return r; }
+
+// ---- Generate ----
+function getOutputFormat(){
+  var r = document.querySelector('input[name="outputFormat"]:checked');
+  return r ? r.value : "config";
+}
+
+var API_KEY_PLACEHOLDER = "<YOUR-API-KEY>";
+var TAVILY_KEY_PLACEHOLDER = "<YOUR-TAVILY-KEY>";
+
+function generate(){
+  var harness = harnessEl.value;
+  var fmt = getOutputFormat();
+  var useTavily = hasTavilyPlaceholder();
+  var tavilyKey = useTavily ? TAVILY_KEY_PLACEHOLDER : "";
+  var result;
+  switch(harness){
+    case "claude-code":
+      result = fmt === "command" ? genClaudeCodeCommand(API_KEY_PLACEHOLDER, tavilyKey) : genClaudeCode(API_KEY_PLACEHOLDER, tavilyKey);
+      break;
+    case "codex":
+      result = fmt === "command" ? genCodexCommand(API_KEY_PLACEHOLDER, tavilyKey) : genCodex(API_KEY_PLACEHOLDER, tavilyKey);
+      break;
+    case "qwen-code":   result = genQwenCode(API_KEY_PLACEHOLDER, tavilyKey); break;
+    case "opencode":    result = genOpenCode(API_KEY_PLACEHOLDER, tavilyKey); break;
+  }
+  if(result){
+    renderOutput(result);
+    incrementCounter();
+  }
+}
+
+function renderOutput(r){
+  var area = document.getElementById("outputArea");
+  area.classList.add("visible");
+
+  document.getElementById("configTitle").textContent = r.title || "Configuration File";
+  var co = document.getElementById("configOutput");
+
+  if(r.configTabs){
+    var tabKeys = Object.keys(r.configTabs);
+    var tabsHtml = '<div class="tabs" style="margin-bottom:0">';
+    tabKeys.forEach(function(k, i){
+      tabsHtml += '<button class="tab' + (i === 0 ? ' active' : '') + '" onclick="switchCmdTab(this,\'' + i + '\')">' + esc(k) + '</button>';
+    });
+    tabsHtml += '</div>';
+    tabKeys.forEach(function(k, i){
+      tabsHtml += '<div class="cmd-tab' + (i === 0 ? ' active' : '') + '" data-idx="' + i + '">' +
+        '<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button>' + esc(r.configTabs[k]) + '</div></div>';
+    });
+    co.innerHTML = tabsHtml;
+  } else {
+    co.innerHTML = '<div style="margin-bottom:6px"><span class="file-path">' + esc(r.filename) + '</span></div>' +
+      '<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button>' + esc(r.config) + '</div>';
+  }
+
+  // Download buttons
+  if(r.downloads){
+    var dlHtml = '<div style="margin-top:10px">';
+    r.downloads.forEach(function(d){
+      dlHtml += '<a class="dl-btn" href="#" onclick="downloadFile(\'' + esc(d.name) + '\',this);return false" data-content="' +
+        btoa(d.content) + '"><svg viewBox="0 0 16 16"><path d="M8 1v9m0 0L5 7m3 3l3-3M2 12v1a2 2 0 002 2h8a2 2 0 002-2v-1" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+        esc(d.label) + '</a>';
+    });
+    dlHtml += '</div>';
+    co.innerHTML += dlHtml;
+  }
+
+  ["macos", "linux", "windows"].forEach(function(os){
+    document.getElementById("os-" + os).innerHTML = '<div class="install-steps">' + r.install[os] + '</div>';
+  });
+  area.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// ---- Claude Code ----
+function thinkingCaps(checkboxId){
+  return document.getElementById(checkboxId).checked ? "thinking,interleaved_thinking" : "";
+}
+
+function claudeEnvVars(apiKey){
+  var sonnetId = document.getElementById("sonnetModel").value;
+  var opusId = document.getElementById("opusModel").value;
+  var haikuId = document.getElementById("haikuModel").value;
+  return [
+    ["ANTHROPIC_BASE_URL", getProxyOrigin()],
+    ["ANTHROPIC_API_KEY", apiKey],
+    ["ANTHROPIC_DEFAULT_SONNET_MODEL", sonnetId],
+    ["ANTHROPIC_DEFAULT_SONNET_MODEL_NAME", displayName(sonnetId)],
+    ["ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES", thinkingCaps("sonnetThinking")],
+    ["ANTHROPIC_DEFAULT_OPUS_MODEL", opusId],
+    ["ANTHROPIC_DEFAULT_OPUS_MODEL_NAME", displayName(opusId)],
+    ["ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES", thinkingCaps("opusThinking")],
+    ["ANTHROPIC_DEFAULT_HAIKU_MODEL", haikuId],
+    ["ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME", displayName(haikuId)],
+    ["ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES", thinkingCaps("haikuThinking")],
+    ["DISABLE_PROMPT_CACHING", "1"],
+    ["CLAUDE_CODE_DISABLE_1M_CONTEXT", "1"],
+    ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"],
+    ["API_TIMEOUT_MS", "900000"]
+  ];
+}
+
+function genClaudeCode(apiKey, tavily){
+  var env = {};
+  claudeEnvVars(apiKey).forEach(function(kv){ env[kv[0]] = kv[1]; });
+
+  var settings = {
+    attribution: { commit: "", pr: "" },
+    env: env
+  };
+
+  var fn = "settings.json";
+  var useTavily = !!tavily;
+  var tavilyJSON = useTavily ? JSON.stringify({ type: "http", url: "https://mcp.tavily.com/mcp", headers: { "Authorization": "Bearer " + tavily }}) : "";
+  var tavilyStep = useTavily
+    ? 'Install Tavily web search:<br><code>claude mcp remove tavily -s user 2&gt;/dev/null; claude mcp add-json tavily \'' + esc(tavilyJSON) + '\' -s user</code>'
+    : "";
+  var tavilyStepWin = useTavily
+    ? 'Install Tavily web search:<br><code>claude mcp remove tavily -s user 2>nul & claude mcp add-json tavily "' + esc(tavilyJSON.replace(/"/g, '\\"')) + '" -s user</code>'
+    : "";
+
+  var macLinuxSteps = [
+    'Create the config directory:<br><code>mkdir -p ~/.claude</code>',
+    'Save the generated file as:<br><code>~/.claude/settings.json</code>'
+  ];
+  if(tavilyStep) macLinuxSteps.push(tavilyStep);
+  macLinuxSteps.push('Replace <code>&lt;YOUR-API-KEY&gt;</code> with your actual API key.');
+  macLinuxSteps.push('Restart Claude Code for changes to take effect.' + proxyFeatureNotes());
+
+  var winSteps = [
+    'Create the config directory:<br><code>mkdir %USERPROFILE%\\.claude</code>',
+    'Save the generated file as:<br><code>%USERPROFILE%\\.claude\\settings.json</code>'
+  ];
+  if(tavilyStepWin) winSteps.push(tavilyStepWin);
+  winSteps.push('Replace <code>&lt;YOUR-API-KEY&gt;</code> with your actual API key.');
+  winSteps.push('Restart Claude Code for changes to take effect.' + proxyFeatureNotes());
+
+  return {
+    config: JSON.stringify(settings, null, 2),
+    filename: fn,
+    install: {
+      macos: ol(macLinuxSteps),
+      linux: ol(macLinuxSteps),
+      windows: ol(winSteps)
+    }
+  };
+}
+
+// ---- Claude Code (start command) ----
+function genClaudeCodeCommand(apiKey, tavily){
+  var vars = claudeEnvVars(apiKey);
+  var settingsJSON = JSON.stringify({ attribution: { commit: "", pr: "" }});
+
+  var useTavily = !!tavily;
+  var tavilyMcpJSON = useTavily ? JSON.stringify({ type: "http", url: "https://mcp.tavily.com/mcp", headers: { "Authorization": "Bearer " + tavily }}) : "";
+
+  var shLines = ["#!/usr/bin/env bash", "# AI Coding Assistant: Claude Code start script", ""];
+  if(useTavily){
+    shLines.push("# Configure Tavily web search");
+    shLines.push("claude mcp remove tavily -s user 2>/dev/null");
+    shLines.push("claude mcp add-json tavily '" + tavilyMcpJSON + "' -s user");
+    shLines.push("");
+  }
+  shLines.push("exec env \\");
+  vars.forEach(function(kv){ shLines.push('  ' + kv[0] + '="' + kv[1] + '" \\'); });
+  shLines.push("  claude --settings '" + settingsJSON + "' \"$@\"");
+  var shContent = shLines.join("\n") + "\n";
+
+  var batLines = ["@echo off", "setlocal", "REM AI Coding Assistant: Claude Code start script", ""];
+  vars.forEach(function(kv){ batLines.push("set " + kv[0] + "=" + kv[1]); });
+  if(useTavily){
+    batLines.push("", "REM Configure Tavily web search");
+    batLines.push('claude mcp remove tavily -s user 2>nul');
+    batLines.push('claude mcp add-json tavily "' + tavilyMcpJSON.replace(/"/g, '\\"') + '" -s user');
+  }
+  batLines.push("", 'claude --settings "' + settingsJSON.replace(/"/g, '\\"') + '" %*');
+  var batContent = batLines.join("\r\n") + "\r\n";
+
+  var ps1Lines = ["# AI Coding Assistant: Claude Code start script", ""];
+  vars.forEach(function(kv){ ps1Lines.push('$env:' + kv[0] + ' = "' + kv[1] + '"'); });
+  if(useTavily){
+    ps1Lines.push("", "# Configure Tavily web search");
+    ps1Lines.push("claude mcp remove tavily -s user 2>$null");
+    ps1Lines.push("claude mcp add-json tavily '" + tavilyMcpJSON + "' -s user");
+  }
+  ps1Lines.push("", "try {", "  claude --settings '" + settingsJSON + "' @args", "} finally {");
+  vars.forEach(function(kv){ ps1Lines.push('  Remove-Item Env:' + kv[0] + ' -ErrorAction SilentlyContinue'); });
+  ps1Lines.push("}");
+  var ps1Content = ps1Lines.join("\r\n") + "\r\n";
+
+  var shDisplay = shLines.slice(2).join("\n").trim();
+  var ps1Display = ps1Lines.slice(2).join("\n").trim();
+
+  return {
+    title: "Start Command",
+    configTabs: {
+      "macOS / Linux": shDisplay,
+      "PowerShell": ps1Display
+    },
+    downloads: [
+      { name: "claude-start.sh", label: "Download .sh (macOS/Linux)", content: shContent },
+      { name: "claude-start.bat", label: "Download .bat (Windows)", content: batContent },
+      { name: "claude-start.ps1", label: "Download .ps1 (PowerShell)", content: ps1Content }
+    ],
+    install: {
+      macos: ol([
+        'Download <code>claude-start.sh</code> using the button above.',
+        'Replace <code>&lt;YOUR-API-KEY&gt;</code> placeholders with your actual credentials.',
+        'Make it executable:<br><code>chmod +x claude-start.sh</code>',
+        'Run it:<br><code>./claude-start.sh</code>',
+        'Optional: move it to your PATH for easy access:<br><code>mv claude-start.sh /usr/local/bin/claude-start</code>'
+      ]),
+      linux: ol([
+        'Download <code>claude-start.sh</code> using the button above.',
+        'Replace <code>&lt;YOUR-API-KEY&gt;</code> placeholders with your actual credentials.',
+        'Make it executable:<br><code>chmod +x claude-start.sh</code>',
+        'Run it:<br><code>./claude-start.sh</code>',
+        'Optional: move it to your PATH for easy access:<br><code>mv claude-start.sh ~/.local/bin/claude-start</code>'
+      ]),
+      windows: ol([
+        'Download <code>claude-start.bat</code> or <code>claude-start.ps1</code> using the buttons above.',
+        'Replace <code>&lt;YOUR-API-KEY&gt;</code> placeholders with your actual credentials.',
+        'For <strong>.bat</strong>: Double-click the file, or run from Command Prompt:<br><code>claude-start.bat</code>',
+        'For <strong>.ps1</strong>: Run from PowerShell:<br><code>.\\claude-start.ps1</code>',
+        'Optional: move the script to a folder in your PATH for easy access.'
+      ])
+    }
+  };
+}
+
+// ---- Codex ----
+function codexToml(modelId, effort, apiKey, tavily){
+  var ctxWindow = getCodexCtxWindow();
+  var toml = 'model = "' + modelId + '"\n' +
+    'model_provider = "' + providerName() + '"\n' +
+    'model_reasoning_effort = "' + effort + '"\n';
+  if(!hasWebSearch()){
+    toml += 'web_search = "disabled"\n';
+  }
+  if(ctxWindow > 0){
+    toml += 'model_context_window = ' + ctxWindow + '\n';
+  }
+  toml += '\n[model_providers.' + providerName() + ']\n' +
+    'name = "' + providerDisplayName() + '"\n' +
+    'base_url = "' + getProxyUrl() + '"\n' +
+    'wire_api = "responses"\n' +
+    '# Replace with your actual API key:\n' +
+    'experimental_bearer_token = "' + apiKey + '"\n' +
+    '# Or use an environment variable instead:\n' +
+    '# env_key = "OPENAI_API_KEY"\n';
+
+  if(tavily){
+    toml += '\n[mcp_servers.tavily]\n' +
+      'url = "https://mcp.tavily.com/mcp"\n' +
+      '# Replace with your actual Tavily key:\n' +
+      'http_headers = { Authorization = "Bearer ' + tavily + '" }\n' +
+      '# Or use an environment variable instead:\n' +
+      '# bearer_token_env_var = "TAVILY_API_KEY"\n';
+  }
+  return toml;
+}
+
+function genCodex(apiKey, tavily){
+  var modelId = document.getElementById("codexModel").value;
+  var effort = document.getElementById("codexEffort").value;
+  var toml = codexToml(modelId, effort, apiKey, tavily);
+
+  var proxyNotes = proxyFeatureNotes();
+
+  var unixSteps = [
+    'Create the config directory:<br><code>mkdir -p ~/.codex</code>',
+    'Save the generated file as:<br><code>~/.codex/config.toml</code>',
+    'Replace <code>&lt;YOUR-API-KEY&gt;</code> placeholders with your actual credentials.' +
+      ' To use environment variables instead, edit the file and swap the commented lines, then set:<br>' +
+      '<code>export OPENAI_API_KEY=your-key-here</code>' +
+      (tavily ? '<br><code>export TAVILY_API_KEY=your-tavily-key</code>' : ''),
+    'Restart Codex for changes to take effect.' + proxyNotes
+  ];
+
+  var winSteps = [
+    'Create the config directory:<br><code>mkdir %USERPROFILE%\\.codex</code>',
+    'Save the generated file as:<br><code>%USERPROFILE%\\.codex\\config.toml</code>',
+    'Replace <code>&lt;YOUR-API-KEY&gt;</code> placeholders with your actual credentials.' +
+      ' To use environment variables instead, edit the file and swap the commented lines, then set:<br>' +
+      '<code>setx OPENAI_API_KEY your-key-here</code>' +
+      (tavily ? '<br><code>setx TAVILY_API_KEY your-tavily-key</code>' : ''),
+    'Restart Codex for changes to take effect.' + proxyNotes
+  ];
+
+  return {
+    config: toml,
+    filename: "config.toml",
+    install: {
+      macos: ol(unixSteps),
+      linux: ol(unixSteps),
+      windows: ol(winSteps)
+    }
+  };
+}
+
+function genCodexCommand(apiKey, tavily){
+  var modelId = document.getElementById("codexModel").value;
+  var effort = document.getElementById("codexEffort").value;
+  var useTavily = !!tavily;
+
+  var ctxWindow = getCodexCtxWindow();
+  var cfgFlags = [
+    '-c \'model="' + modelId + '"\'',
+    '-c \'model_provider="' + providerName() + '"\'',
+    '-c \'model_reasoning_effort="' + effort + '"\''
+  ];
+  if(!hasWebSearch()){
+    cfgFlags.push('-c \'web_search="disabled"\'');
+  }
+  if(ctxWindow > 0){
+    cfgFlags.push('-c \'model_context_window=' + ctxWindow + '\'');
+  }
+  cfgFlags.push(
+    '-c \'model_providers.' + providerName() + '.name="' + providerDisplayName() + '"\'',
+    '-c \'model_providers.' + providerName() + '.base_url="' + getProxyUrl() + '"\'',
+    '-c \'model_providers.' + providerName() + '.env_key="OPENAI_API_KEY"\'',
+    '-c \'model_providers.' + providerName() + '.wire_api="responses"\''
+  );
+  if(useTavily){
+    cfgFlags.push('-c \'mcp_servers.tavily.url="https://mcp.tavily.com/mcp"\'');
+    cfgFlags.push('-c \'mcp_servers.tavily.bearer_token_env_var="TAVILY_API_KEY"\'');
+  }
+
+  var ps1FlagPairs = cfgFlags.map(function(f){
+    var val = f.replace(/^-c '/, "").replace(/'$/, "");
+    return "  '-c', '" + val + "'";
+  });
+
+  var shLines = [
+    "#!/usr/bin/env bash",
+    "# AI Coding Assistant: Codex start script",
+    "",
+    'export OPENAI_API_KEY="' + apiKey + '"'
+  ];
+  if(useTavily) shLines.push('export TAVILY_API_KEY="' + tavily + '"');
+  shLines.push("");
+  shLines.push("exec codex \\");
+  cfgFlags.forEach(function(f){
+    shLines.push("  " + f + " \\");
+  });
+  shLines.push('  "$@"');
+  var shContent = shLines.join("\n") + "\n";
+
+  var ps1Lines = [
+    "# AI Coding Assistant: Codex start script",
+    "",
+    '$env:OPENAI_API_KEY = "' + apiKey + '"'
+  ];
+  if(useTavily) ps1Lines.push('$env:TAVILY_API_KEY = "' + tavily + '"');
+  ps1Lines.push("");
+  ps1Lines.push("# Build argument list.");
+  ps1Lines.push("$codexArgs = @(");
+  ps1FlagPairs.forEach(function(p){ ps1Lines.push(p); });
+  ps1Lines.push(") + $args");
+  ps1Lines.push("");
+  ps1Lines.push("try {");
+  ps1Lines.push("  codex @codexArgs");
+  ps1Lines.push("} finally {");
+  ps1Lines.push("  Remove-Item Env:OPENAI_API_KEY -ErrorAction SilentlyContinue");
+  if(useTavily) ps1Lines.push("  Remove-Item Env:TAVILY_API_KEY -ErrorAction SilentlyContinue");
+  ps1Lines.push("}");
+  var ps1Content = ps1Lines.join("\r\n") + "\r\n";
+
+  var shDisplay = shLines.slice(2).join("\n").trim();
+  var ps1Display = ps1Lines.slice(2).join("\n").trim();
+
+  return {
+    title: "Start Command",
+    configTabs: {
+      "macOS / Linux": shDisplay,
+      "PowerShell": ps1Display
+    },
+    downloads: [
+      { name: "codex-start.sh", label: "Download .sh (macOS/Linux)", content: shContent },
+      { name: "codex-start.ps1", label: "Download .ps1 (PowerShell)", content: ps1Content }
+    ],
+    install: {
+      macos: ol([
+        'Download <code>codex-start.sh</code> using the button above.',
+        'Replace <code>&lt;YOUR-API-KEY&gt;</code> placeholders with your actual credentials.',
+        'Make it executable:<br><code>chmod +x codex-start.sh</code>',
+        'Run it:<br><code>./codex-start.sh</code>',
+        'Optional: move it to your PATH:<br><code>mv codex-start.sh /usr/local/bin/codex-start</code>'
+      ]),
+      linux: ol([
+        'Download <code>codex-start.sh</code> using the button above.',
+        'Replace <code>&lt;YOUR-API-KEY&gt;</code> placeholders with your actual credentials.',
+        'Make it executable:<br><code>chmod +x codex-start.sh</code>',
+        'Run it:<br><code>./codex-start.sh</code>',
+        'Optional: move it to your PATH:<br><code>mv codex-start.sh ~/.local/bin/codex-start</code>'
+      ]),
+      windows: ol([
+        'Download <code>codex-start.ps1</code> using the button above.',
+        'Replace <code>&lt;YOUR-API-KEY&gt;</code> placeholders with your actual credentials.',
+        'Run from PowerShell:<br><code>.\\codex-start.ps1</code>',
+        'Optional: move the script to a folder in your PATH.'
+      ])
+    }
+  };
+}
+
+// ---- Qwen Code ----
+function genQwenCode(apiKey, tavily){
+  var defModel = document.getElementById("defaultModel").value;
+  var additional = selectedAdditional();
+  var defInfo = getModel(defModel);
+
+  var envKeyName = "PROXY_API_KEY";
+  var oaiModels = [];
+  var antModels = [];
+  additional.forEach(function(id){
+    var m = getModel(id);
+    if(!m) return;
+    var entry = {
+      id: id,
+      name: displayName(id),
+      envKey: envKeyName,
+      baseUrl: m.protocol === "anthropic" ? (getProxyOrigin() + "/anthropic") : getProxyUrl(),
+      generationConfig: { timeout: 300000, maxRetries: 1 }
+    };
+    if(m.protocol === "anthropic") antModels.push(entry);
+    else oaiModels.push(entry);
+  });
+
+  var mp = {};
+  if(oaiModels.length) mp.openai = oaiModels;
+  if(antModels.length) mp.anthropic = antModels;
+
+  var authType = defInfo && defInfo.protocol === "anthropic" ? "anthropic" : "openai";
+
+  var obj = {
+    "$version": 3,
+    model: { name: defModel },
+    security: { auth: { selectedType: authType }},
+    modelProviders: mp,
+    env: {}
+  };
+
+  obj.env[envKeyName] = apiKey;
+
+  // Search: prefer proxy MCP endpoint, fall back to client-side Tavily placeholder.
+  if(hasMCP()){
+    obj.mcpServers = {
+      "proxy-search": {
+        url: getProxyOrigin() + "/mcp/sse",
+        headers: { "Authorization": "Bearer " + apiKey }
+      }
+    };
+    if(tavily){
+      obj.webSearch = {
+        provider: [{ type: "tavily", apiKey: tavily }],
+        "default": "tavily"
+      };
+    }
+  } else if(tavily){
+    obj.webSearch = {
+      provider: [{ type: "tavily", apiKey: tavily }],
+      "default": "tavily"
+    };
+  }
+
+  var unixSteps = ol([
+    'Create the config directory:<br><code>mkdir -p ~/.qwen</code>',
+    'Save the generated file as:<br><code>~/.qwen/settings.json</code>',
+    'Replace <code>&lt;YOUR-API-KEY&gt;</code> placeholders with your actual credentials.',
+    'Launch Qwen Code. Use <code>/model</code> to switch between models.'
+  ]);
+
+  return {
+    config: JSON.stringify(obj, null, 2),
+    filename: "settings.json",
+    install: {
+      macos: unixSteps,
+      linux: unixSteps,
+      windows: ol([
+        'Create the config directory:<br><code>mkdir %USERPROFILE%\\.qwen</code>',
+        'Save the generated file as:<br><code>%USERPROFILE%\\.qwen\\settings.json</code>',
+        'Replace <code>&lt;YOUR-API-KEY&gt;</code> placeholders with your actual credentials.',
+        'Launch Qwen Code. Use <code>/model</code> to switch between models.'
+      ])
+    }
+  };
+}
+
+// ---- OpenCode ----
+function genOpenCode(apiKey, tavily){
+  var agentId = document.getElementById("buildModel").value;
+  var plannerId = document.getElementById("planModel").value;
+
+  var selectedOC = {};
+  var cbs = document.querySelectorAll("#ocAdditionalModels input:checked");
+  for(var i = 0; i < cbs.length; i++) selectedOC[cbs[i].value] = true;
+  selectedOC[agentId] = true;
+  selectedOC[plannerId] = true;
+
+  var oaiModels = chatModels().filter(function(m){ return selectedOC[m.id] && m.protocol !== "anthropic"; });
+  var antModels = chatModels().filter(function(m){ return selectedOC[m.id] && m.protocol === "anthropic"; });
+
+  var oaiModelsObj = {};
+  oaiModels.forEach(function(m){ oaiModelsObj[m.id] = { name: displayName(m.id) }; });
+
+  var antModelsObj = {};
+  antModels.forEach(function(m){ antModelsObj[m.id] = { name: displayName(m.id) }; });
+
+  var providers = {};
+  if(oaiModels.length){
+    providers[providerName()] = {
+      npm: "@ai-sdk/openai-compatible",
+      name: providerDisplayName() + " (OpenAI)",
+      options: { baseURL: getProxyUrl(), apiKey: apiKey },
+      models: oaiModelsObj
+    };
+  }
+  if(antModels.length){
+    providers[providerName() + "-ant"] = {
+      npm: "@ai-sdk/anthropic",
+      name: providerDisplayName() + " (Anthropic)",
+      options: { baseURL: getProxyOrigin() + "/anthropic/v1", apiKey: apiKey },
+      models: antModelsObj
+    };
+  }
+
+  function ocModel(id){
+    var m = getModel(id);
+    if(m && m.protocol === "anthropic") return providerName() + "-ant/" + id;
+    return providerName() + "/" + id;
+  }
+
+  var obj = {
+    "$schema": "https://opencode.ai/config.json",
+    provider: providers,
+    model: ocModel(agentId),
+    small_model: ocModel(agentId),
+    agent: {
+      build: { model: ocModel(agentId), description: "Coding agent" },
+      plan:  { model: ocModel(plannerId), description: "Planning agent" }
+    }
+  };
+
+  // Add proxy MCP and/or client-side Tavily for search
+  var mcpObj = {};
+  if(hasMCP()){
+    mcpObj["proxy-search"] = {
+      type: "remote",
+      url: getProxyOrigin() + "/mcp/sse",
+      headers: { "Authorization": "Bearer " + apiKey },
+      enabled: tavily ? false : true
+    };
+  }
+  if(tavily){
+    mcpObj["tavily"] = {
+      type: "remote",
+      url: "https://mcp.tavily.com/mcp",
+      headers: { "Authorization": "Bearer " + tavily },
+      enabled: true
+    };
+  }
+  if(Object.keys(mcpObj).length) obj.mcp = mcpObj;
+
+  var unixSteps = ol([
+    'Save <code>opencode.json</code> to your project root, or globally:<br><code>mkdir -p ~/.config/opencode && cp opencode.json ~/.config/opencode/opencode.json</code>',
+    'Replace <code>&lt;YOUR-API-KEY&gt;</code> placeholders with your actual credentials.',
+    'Launch OpenCode from your project directory.'
+  ]);
+
+  return {
+    config: JSON.stringify(obj, null, 2),
+    filename: "opencode.json",
+    install: {
+      macos: unixSteps,
+      linux: unixSteps,
+      windows: ol([
+        'Save <code>opencode.json</code> to your project root, or globally to:<br><code>%APPDATA%\\opencode\\opencode.json</code>',
+        'Replace <code>&lt;YOUR-API-KEY&gt;</code> placeholders with your actual credentials.',
+        'Launch OpenCode from your project directory.'
+      ])
+    }
+  };
+}
+
+// ---- Helpers ----
+function displayName(id){
+  return { "MiniMax-M2.5": "MiniMax M2.5", "MiniMax-M2.7": "MiniMax M2.7", "qwen-3.5": "Qwen 3.5",
+    "glm-5.1": "GLM 5.1", "glm-4.7": "GLM 4.7", "Nemotron-3-Super": "Nemotron 3 Super", "nomic-embed": "Nomic Embed" }[id] || id;
+}
+
+function ol(items){ return "<ol>" + items.map(function(i){ return "<li>" + i + "</li>"; }).join("") + "</ol>"; }
+
+function downloadFile(name, el){
+  var raw = atob(el.dataset.content);
+  var bytes = new Uint8Array(raw.length);
+  for(var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  var blob = new Blob([bytes], { type: "application/octet-stream" });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  a.href = url; a.download = name; a.click();
+  URL.revokeObjectURL(url);
+}
+
+function copyCode(btn){
+  var text = btn.parentElement.textContent.replace(/^Copy/, "").trim();
+  if(navigator.clipboard){
+    navigator.clipboard.writeText(text).then(function(){
+      btn.textContent = "Copied!"; setTimeout(function(){ btn.textContent = "Copy"; }, 1500);
+    });
+  } else {
+    var ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+    btn.textContent = "Copied!"; setTimeout(function(){ btn.textContent = "Copy"; }, 1500);
+  }
+}
+
+function switchCmdTab(btn, idx){
+  var parent = btn.parentElement.parentElement;
+  var tabs = parent.querySelectorAll(".tabs .tab");
+  for(var i = 0; i < tabs.length; i++) tabs[i].classList.remove("active");
+  btn.classList.add("active");
+  var ct = parent.querySelectorAll(".cmd-tab");
+  for(var i = 0; i < ct.length; i++) ct[i].classList.toggle("active", ct[i].dataset.idx === idx);
+}
+
+function switchOS(os){
+  var tabs = document.querySelectorAll("#osTabs .tab");
+  for(var i = 0; i < tabs.length; i++) tabs[i].classList.toggle("active", tabs[i].dataset.os === os);
+  ["macos", "linux", "windows"].forEach(function(o){ document.getElementById("os-" + o).classList.toggle("active", o === os); });
+}
+
+</script>
+</body>
+</html>

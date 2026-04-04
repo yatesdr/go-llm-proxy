@@ -1,0 +1,7 @@
+name = "config-counter"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "COUNTER"
+id = "4e732e7a8e9145bbbf53711faaa6d74b"
