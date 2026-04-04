@@ -416,9 +416,19 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 			outputTokens = usageData.CompletionTokens
 		}
 
+		var inputTokens int
+		if usageData != nil {
+			inputTokens = usageData.PromptTokens
+		}
+
 		emit("message_delta", map[string]any{
 			"delta": map[string]any{"stop_reason": stopReason, "stop_sequence": nil},
-			"usage": map[string]any{"output_tokens": outputTokens},
+			"usage": map[string]any{
+				"input_tokens":                inputTokens,
+				"output_tokens":               outputTokens,
+				"cache_creation_input_tokens":  0,
+				"cache_read_input_tokens":      0,
+			},
 		})
 
 		emit("message_stop", map[string]any{})

@@ -241,6 +241,29 @@
                             <td class="na">N/A</td>
                         </tr>
 
+                        <tr class="matrix-section"><td colspan="5">Server-side features</td></tr>
+                        <tr>
+                            <td>Prompt caching</td>
+                            <td class="n">passthrough</td>
+                            <td class="na">N/A</td>
+                            <td class="na">N/A</td>
+                            <td class="na">N/A</td>
+                        </tr>
+                        <tr>
+                            <td>Token counting</td>
+                            <td class="x">planned</td>
+                            <td class="na">N/A</td>
+                            <td class="na">N/A</td>
+                            <td class="na">N/A</td>
+                        </tr>
+                        <tr>
+                            <td>Extended thinking</td>
+                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003;</td>
+                            <td class="na">N/A</td>
+                            <td class="na">N/A</td>
+                        </tr>
+
                         <tr class="matrix-section"><td colspan="5">Proxy-side processing</td></tr>
                         <tr>
                             <td>Web search (Tavily)</td>
@@ -349,6 +372,7 @@ docker compose -f docker/docker-compose.yml up -d
                     <tr><td style="font-weight:600;white-space:nowrap">Image description</td><td>Images sent to text-only models are described by a vision-capable model and replaced with text. Concurrent processing (up to 5 in parallel), cached by content hash for instant follow-up turns.</td></tr>
                     <tr><td style="font-weight:600;white-space:nowrap">PDF processing</td><td>Text extraction for native PDFs. OCR via dedicated fast model for scanned documents and page images. Results cached across turns.</td></tr>
                     <tr><td style="font-weight:600;white-space:nowrap">Web search</td><td>Server-side search tools (Claude Code, Codex) executed at the proxy via Tavily. Results displayed in client UI. Streaming and non-streaming modes.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">Context tracking</td><td>Token usage from backends reported to clients for context window tracking. Token counting endpoint planned for per-section breakdowns.</td></tr>
                     <tr><td style="font-weight:600;white-space:nowrap">API key management</td><td>Issue proxy keys with per-key model restrictions. Backend credentials stay on the server.</td></tr>
                     <tr><td style="font-weight:600;white-space:nowrap">Usage monitoring</td><td>Per-request logging to SQLite. Token counts, latency, per-user breakdowns. Web dashboard and CLI reports.</td></tr>
                     <tr><td style="font-weight:600;white-space:nowrap">Config generator</td><td>Built-in web UI creates ready-to-use configs for Claude Code, Codex, OpenCode, and Qwen Coder.</td></tr>

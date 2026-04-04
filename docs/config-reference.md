@@ -100,6 +100,22 @@ models:
 
 Native Anthropic backends skip the pipeline by default (images, search, and PDFs pass through to Anthropic's infrastructure). Set `force_pipeline: true` to override this.
 
+### Server-side features
+
+Some coding agents (Claude Code, Codex) expect server-side features from the API. The proxy emulates or passes through the following:
+
+| Feature | Status | Notes |
+|---|---|---|
+| Web search results | Emulated | `server_tool_use` + `web_search_tool_result` blocks emitted for Claude Code UI |
+| Token usage reporting | Supported | `input_tokens` and `output_tokens` from backend response forwarded to client |
+| Token counting endpoint | Planned | `countTokens` API endpoint for per-section token breakdowns |
+| Prompt caching | Passthrough | `cache_control` fields forwarded to backends that support them; stripped otherwise |
+| Extended thinking | Supported | Reasoning tokens translated to thinking blocks |
+| Advisor tool | Not supported | Server-side reviewer model — requires Anthropic API |
+| Tool search / deferral | Not supported | `tool_reference` blocks — requires Anthropic API |
+| Files API | Not supported | File upload/download — requires Anthropic API |
+| Code execution | Not supported | Sandboxed server-side execution — requires Anthropic API |
+
 ## Key fields
 
 ```yaml
