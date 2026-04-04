@@ -1190,26 +1190,26 @@ function genOpenCode(apiKey, tavily){
     }
   };
 
-  // Prefer proxy MCP endpoint for search if available, otherwise client-side Tavily
+  // Add proxy MCP and/or client-side Tavily for search
+  var mcpObj = {};
   if(HAS_MCP){
-    obj.mcp = {
-      "proxy-search": {
-        type: "remote",
-        url: PROXY_ORIGIN + "/mcp/sse",
-        headers: { "Authorization": "Bearer " + apiKey },
-        enabled: true
-      }
-    };
-  } else if(tavily){
-    obj.mcp = {
-      tavily: {
-        type: "remote",
-        url: "https://mcp.tavily.com/mcp",
-        headers: { "Authorization": "Bearer " + tavily },
-        enabled: true
-      }
+    mcpObj["proxy-search"] = {
+      type: "remote",
+      url: PROXY_ORIGIN + "/mcp/sse",
+      headers: { "Authorization": "Bearer " + apiKey },
+      enabled: true
     };
   }
+  if(tavily){
+    mcpObj["tavily"] = {
+      type: "remote",
+      url: "https://mcp.tavily.com/mcp",
+      headers: { "Authorization": "Bearer " + tavily },
+      enabled: true
+    };
+    };
+  }
+  if(Object.keys(mcpObj).length) obj.mcp = mcpObj;
 
   var unixSteps = ol([
     'Save <code>opencode.json</code> to your project root, or globally:<br><code>mkdir -p ~/.config/opencode &amp;&amp; cp opencode.json ~/.config/opencode/opencode.json</code>',
