@@ -392,11 +392,11 @@ keys:
                 </table>
 
                 <p style="margin-top:16px">Run it:</p>
-                <div class="code-block"><span style="color:#8893a4"># Docker</span>
-docker compose -f docker/docker-compose.yml up -d
+                <div class="code-block"><span style="color:#8893a4"># Binary (recommended)</span>
+./go-llm-proxy -config config.yaml
 
-<span style="color:#8893a4"># Or binary</span>
-./go-llm-proxy -config config.yaml</div>
+<span style="color:#8893a4"># Docker (limited testing — ongoing)</span>
+docker compose -f docker/docker-compose.yml up -d</div>
                 <p>Point any OpenAI or Anthropic-compatible client at <code>http://localhost:8080/v1</code>. That's it.</p>
                 <p style="font-size:14px">The built-in <strong>config generator</strong> at <code>GET /</code> creates ready-to-use configs for each coding agent. Enable it with <code>-serve-config-generator</code> or <code>serve_config_generator: true</code> in config.</p>
             </div>
