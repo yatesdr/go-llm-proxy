@@ -15,6 +15,7 @@ import (
 	"go-llm-proxy/internal/api"
 	"go-llm-proxy/internal/config"
 	"go-llm-proxy/internal/httputil"
+	"go-llm-proxy/internal/pipeline"
 )
 
 // msgToolCallState tracks a tool call during Anthropic Messages streaming.
@@ -306,11 +307,12 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 			// Emit keepalive comments during search execution.
 			searchDone := make(chan struct{})
 			var newChatReq map[string]any
+			var searchResults []pipeline.SearchCallResult
 			var searchErr error
 
 			go func() {
 				defer close(searchDone)
-				newChatReq, searchErr = h.pipeline.ExecuteSearchAndResend(
+				newChatReq, searchResults, searchErr = h.pipeline.ExecuteSearchAndResend(
 					ctx, chatReq, model, searchCalls, accumulatedContent.String())
 			}()
 
@@ -336,6 +338,10 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 				blockIndex = toolCallBlockIndexStart
 				toolCalls = nil
 				toolCallBuffer = nil
+
+				// Emit server_tool_use + web_search_tool_result blocks so clients
+				// (Claude Code) can display search results in their UI.
+				blockIndex = emitSearchResultBlocks(emit, blockIndex, searchResults)
 
 				newFinish, newUsage, newTC := h.streamFromBackend(ctx, w, flusher, newChatReq, model,
 					blockIndex, &textBlockOpen, openTextBlock, closeTextBlock, emit)
@@ -558,4 +564,57 @@ func (h *MessagesHandler) streamFromBackend(
 		}
 	}
 	return
+}
+
+// emitSearchResultBlocks injects Anthropic-format server_tool_use and
+// web_search_tool_result content blocks into the SSE stream. This allows
+// clients like Claude Code to display search results in their UI
+// (e.g., "Did N searches in Xs").
+//
+// Returns the updated blockIndex after all blocks have been emitted.
+func emitSearchResultBlocks(emit func(string, map[string]any), blockIndex int, results []pipeline.SearchCallResult) int {
+	for _, sr := range results {
+		if sr.Error != "" {
+			continue // Skip failed searches — no results to show.
+		}
+
+		toolUseID := sr.ToolUseID
+		if toolUseID == "" {
+			toolUseID = api.RandomID("srvtoolu_")
+		}
+
+		// server_tool_use block: signals a search was initiated.
+		emit("content_block_start", map[string]any{
+			"index": blockIndex,
+			"content_block": map[string]any{
+				"type":  "server_tool_use",
+				"id":    toolUseID,
+				"name":  "web_search_20250305",
+				"input": map[string]any{"query": sr.Query},
+			},
+		})
+		emit("content_block_stop", map[string]any{"index": blockIndex})
+		blockIndex++
+
+		// web_search_tool_result block: contains the actual search hits.
+		resultContent := make([]any, 0, len(sr.Hits))
+		for _, hit := range sr.Hits {
+			resultContent = append(resultContent, map[string]any{
+				"type":  "web_search_result",
+				"title": hit.Title,
+				"url":   hit.URL,
+			})
+		}
+		emit("content_block_start", map[string]any{
+			"index": blockIndex,
+			"content_block": map[string]any{
+				"type":        "web_search_tool_result",
+				"tool_use_id": toolUseID,
+				"content":     resultContent,
+			},
+		})
+		emit("content_block_stop", map[string]any{"index": blockIndex})
+		blockIndex++
+	}
+	return blockIndex
 }

@@ -417,7 +417,7 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 
 			go func() {
 				defer close(searchDone)
-				newChatReq, searchErr = h.pipeline.ExecuteSearchAndResend(
+				newChatReq, _, searchErr = h.pipeline.ExecuteSearchAndResend(
 					ctx, chatReq, model, searchCalls, textBuf.String())
 			}()
 

@@ -136,9 +136,32 @@ func HasSearchToolCall(toolCalls []api.ChatChoiceToolCall) bool {
 
 // --- Tavily API ---
 
-// ExecuteTavilySearch calls the Tavily search API and returns formatted results.
-// Uses the Pipeline's HTTP client for consistent redirect/timeout behavior.
+// SearchHit represents a single search result from Tavily.
+type SearchHit struct {
+	Title string
+	URL   string
+}
+
+// SearchCallResult holds structured results for a single web_search execution.
+// Used by streaming handlers to emit search result blocks to clients.
+type SearchCallResult struct {
+	ToolUseID string
+	Query     string
+	Hits      []SearchHit
+	Error     string // non-empty if the search failed
+}
+
+// ExecuteTavilySearch calls the Tavily search API and returns formatted text results.
+// Wrapper around ExecuteTavilySearchStructured for callers that don't need structured hits.
 func (p *Pipeline) ExecuteTavilySearch(ctx context.Context, apiKey, query string) (string, error) {
+	formatted, _, err := p.ExecuteTavilySearchStructured(ctx, apiKey, query)
+	return formatted, err
+}
+
+// ExecuteTavilySearchStructured calls the Tavily search API and returns both
+// formatted text (for injecting into chat requests) and structured hits
+// (for emitting search result blocks to clients like Claude Code).
+func (p *Pipeline) ExecuteTavilySearchStructured(ctx context.Context, apiKey, query string) (string, []SearchHit, error) {
 	start := time.Now()
 
 	// 10-second timeout for Tavily calls.
@@ -153,31 +176,29 @@ func (p *Pipeline) ExecuteTavilySearch(ctx context.Context, apiKey, query string
 		"max_results":    5,
 	})
 	if err != nil {
-		return "", fmt.Errorf("marshal tavily request: %w", err)
+		return "", nil, fmt.Errorf("marshal tavily request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(tavilyCtx, "POST", "https://api.tavily.com/search", bytes.NewReader(reqBody))
 	if err != nil {
-		return "", fmt.Errorf("build tavily request: %w", err)
+		return "", nil, fmt.Errorf("build tavily request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("tavily request: %w", err)
+		return "", nil, fmt.Errorf("tavily request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MB limit
 	if err != nil {
-		return "", fmt.Errorf("read tavily response: %w", err)
+		return "", nil, fmt.Errorf("read tavily response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		// Log the full response for debugging but return a sanitized error to the caller.
-		// The response body could contain reflected request data (including the API key).
 		slog.Error("tavily API error", "status", resp.StatusCode, "body", string(body))
-		return "", fmt.Errorf("tavily returned HTTP %d", resp.StatusCode)
+		return "", nil, fmt.Errorf("tavily returned HTTP %d", resp.StatusCode)
 	}
 
 	var tavilyResp struct {
@@ -190,9 +211,10 @@ func (p *Pipeline) ExecuteTavilySearch(ctx context.Context, apiKey, query string
 		} `json:"results"`
 	}
 	if err := json.Unmarshal(body, &tavilyResp); err != nil {
-		return "", fmt.Errorf("parse tavily response: %w", err)
+		return "", nil, fmt.Errorf("parse tavily response: %w", err)
 	}
 
+	// Build formatted text for chat injection.
 	var sb strings.Builder
 	if tavilyResp.Answer != "" {
 		sb.WriteString("Answer: ")
@@ -204,12 +226,18 @@ func (p *Pipeline) ExecuteTavilySearch(ctx context.Context, apiKey, query string
 		fmt.Fprintf(&sb, "\n%d. %s\n   URL: %s\n   %s\n", i+1, r.Title, r.URL, r.Content)
 	}
 
+	// Build structured hits for client-facing search result blocks.
+	var hits []SearchHit
+	for _, r := range tavilyResp.Results {
+		hits = append(hits, SearchHit{Title: r.Title, URL: r.URL})
+	}
+
 	slog.Debug("tavily search completed",
 		"query", query,
 		"results", len(tavilyResp.Results),
 		"duration", time.Since(start))
 
-	return sb.String(), nil
+	return sb.String(), hits, nil
 }
 
 // --- Shared message-building ---
@@ -232,18 +260,15 @@ func appendMessagesToSlice(existing any, additional ...any) []any {
 }
 
 // executeSearchCalls runs Tavily for each web_search tool call and returns
-// (toolResultMessages, hasClientToolCalls). Non-search tool calls are skipped
-// but flagged via hasClientToolCalls so the caller can decide what to do.
+// (toolResultMessages, searchResults, hasClientToolCalls). The searchResults
+// contain structured data for each search call, used by streaming handlers
+// to emit search result blocks to clients.
 func (p *Pipeline) executeSearchCalls(ctx context.Context, searchKey string,
-	toolCalls []api.ChatChoiceToolCall) (toolResults []any, hasClientTools bool) {
+	toolCalls []api.ChatChoiceToolCall) (toolResults []any, searchResults []SearchCallResult, hasClientTools bool) {
 
 	for _, tc := range toolCalls {
 		if tc.Function.Name != webSearchFunctionName {
 			hasClientTools = true
-			// Add a synthetic tool result so the message array is valid
-			// (Chat Completions requires a result for every tool call).
-			// This allows re-sending to the backend with search context
-			// even when client-side tools are present.
 			toolResults = append(toolResults, map[string]any{
 				"role":         "tool",
 				"tool_call_id": tc.ID,
@@ -260,11 +285,14 @@ func (p *Pipeline) executeSearchCalls(ctx context.Context, searchKey string,
 			args.Query = tc.Function.Arguments // best-effort fallback
 		}
 
-		result, err := p.ExecuteTavilySearch(ctx, searchKey, args.Query)
+		result, hits, err := p.ExecuteTavilySearchStructured(ctx, searchKey, args.Query)
+		scr := SearchCallResult{ToolUseID: tc.ID, Query: args.Query, Hits: hits}
 		if err != nil {
 			slog.Warn("tavily search failed", "query", args.Query, "error", err)
 			result = fmt.Sprintf("Web search failed: %s", err.Error())
+			scr.Error = err.Error()
 		}
+		searchResults = append(searchResults, scr)
 
 		toolResults = append(toolResults, map[string]any{
 			"role":         "tool",
@@ -277,9 +305,10 @@ func (p *Pipeline) executeSearchCalls(ctx context.Context, searchKey string,
 
 // buildSearchContinuation constructs a new chatReq with the assistant's tool calls
 // and search results appended to the message history. Returns a shallow copy of
-// chatReq with updated messages (does not mutate the original).
+// chatReq with updated messages, the structured search results, and whether
+// client-side tool calls were present.
 func (p *Pipeline) buildSearchContinuation(ctx context.Context, chatReq map[string]any,
-	searchKey string, toolCalls []api.ChatChoiceToolCall, assistantContent string) (map[string]any, bool, error) {
+	searchKey string, toolCalls []api.ChatChoiceToolCall, assistantContent string) (map[string]any, []SearchCallResult, bool, error) {
 
 	assistantMsg := map[string]any{
 		"role":       "assistant",
@@ -290,7 +319,7 @@ func (p *Pipeline) buildSearchContinuation(ctx context.Context, chatReq map[stri
 	}
 
 	newMessages := appendMessagesToSlice(chatReq["messages"], assistantMsg)
-	toolResults, hasClientTools := p.executeSearchCalls(ctx, searchKey, toolCalls)
+	toolResults, searchResults, hasClientTools := p.executeSearchCalls(ctx, searchKey, toolCalls)
 	newMessages = append(newMessages, toolResults...)
 
 	newReq := make(map[string]any, len(chatReq))
@@ -298,7 +327,7 @@ func (p *Pipeline) buildSearchContinuation(ctx context.Context, chatReq map[stri
 		newReq[k] = v
 	}
 	newReq["messages"] = newMessages
-	return newReq, hasClientTools, nil
+	return newReq, searchResults, hasClientTools, nil
 }
 
 // --- Non-streaming search loop ---
@@ -329,7 +358,7 @@ func (p *Pipeline) HandleNonStreamingSearchLoop(ctx context.Context, chatReq map
 			content = *choice.Message.Content
 		}
 
-		newReq, hasClientTools, err := p.buildSearchContinuation(
+		newReq, _, hasClientTools, err := p.buildSearchContinuation(
 			ctx, chatReq, searchKey, choice.Message.ToolCalls, content)
 		if err != nil {
 			return nil, fmt.Errorf("search continuation: %w", err)
@@ -359,17 +388,18 @@ func (p *Pipeline) HandleNonStreamingSearchLoop(ctx context.Context, chatReq map
 // --- Streaming search support ---
 
 // ExecuteSearchAndResend builds a new chatReq with search results appended.
+// Returns the new request and structured search results for client-facing blocks.
 // Used by streaming handlers after detecting web_search tool calls at finish_reason.
 func (p *Pipeline) ExecuteSearchAndResend(ctx context.Context, chatReq map[string]any,
-	model *config.ModelConfig, toolCalls []api.ChatChoiceToolCall, assistantContent string) (map[string]any, error) {
+	model *config.ModelConfig, toolCalls []api.ChatChoiceToolCall, assistantContent string) (map[string]any, []SearchCallResult, error) {
 
 	searchKey := p.ResolveWebSearchKey(model)
 	if searchKey == "" {
-		return nil, fmt.Errorf("no search key configured")
+		return nil, nil, fmt.Errorf("no search key configured")
 	}
 
-	newReq, _, err := p.buildSearchContinuation(ctx, chatReq, searchKey, toolCalls, assistantContent)
-	return newReq, err
+	newReq, searchResults, _, err := p.buildSearchContinuation(ctx, chatReq, searchKey, toolCalls, assistantContent)
+	return newReq, searchResults, err
 }
 
 // streamingSearchState tracks accumulated tool calls during streaming to detect
