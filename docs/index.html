@@ -278,32 +278,32 @@
                             <td class="na">N/A</td>
                         </tr>
 
-                        <tr class="matrix-section"><td colspan="5">Proxy-side processing</td></tr>
+                        <tr class="matrix-section"><td colspan="5">Proxy-side processing (<a href="https://github.com/yatesdr/go-llm-proxy/blob/main/docs/pipeline.md" style="text-transform:none;font-weight:400;letter-spacing:0">details</a>)</td></tr>
                         <tr>
                             <td>Web search (Tavily)</td>
                             <td class="y">&#10003;</td>
                             <td class="y">&#10003;</td>
-                            <td class="na">N/A</td>
-                            <td class="na">N/A</td>
+                            <td class="y">MCP</td>
+                            <td class="na">client-side</td>
                         </tr>
                         <tr>
                             <td>Image description</td>
-                            <td class="y">&#10003;</td>
-                            <td class="y">&#10003;</td>
-                            <td class="y">&#10003;</td>
-                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003; vision</td>
+                            <td class="y">&#10003; vision</td>
+                            <td class="y">&#10003; vision</td>
+                            <td class="y">&#10003; vision</td>
                         </tr>
                         <tr>
                             <td>PDF text extraction</td>
-                            <td class="y">&#10003;</td>
-                            <td class="y">&#10003;</td>
+                            <td class="y">&#10003; proxy</td>
+                            <td class="n">client-side</td>
                             <td class="y">&#10003;</td>
                             <td class="y">&#10003;</td>
                         </tr>
                         <tr>
-                            <td>PDF page OCR</td>
-                            <td class="y">&#10003;</td>
-                            <td class="y">&#10003;</td>
+                            <td>Scanned PDF / OCR</td>
+                            <td class="y">&#10003; OCR model</td>
+                            <td class="y">&#10003; OCR model</td>
                             <td class="y">&#10003;</td>
                             <td class="y">&#10003;</td>
                         </tr>
@@ -347,7 +347,7 @@
                     </tbody>
                 </table>
 
-                <p style="margin-top:16px;font-size:13px;color:var(--muted)">Web search intercepts server-side search tool calls, executes them via <a href="https://tavily.com">Tavily</a>, and injects results back into the conversation. Image description routes images to a vision-capable model when the target model is text-only. PDF text extraction runs locally in pure Go; scanned PDFs and page images are routed to a dedicated OCR model (or the vision model as fallback). All image and PDF results are cached by content hash for instant follow-up turns.</p>
+                <p style="margin-top:16px;font-size:13px;color:var(--muted)">Web search intercepts server-side search tool calls, executes them via <a href="https://tavily.com">Tavily</a>, and injects results back into the conversation. Image description routes user-attached images to a vision model; tool output images (PDF pages, screenshots) are routed to a dedicated OCR model for text extraction. PDF text extraction runs locally in pure Go; scanned PDFs fall back to the OCR model. All results are cached by content hash for instant follow-up turns. See the <a href="https://github.com/yatesdr/go-llm-proxy/blob/main/docs/pipeline.md">pipeline documentation</a> for full details.</p>
             </div>
         </section>
 
@@ -437,6 +437,7 @@ docker compose -f docker/docker-compose.yml up -d
                     <tr><td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/docs/config-reference.md">Configuration reference</a></td><td>All config fields, modes, and examples</td></tr>
                     <tr><td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/docs/claude-code.md">Claude Code guide</a></td><td>Messages API translation, tool calling, web search</td></tr>
                     <tr><td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/docs/codex.md">Codex CLI guide</a></td><td>Responses API translation, compaction, context windows</td></tr>
+                    <tr><td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/docs/pipeline.md">Processing pipeline</a></td><td>Image description, PDF OCR, web search &mdash; per-client behavior</td></tr>
                     <tr><td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/docs/docker.md">Docker deployment</a></td><td>One config file, one command</td></tr>
                     <tr><td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/docs/security.md">Security</a></td><td>Hardening, rate limiting, deployment recommendations</td></tr>
                 </table>
