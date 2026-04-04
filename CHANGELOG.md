@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## v0.4.0
+## v0.3.0
 
 ### Added
 - **Full Codex CLI compatibility** — all pipeline features (web search, image description, PDF OCR) tested and working end-to-end with Codex
@@ -34,7 +34,7 @@ All notable changes to this project will be documented in this file.
 - **OCR not triggering for Codex PDFs** — heuristic required 3+ images per tool message; Codex sends 1 per `view_image`. Changed to trigger OCR for all tool-role images
 - **Config generator syntax error** — stray closing brace in OpenCode MCP config broke the page
 
-## v0.3.0
+## v0.2.1
 
 ### Added
 - **Processing pipeline** for transparent content handling on text-only backends
