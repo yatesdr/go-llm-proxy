@@ -7,7 +7,7 @@
     <link rel="icon" href="favicon.ico" sizes="any">
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <meta name="description" content="Connect Claude Code, Codex, OpenCode, and Qwen Coder to local models running on vLLM, llama-server, Ollama, or any OpenAI-compatible backend. Single binary, zero dependencies.">
+    <meta name="description" content="Connect Claude Code, Codex, OpenCode, and Qwen Code to local models running on vLLM, llama-server, Ollama, or any OpenAI-compatible backend. Single binary, zero dependencies.">
     <style>
         *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
         :root{
@@ -124,7 +124,7 @@
         <section class="hero">
             <div class="container">
                 <h1>Connect coding agents to any model</h1>
-                <p class="subtitle">A protocol-translating proxy that connects Claude Code, Codex, OpenCode, and Qwen Coder to local and upstream models, injecting the tools you expect.</p>
+                <p class="subtitle">A protocol-translating proxy that connects Claude Code, Codex, OpenCode, and Qwen Code to local and upstream models, injecting the tools you expect.</p>
                 <div class="cta">
                     <a href="https://github.com/yatesdr/go-llm-proxy/releases" class="btn btn-primary">Download</a>
                     <a href="https://github.com/yatesdr/go-llm-proxy" class="btn btn-secondary">View Source</a>
@@ -148,7 +148,7 @@
                         <span class="d-box d-agent">Claude Code</span>
                         <span class="d-box d-agent">Codex CLI</span>
                         <span class="d-box d-agent">OpenCode</span>
-                        <span class="d-box d-agent">Qwen Coder</span>
+                        <span class="d-box d-agent">Qwen Code</span>
                         <span class="d-box d-agent">OpenClaw</span>
                         <span class="d-box d-agent">Your App</span>
                     </div>
@@ -191,7 +191,7 @@
                             <th>Claude Code</th>
                             <th>Codex CLI</th>
                             <th>OpenCode</th>
-                            <th>Qwen Coder</th>
+                            <th>Qwen Code</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -342,7 +342,7 @@
                             <td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/docs/claude-code.md">Claude Code</a></td>
                             <td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/docs/codex.md">Codex CLI</a></td>
                             <td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/docs/opencode.md">OpenCode</a></td>
-                            <td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/docs/qwen-code.md">Qwen Coder</a></td>
+                            <td><a href="https://github.com/yatesdr/go-llm-proxy/blob/main/docs/qwen-code.md">Qwen Code</a></td>
                         </tr>
                     </tbody>
                 </table>
@@ -426,7 +426,7 @@ docker compose -f docker/docker-compose.yml up -d</div>
                     <tr><td style="font-weight:600;white-space:nowrap">Context tracking</td><td>Token usage from backends reported to clients for context window tracking. Token counting endpoint planned for per-section breakdowns.</td></tr>
                     <tr><td style="font-weight:600;white-space:nowrap">API key management</td><td>Issue proxy keys with per-key model restrictions. Backend credentials stay on the server.</td></tr>
                     <tr><td style="font-weight:600;white-space:nowrap">Usage monitoring</td><td>Per-request logging to SQLite. Token counts, latency, per-user breakdowns. Web dashboard and CLI reports.</td></tr>
-                    <tr><td style="font-weight:600;white-space:nowrap">Config generator</td><td>Built-in web UI creates ready-to-use configs for Claude Code, Codex, OpenCode, and Qwen Coder.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">Config generator</td><td>Built-in web UI creates ready-to-use configs for Claude Code, Codex, OpenCode, and Qwen Code.</td></tr>
                     <tr><td style="font-weight:600;white-space:nowrap">Hot reload</td><td>Config reloads on file save or SIGHUP. Add models or rotate keys without restarting.</td></tr>
                     <tr><td style="font-weight:600;white-space:nowrap">Security</td><td>Constant-time auth, IP rate limiting, SSRF protection, sanitized error responses, path allowlisting.</td></tr>
                 </table>
