@@ -76,12 +76,23 @@ These clients handle PDFs entirely client-side. The proxy's PDF pipeline runs fo
 
 ## Web search
 
-When a client includes a web search tool, the proxy intercepts it, executes the search via [Tavily](https://tavily.com/), and injects results into the conversation. The backend model sees only the final response with search context incorporated.
+When a client includes a web search tool, the proxy intercepts it, executes the search, and injects results into the conversation. The backend model sees only the final response with search context incorporated.
+
+### Supported providers
+
+The proxy auto-detects the search provider from the `web_search_key` prefix:
+
+| Provider | Key prefix | Free tier | Notes |
+|---|---|---|---|
+| [Tavily](https://tavily.com/) | `tvly-` | 1,000 req/month | Includes AI-generated answer summary |
+| [Brave Search](https://brave.com/search/api/) | `BSA` | $5/month credit (~1,000 req) | Independent index, privacy-focused |
+
+### Per-client behavior
 
 | Client | Search tool type | Proxy action |
 |---|---|---|
-| **Claude Code** | `web_search_20250305` (server tool) | Strip tool, inject `web_search` function tool, execute via Tavily, emit `server_tool_use` + `web_search_tool_result` blocks |
-| **Codex CLI** | `web_search` (server tool) | Strip tool, inject `web_search` function tool, execute via Tavily, emit `web_search_call` output items |
+| **Claude Code** | `web_search_20250305` (server tool) | Strip tool, inject `web_search` function tool, execute search, emit `server_tool_use` + `web_search_tool_result` blocks |
+| **Codex CLI** | `web_search` (server tool) | Strip tool, inject `web_search` function tool, execute search, emit `web_search_call` output items |
 | **OpenCode** | MCP tool via `/mcp/sse` | Proxy serves MCP endpoint with `web_search` tool |
 | **Qwen Code** | Client-side function tool | No proxy involvement — client calls Tavily/Google directly |
 
@@ -89,7 +100,7 @@ When a client includes a web search tool, the proxy intercepts it, executes the 
 
 | Role | Recommended | Parameters | Notes |
 |---|---|---|---|
-| **Vision** | [Qwen3-VL-8B](https://huggingface.co/Qwen/Qwen3-VL-8B) | 8B | Best quality/speed balance for image description |
+| **Vision** | [Qwen3-VL-8B](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct) | 8B | Best quality/speed balance for image description |
 | **OCR** | [PaddleOCR-VL-1.5](https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.5) | 0.9B | Purpose-built for document parsing, 94.5% accuracy, ~2s/page |
 | **OCR (alt)** | [DeepSeek-OCR 2](https://huggingface.co/deepseek-ai/DeepSeek-OCR) | 3B | Higher accuracy (97%), layout analysis, table extraction |
 

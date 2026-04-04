@@ -413,9 +413,9 @@ keys:
 
                 <h3 style="margin-top:20px">Recommended processor models</h3>
                 <table style="font-size:13px;margin-top:8px">
-                    <tr><td style="font-weight:600;white-space:nowrap">Vision</td><td><a href="https://huggingface.co/Qwen/Qwen3-VL-8B">Qwen3-VL-8B</a> &mdash; best quality/speed balance for image description. Handles charts, screenshots, diagrams.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">Vision</td><td><a href="https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct">Qwen3-VL-8B</a> &mdash; best quality/speed balance for image description. Handles charts, screenshots, diagrams.</td></tr>
                     <tr><td style="font-weight:600;white-space:nowrap">OCR</td><td><a href="https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.5">PaddleOCR-VL-1.5</a> (0.9B) &mdash; purpose-built for document parsing. 94.5% accuracy, 109 languages, ~2s/page. Tiny VRAM footprint.</td></tr>
-                    <tr><td style="font-weight:600;white-space:nowrap">Web search</td><td><a href="https://tavily.com">Tavily</a> &mdash; AI-optimized search API. Free tier includes 1,000 requests/month. Sign up for an API key and add it to <code>processors.web_search_key</code>.</td></tr>
+                    <tr><td style="font-weight:600;white-space:nowrap">Web search</td><td><a href="https://tavily.com">Tavily</a> (free: 1,000 req/month) or <a href="https://brave.com/search/api/">Brave Search</a> (free: $5/month credit). Add your API key to <code>processors.web_search_key</code> &mdash; provider is auto-detected from the key prefix.</td></tr>
                 </table>
 
                 <p style="margin-top:16px">Run it:</p>

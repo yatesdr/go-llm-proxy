@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,11 @@ import (
 	"go-llm-proxy/internal/api"
 	"go-llm-proxy/internal/config"
 )
+
+// newGzipReader wraps gzip.NewReader for use in search response decoding.
+func newGzipReader(r io.Reader) (*gzip.Reader, error) {
+	return gzip.NewReader(r)
+}
 
 const webSearchFunctionName = "web_search"
 
@@ -152,21 +158,28 @@ type SearchCallResult struct {
 	Error     string // non-empty if the search failed
 }
 
+// ExecuteWebSearch dispatches a web search to the appropriate provider based on
+// the API key prefix: "tvly-" → Tavily, "BSA" → Brave Search.
+// Returns formatted text (for chat injection) and structured hits (for client UI).
+func (p *Pipeline) ExecuteWebSearch(ctx context.Context, apiKey, query string) (string, []SearchHit, error) {
+	if strings.HasPrefix(apiKey, "BSA") {
+		return p.executeBraveSearch(ctx, apiKey, query)
+	}
+	// Default to Tavily (handles "tvly-" prefix and any other keys).
+	return p.executeTavilySearch(ctx, apiKey, query)
+}
+
 // ExecuteTavilySearch calls the Tavily search API and returns formatted text results.
-// Wrapper around ExecuteTavilySearchStructured for callers that don't need structured hits.
+// Wrapper for callers that don't need structured hits.
 func (p *Pipeline) ExecuteTavilySearch(ctx context.Context, apiKey, query string) (string, error) {
-	formatted, _, err := p.ExecuteTavilySearchStructured(ctx, apiKey, query)
+	formatted, _, err := p.ExecuteWebSearch(ctx, apiKey, query)
 	return formatted, err
 }
 
-// ExecuteTavilySearchStructured calls the Tavily search API and returns both
-// formatted text (for injecting into chat requests) and structured hits
-// (for emitting search result blocks to clients like Claude Code).
-func (p *Pipeline) ExecuteTavilySearchStructured(ctx context.Context, apiKey, query string) (string, []SearchHit, error) {
+func (p *Pipeline) executeTavilySearch(ctx context.Context, apiKey, query string) (string, []SearchHit, error) {
 	start := time.Now()
 
-	// 10-second timeout for Tavily calls.
-	tavilyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	searchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	reqBody, err := json.Marshal(map[string]any{
@@ -180,7 +193,7 @@ func (p *Pipeline) ExecuteTavilySearchStructured(ctx context.Context, apiKey, qu
 		return "", nil, fmt.Errorf("marshal tavily request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(tavilyCtx, "POST", "https://api.tavily.com/search", bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(searchCtx, "POST", "https://api.tavily.com/search", bytes.NewReader(reqBody))
 	if err != nil {
 		return "", nil, fmt.Errorf("build tavily request: %w", err)
 	}
@@ -192,7 +205,7 @@ func (p *Pipeline) ExecuteTavilySearchStructured(ctx context.Context, apiKey, qu
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MB limit
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return "", nil, fmt.Errorf("read tavily response: %w", err)
 	}
@@ -215,7 +228,6 @@ func (p *Pipeline) ExecuteTavilySearchStructured(ctx context.Context, apiKey, qu
 		return "", nil, fmt.Errorf("parse tavily response: %w", err)
 	}
 
-	// Build formatted text for chat injection.
 	var sb strings.Builder
 	if tavilyResp.Answer != "" {
 		sb.WriteString("Answer: ")
@@ -227,7 +239,6 @@ func (p *Pipeline) ExecuteTavilySearchStructured(ctx context.Context, apiKey, qu
 		fmt.Fprintf(&sb, "\n%d. %s\n   URL: %s\n   %s\n", i+1, r.Title, r.URL, r.Content)
 	}
 
-	// Build structured hits for client-facing search result blocks.
 	var hits []SearchHit
 	for _, r := range tavilyResp.Results {
 		hits = append(hits, SearchHit{Title: r.Title, URL: r.URL})
@@ -236,6 +247,81 @@ func (p *Pipeline) ExecuteTavilySearchStructured(ctx context.Context, apiKey, qu
 	slog.Debug("tavily search completed",
 		"query", query,
 		"results", len(tavilyResp.Results),
+		"duration", time.Since(start))
+
+	return sb.String(), hits, nil
+}
+
+func (p *Pipeline) executeBraveSearch(ctx context.Context, apiKey, query string) (string, []SearchHit, error) {
+	start := time.Now()
+
+	searchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	url := fmt.Sprintf("https://api.search.brave.com/res/v1/web/search?q=%s&count=5",
+		strings.ReplaceAll(strings.ReplaceAll(query, " ", "+"), "&", "%26"))
+
+	req, err := http.NewRequestWithContext(searchCtx, "GET", url, nil)
+	if err != nil {
+		return "", nil, fmt.Errorf("build brave request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept-Encoding", "gzip")
+	req.Header.Set("X-Subscription-Token", apiKey)
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return "", nil, fmt.Errorf("brave request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var reader io.Reader = resp.Body
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		gr, gzErr := newGzipReader(resp.Body)
+		if gzErr != nil {
+			return "", nil, fmt.Errorf("brave gzip decode: %w", gzErr)
+		}
+		defer gr.Close()
+		reader = gr
+	}
+
+	body, err := io.ReadAll(io.LimitReader(reader, 1<<20))
+	if err != nil {
+		return "", nil, fmt.Errorf("read brave response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		slog.Error("brave API error", "status", resp.StatusCode, "body", string(body))
+		return "", nil, fmt.Errorf("brave returned HTTP %d", resp.StatusCode)
+	}
+
+	var braveResp struct {
+		Web struct {
+			Results []struct {
+				Title       string `json:"title"`
+				URL         string `json:"url"`
+				Description string `json:"description"`
+			} `json:"results"`
+		} `json:"web"`
+	}
+	if err := json.Unmarshal(body, &braveResp); err != nil {
+		return "", nil, fmt.Errorf("parse brave response: %w", err)
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Search Results:\n")
+	for i, r := range braveResp.Web.Results {
+		fmt.Fprintf(&sb, "\n%d. %s\n   URL: %s\n   %s\n", i+1, r.Title, r.URL, r.Description)
+	}
+
+	var hits []SearchHit
+	for _, r := range braveResp.Web.Results {
+		hits = append(hits, SearchHit{Title: r.Title, URL: r.URL})
+	}
+
+	slog.Debug("brave search completed",
+		"query", query,
+		"results", len(braveResp.Web.Results),
 		"duration", time.Since(start))
 
 	return sb.String(), hits, nil
@@ -286,10 +372,10 @@ func (p *Pipeline) executeSearchCalls(ctx context.Context, searchKey string,
 			args.Query = tc.Function.Arguments // best-effort fallback
 		}
 
-		result, hits, err := p.ExecuteTavilySearchStructured(ctx, searchKey, args.Query)
+		result, hits, err := p.ExecuteWebSearch(ctx, searchKey, args.Query)
 		scr := SearchCallResult{ToolUseID: tc.ID, Query: args.Query, Hits: hits}
 		if err != nil {
-			slog.Warn("tavily search failed", "query", args.Query, "error", err)
+			slog.Warn("web search failed", "query", args.Query, "error", err)
 			result = fmt.Sprintf("Web search failed: %s", err.Error())
 			scr.Error = err.Error()
 		}
