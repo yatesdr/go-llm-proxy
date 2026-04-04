@@ -1,6 +1,6 @@
 # go-llm-proxy
 
-A single-binary LLM proxy that connects coding assistants to local and upstream models. Translates between API protocols, routes requests across backends, and adds tools that local backends lack — web search, image description, PDF text extraction, and OCR.
+A single-binary LLM proxy that connects coding assistants and AI agents to local and upstream models. Translates between API protocols, routes requests across backends, and adds tools that local backends lack — web search, image description, PDF text extraction, and OCR. Works with Claude Code, Codex, OpenCode, Qwen Code, OpenClaw, and any OpenAI/Anthropic-compatible client.
 
 **[Landing page](https://go-llm-proxy.com)** · **[Config generator](https://go-llm-proxy.com/configure.html)** · **[Releases](https://github.com/yatesdr/go-llm-proxy/releases)**
 
