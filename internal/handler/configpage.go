@@ -298,7 +298,7 @@ select:focus,input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 
         <input type="password" id="apiKey" placeholder="your-proxy-api-key" autocomplete="off">
       </div>
       <div class="field hidden" id="tavilyField">
-        <label for="tavilyKey">Tavily API Key <span style="font-weight:400;text-transform:none">(optional &mdash; web search)</span></label>
+        <label for="tavilyKey" id="tavilyLabel">Tavily API Key <span style="font-weight:400;text-transform:none">(optional &mdash; web search)</span></label>
         <input type="password" id="tavilyKey" placeholder="tvly-..." autocomplete="off">
         <div class="hint" id="tavilyHint"></div>
       </div>
@@ -499,16 +499,25 @@ harnessEl.addEventListener("change", function(){
   document.getElementById("outputFormatField").classList.toggle("hidden", h!=="claude-code" && h!=="codex");
   generateBtn.disabled = !h;
   document.getElementById("outputArea").classList.remove("visible");
-  // Update Tavily hint based on proxy-side search availability and selected harness
+  // Update search key field label, placeholder, and hint per client
+  var label = document.getElementById("tavilyLabel");
+  var input = document.getElementById("tavilyKey");
   var hint = document.getElementById("tavilyHint");
   if(h==="qwen-code"){
-    hint.textContent = "Qwen Code uses client-side search. Enter your Tavily key to enable web search.";
+    label.innerHTML = 'Tavily API Key <span style="font-weight:400;text-transform:none">(optional &mdash; web search)</span>';
+    input.placeholder = "tvly-...";
+    hint.textContent = "Qwen Code uses client-side Tavily search. Only Tavily keys are supported.";
     hint.style.color = "var(--muted)";
-  } else if(HAS_WEB_SEARCH){
-    hint.textContent = "Proxy has web search configured. Enter a key here to use your own instead (reduces proxy load).";
-    hint.style.color = "var(--green)";
   } else {
-    hint.textContent = "";
+    label.innerHTML = 'Tavily API Key <span style="font-weight:400;text-transform:none">(optional &mdash; client-side web search)</span>';
+    input.placeholder = "tvly-...";
+    if(HAS_WEB_SEARCH){
+      hint.textContent = "Proxy already handles web search (Tavily or Brave). Enter a Tavily key here for client-side search instead.";
+      hint.style.color = "var(--green)";
+    } else {
+      hint.textContent = "Enter a Tavily key for client-side web search, or configure web_search_key on the proxy (supports Tavily and Brave).";
+      hint.style.color = "var(--muted)";
+    }
   }
   if(h==="claude-code") populateClaudeSelects();
   if(h==="codex") populateCodexSelects();

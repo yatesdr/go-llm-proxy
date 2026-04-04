@@ -89,12 +89,14 @@ The proxy auto-detects the search provider from the `web_search_key` prefix:
 
 ### Per-client behavior
 
-| Client | Search tool type | Proxy action |
+| Client | Proxy-side (Tavily or Brave) | Client-side fallback |
 |---|---|---|
-| **Claude Code** | `web_search_20250305` (server tool) | Strip tool, inject `web_search` function tool, execute search, emit `server_tool_use` + `web_search_tool_result` blocks |
-| **Codex CLI** | `web_search` (server tool) | Strip tool, inject `web_search` function tool, execute search, emit `web_search_call` output items |
-| **OpenCode** | MCP tool via `/mcp/sse` | Proxy serves MCP endpoint with `web_search` tool |
-| **Qwen Code** | Client-side function tool | No proxy involvement — client calls Tavily/Google directly |
+| **Claude Code** | Automatic — proxy intercepts `web_search_20250305` server tool | Tavily only (via MCP) |
+| **Codex CLI** | Automatic — proxy intercepts `web_search` server tool | Tavily only (via MCP) |
+| **OpenCode** | Automatic — proxy serves `/mcp/sse` endpoint | Tavily only (via MCP) |
+| **Qwen Code** | Not used — search is always client-side | Tavily, Google, or DashScope |
+
+**Note:** Brave Search is only available through the proxy (`web_search_key` in config.yaml). Client-side search configs only support Tavily because there is no Brave MCP endpoint. If you want Brave Search, configure it on the proxy and all clients except Qwen Code will use it automatically.
 
 ## Recommended models
 
