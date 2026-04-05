@@ -172,12 +172,18 @@ func (h *UsageDashboardHandler) renderDashboard(w http.ResponseWriter) {
 <div class="summary-cards" id="summaryCards"></div>
 <div class="card">
 <div class="card-header">
-<h2>Daily Requests</h2>
+<h2 id="chartTitle">Daily Tokens</h2>
+<div style="display:flex;gap:8px;align-items:center">
+<div class="toggle-group">
+<button class="toggle-btn" id="toggleRequests" onclick="setChartMode('requests')">Requests</button>
+<button class="toggle-btn active" id="toggleTokens" onclick="setChartMode('tokens')">Tokens</button>
+</div>
 <select id="periodSelect" onchange="loadData()">
 <option value="7">Last 7 days</option>
 <option value="30" selected>Last 30 days</option>
 <option value="90">Last 90 days</option>
 </select>
+</div>
 </div>
 <div id="dailyChart"></div>
 </div>
@@ -198,7 +204,16 @@ func (h *UsageDashboardHandler) renderDashboard(w http.ResponseWriter) {
 </div>
 <script>
 var MODEL_COLORS=["#1a56db","#047857","#b45309","#7c3aed","#db2777","#0d9488","#ca8a04","#dc2626","#4f46e5","#059669","#d97706","#9333ea"];
+var chartMode="tokens";
+var lastData=null;
 (function(){loadData()})();
+function setChartMode(mode){
+	chartMode=mode;
+	document.getElementById("toggleRequests").classList.toggle("active",mode==="requests");
+	document.getElementById("toggleTokens").classList.toggle("active",mode==="tokens");
+	document.getElementById("chartTitle").textContent=mode==="tokens"?"Daily Tokens":"Daily Requests";
+	if(lastData)renderChart(lastData.daily,lastData.daily_models);
+}
 function loadData(){
 	var days=document.getElementById("periodSelect").value;
 	fetch("/usage/data?days="+days)
@@ -207,6 +222,7 @@ function loadData(){
 		.catch(function(e){console.error(e)});
 }
 function renderData(d){
+	lastData=d;
 	var sc=document.getElementById("summaryCards");
 	sc.innerHTML=
 		summaryCard("Total Requests",fmtNum(d.totals.requests))+
@@ -231,14 +247,17 @@ function summaryCard(label,value){
 function renderChart(rows,modelRows){
 	var el=document.getElementById("dailyChart");
 	if(!rows||rows.length===0){el.innerHTML="<p style=\"color:var(--muted);padding:20px 0\">No data for this period.</p>";return;}
+	var useTokens=chartMode==="tokens";
+	var valKey=useTokens?"total_tokens":"requests";
+	var valLabel=useTokens?"tokens":"requests";
 	var models=[];
 	var modelSet={};
 	if(modelRows){for(var i=0;i<modelRows.length;i++){if(!modelSet[modelRows[i].model]){modelSet[modelRows[i].model]=1;models.push(modelRows[i].model);}}}
 	var dateMap={};
-	for(var i=0;i<rows.length;i++){dateMap[rows[i].date]={total:rows[i].requests,models:{}};}
-	if(modelRows){for(var i=0;i<modelRows.length;i++){var dm=modelRows[i];if(dateMap[dm.date])dateMap[dm.date].models[dm.model]=dm.requests;}}
+	for(var i=0;i<rows.length;i++){dateMap[rows[i].date]={total:rows[i][valKey],models:{}};}
+	if(modelRows){for(var i=0;i<modelRows.length;i++){var dm=modelRows[i];if(dateMap[dm.date])dateMap[dm.date].models[dm.model]=dm[valKey];}}
 	var max=0;
-	for(var i=0;i<rows.length;i++){if(rows[i].requests>max)max=rows[i].requests;}
+	for(var i=0;i<rows.length;i++){if(rows[i][valKey]>max)max=rows[i][valKey];}
 	var html="";
 	if(models.length>1){
 		html+="<div class=\"chart-legend\">";
@@ -251,7 +270,8 @@ function renderChart(rows,modelRows){
 	html+="<div class=\"bars\">";
 	for(var i=0;i<rows.length;i++){
 		var r=rows[i];
-		var pct=max>0?(r.requests/max*100):0;
+		var val=r[valKey];
+		var pct=max>0?(val/max*100):0;
 		var dateLabel=r.date.substring(5);
 		var dm=dateMap[r.date];
 		var inner="";
@@ -261,12 +281,12 @@ function renderChart(rows,modelRows){
 				var segPct=max>0?(dm.models[segments[j]]/max*100):0;
 				var ci=models.indexOf(segments[j]);
 				var c=MODEL_COLORS[(ci<0?j:ci)%MODEL_COLORS.length];
-				inner+="<div class=\"bar-segment\" style=\"height:"+segPct+"%;background:"+c+"\" title=\""+esc(segments[j])+": "+dm.models[segments[j]]+" requests\"></div>";
+				inner+="<div class=\"bar-segment\" style=\"height:"+segPct+"%;background:"+c+"\" title=\""+esc(segments[j])+": "+fmtNum(dm.models[segments[j]])+" "+valLabel+"\"></div>";
 			}
 		}else{
 			inner="<div class=\"bar-segment\" style=\"height:"+pct+"%;background:var(--blue)\"></div>";
 		}
-		html+="<div class=\"bar-group\" title=\""+esc(r.date)+": "+r.requests+" requests, "+fmtNum(r.total_tokens)+" tokens\">"+
+		html+="<div class=\"bar-group\" title=\""+esc(r.date)+": "+fmtNum(r.requests)+" requests, "+fmtNum(r.total_tokens)+" tokens\">"+
 			"<div class=\"bar-stack\">"+inner+"</div>"+
 			"<div class=\"bar-label\">"+esc(dateLabel)+"</div></div>";
 	}
@@ -326,6 +346,11 @@ input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(26,8
 .btn-primary:hover{background:var(--blue-hover)}
 .error-notice{background:var(--amber-bg);color:var(--amber);padding:10px 14px;border-radius:6px;margin-bottom:14px;font-size:.88rem;font-weight:500}
 select{padding:6px 10px;font-size:.88rem;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-family:inherit}
+.toggle-group{display:inline-flex;border:1px solid var(--border);border-radius:6px;overflow:hidden}
+.toggle-btn{padding:5px 12px;font-size:.82rem;font-weight:500;border:none;background:var(--surface);color:var(--muted);cursor:pointer;font-family:inherit;transition:all .15s}
+.toggle-btn:not(:last-child){border-right:1px solid var(--border)}
+.toggle-btn:hover{background:#f1f5f9}
+.toggle-btn.active{background:var(--blue);color:#fff}
 .table-wrap{overflow-x:auto}
 .data-table{width:100%;border-collapse:collapse;font-size:.88rem}
 .data-table th{text-align:left;font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);padding:7px 10px;border-bottom:2px solid var(--border)}

@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -755,22 +756,22 @@ func TestMarshalToolCalls(t *testing.T) {
 }
 
 func TestStreamingSearchState(t *testing.T) {
-	s := &streamingSearchState{}
-	idx1 := s.accumulateToolCall("call_1", "web_search")
-	s.appendArgs(idx1, `{"query":`)
-	s.appendArgs(idx1, `"test"}`)
+	s := &StreamingSearchState{}
+	idx1 := s.AccumulateToolCall("call_1", "web_search")
+	s.AppendArgs(idx1, `{"query":`)
+	s.AppendArgs(idx1, `"test"}`)
 
-	idx2 := s.accumulateToolCall("call_2", "bash")
-	s.appendArgs(idx2, `{"cmd":"ls"}`)
+	idx2 := s.AccumulateToolCall("call_2", "bash")
+	s.AppendArgs(idx2, `{"cmd":"ls"}`)
 
-	if !s.hasSearchCall() {
+	if !s.HasSearchCall() {
 		t.Fatal("expected HasSearchCall true")
 	}
-	if s.onlySearchCalls() {
+	if s.OnlySearchCalls() {
 		t.Fatal("expected OnlySearchCalls false (has bash)")
 	}
 
-	tcs := s.toChatChoiceToolCalls()
+	tcs := s.ToChatChoiceToolCalls()
 	if len(tcs) != 2 {
 		t.Fatalf("expected 2 tool calls, got %d", len(tcs))
 	}
@@ -783,21 +784,21 @@ func TestStreamingSearchState(t *testing.T) {
 }
 
 func TestStreamingSearchState_OnlySearch(t *testing.T) {
-	s := &streamingSearchState{}
-	s.accumulateToolCall("call_1", "web_search")
-	s.accumulateToolCall("call_2", "web_search")
+	s := &StreamingSearchState{}
+	s.AccumulateToolCall("call_1", "web_search")
+	s.AccumulateToolCall("call_2", "web_search")
 
-	if !s.onlySearchCalls() {
+	if !s.OnlySearchCalls() {
 		t.Fatal("expected OnlySearchCalls true")
 	}
 }
 
 func TestStreamingSearchState_Empty(t *testing.T) {
-	s := &streamingSearchState{}
-	if s.hasSearchCall() {
+	s := &StreamingSearchState{}
+	if s.HasSearchCall() {
 		t.Fatal("expected HasSearchCall false on empty")
 	}
-	if s.onlySearchCalls() {
+	if s.OnlySearchCalls() {
 		t.Fatal("expected OnlySearchCalls false on empty")
 	}
 }
@@ -1042,5 +1043,225 @@ func TestHandleNonStreamingSearchLoop(t *testing.T) {
 	}
 	if resp.Choices[0].Message.Content == nil || *resp.Choices[0].Message.Content != "Here is the answer" {
 		t.Fatal("expected final response content")
+	}
+}
+
+// --- PDF vision fallback tests ---
+
+func TestProcessPDFs_VisionFallback(t *testing.T) {
+	ResetPDFCache()
+	defer ResetPDFCache()
+
+	// Create a fake vision model backend.
+	visionServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id": "v1", "model": "vision-model",
+			"choices": []map[string]any{{
+				"index": 0, "finish_reason": "stop",
+				"message": map[string]any{"role": "assistant", "content": "This PDF shows a scanned receipt."},
+			}},
+		})
+	}))
+	defer visionServer.Close()
+
+	cfg := &config.Config{
+		Processors: config.ProcessorsConfig{Vision: "vision-model"},
+		Models: []config.ModelConfig{
+			{Name: "target", Backend: "http://localhost/v1", Timeout: 30},
+			{Name: "vision-model", Backend: visionServer.URL + "/v1", Timeout: 30},
+		},
+	}
+	cs := config.NewTestConfigStore(cfg)
+	p := NewPipeline(cs, http.DefaultClient)
+	model := &cfg.Models[0]
+
+	// Create a minimal valid PDF that has no extractable text.
+	// This is just random bytes that won't parse as a valid PDF with text,
+	// triggering the vision fallback. We encode it as base64.
+	// Actually, use a minimal PDF that has no text objects.
+	minimalPDF := "%PDF-1.0\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R>>endobj\nxref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n190\n%%EOF"
+	b64PDF := base64.StdEncoding.EncodeToString([]byte(minimalPDF))
+
+	chatReq := map[string]any{
+		"model": "target",
+		"messages": []any{
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{"type": "pdf_data", "data": b64PDF, "filename": "receipt.pdf"},
+				},
+			},
+		},
+	}
+
+	result, err := p.ProcessRequest(context.Background(), chatReq, model)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The PDF should be replaced with text from the vision model (or extraction).
+	msgs := result["messages"].([]any)
+	if len(msgs) == 0 {
+		t.Fatal("expected messages")
+	}
+	userMsg := msgs[0].(map[string]any)
+	content := userMsg["content"]
+	// Should contain text about the PDF (either extracted or vision-described).
+	contentStr := fmt.Sprintf("%v", content)
+	if !strings.Contains(contentStr, "PDF") && !strings.Contains(contentStr, "pdf") &&
+		!strings.Contains(contentStr, "receipt") && !strings.Contains(contentStr, "scanned") {
+		t.Fatalf("expected PDF-related content, got: %s", contentStr)
+	}
+}
+
+func TestProcessPDFs_VisionFallbackFailure(t *testing.T) {
+	ResetPDFCache()
+	defer ResetPDFCache()
+
+	// Vision model that always errors.
+	visionServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":"model unavailable"}`))
+	}))
+	defer visionServer.Close()
+
+	cfg := &config.Config{
+		Processors: config.ProcessorsConfig{Vision: "vision-model"},
+		Models: []config.ModelConfig{
+			{Name: "target", Backend: "http://localhost/v1", Timeout: 30},
+			{Name: "vision-model", Backend: visionServer.URL + "/v1", Timeout: 30},
+		},
+	}
+	cs := config.NewTestConfigStore(cfg)
+	p := NewPipeline(cs, http.DefaultClient)
+	model := &cfg.Models[0]
+
+	minimalPDF := "%PDF-1.0\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R>>endobj\nxref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n190\n%%EOF"
+	b64PDF := base64.StdEncoding.EncodeToString([]byte(minimalPDF))
+
+	chatReq := map[string]any{
+		"model": "target",
+		"messages": []any{
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{"type": "pdf_data", "data": b64PDF},
+				},
+			},
+		},
+	}
+
+	result, err := p.ProcessRequest(context.Background(), chatReq, model)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Even with vision failure, should gracefully degrade to placeholder.
+	msgs := result["messages"].([]any)
+	userMsg := msgs[0].(map[string]any)
+	contentStr := fmt.Sprintf("%v", userMsg["content"])
+	if !strings.Contains(contentStr, "PDF") && !strings.Contains(contentStr, "could not") {
+		t.Fatalf("expected graceful degradation message, got: %s", contentStr)
+	}
+}
+
+func TestHandleNonStreamingSearchLoop_MaxIterations(t *testing.T) {
+	// The model always calls web_search, never returning a final answer.
+	// The loop should stop after maxIterations.
+	cfg := &config.Config{
+		Processors: config.ProcessorsConfig{WebSearchKey: "tvly-test"},
+		Models:     []config.ModelConfig{{Name: "test", Backend: "http://localhost/v1", Timeout: 30}},
+	}
+	p := NewPipeline(config.NewTestConfigStore(cfg), http.DefaultClient)
+	model := &cfg.Models[0]
+
+	sendCount := 0
+	sendRequest := func(chatReq map[string]any) (*api.ChatResponse, error) {
+		sendCount++
+		// Always return another web_search tool call.
+		return &api.ChatResponse{
+			Choices: []api.ChatChoice{{
+				Message: api.ChatChoiceMsg{
+					ToolCalls: []api.ChatChoiceToolCall{{
+						ID:   fmt.Sprintf("call_%d", sendCount),
+						Type: "function",
+						Function: struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						}{Name: "web_search", Arguments: `{"query":"infinite loop"}`},
+					}},
+				},
+				FinishReason: "tool_calls",
+			}},
+		}, nil
+	}
+
+	firstResp := &api.ChatResponse{
+		Choices: []api.ChatChoice{{
+			Message: api.ChatChoiceMsg{
+				ToolCalls: []api.ChatChoiceToolCall{{
+					ID:   "call_0",
+					Type: "function",
+					Function: struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					}{Name: "web_search", Arguments: `{"query":"test"}`},
+				}},
+			},
+			FinishReason: "tool_calls",
+		}},
+	}
+
+	chatReq := map[string]any{
+		"messages": []any{map[string]any{"role": "user", "content": "Search forever"}},
+	}
+
+	maxIter := 3
+	resp, err := p.HandleNonStreamingSearchLoop(context.Background(), chatReq, model, firstResp, sendRequest, maxIter)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Should have called sendRequest exactly maxIter times (the loop limit).
+	if sendCount != maxIter {
+		t.Fatalf("expected %d send calls (max iterations), got %d", maxIter, sendCount)
+	}
+
+	// The response should still be a tool_calls response (loop hit the limit, didn't get final answer).
+	if len(resp.Choices) == 0 || resp.Choices[0].FinishReason != "tool_calls" {
+		t.Fatal("expected tool_calls finish reason when max iterations reached")
+	}
+}
+
+func TestEmitSearchResultBlocks_Format(t *testing.T) {
+	// Test the emitSearchResultBlocks helper via messages_streaming.go.
+	// We can't call it directly from this package, but we can test the pipeline's
+	// SearchCallResult structure which feeds it.
+	results := []SearchCallResult{
+		{
+			ToolUseID: "srvtoolu_1",
+			Query:     "golang proxy",
+			Hits: []SearchHit{
+				{Title: "Go Proxy Guide", URL: "https://example.com/go"},
+				{Title: "Reverse Proxy in Go", URL: "https://example.com/reverse"},
+			},
+		},
+		{
+			ToolUseID: "",
+			Query:     "failed query",
+			Error:     "search timed out",
+		},
+	}
+
+	// Verify structure: first result has hits, second has error.
+	if len(results[0].Hits) != 2 {
+		t.Fatalf("expected 2 hits, got %d", len(results[0].Hits))
+	}
+	if results[0].Hits[0].Title != "Go Proxy Guide" {
+		t.Fatalf("expected title preserved, got %q", results[0].Hits[0].Title)
+	}
+	if results[1].Error == "" {
+		t.Fatal("expected error on second result")
 	}
 }

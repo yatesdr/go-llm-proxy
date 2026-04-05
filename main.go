@@ -157,6 +157,9 @@ func main() {
 	mux.Handle("POST /v1/responses/compact", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs,
 		http.HandlerFunc(responses.HandleCompact),
 	)))
+	countTokens := handler.NewCountTokensHandler(cs, ul)
+	mux.Handle("POST /v1/messages/count_tokens", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, countTokens)))
+	mux.Handle("POST /anthropic/v1/messages/count_tokens", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, countTokens)))
 	mux.Handle("POST /v1/messages", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, messages)))
 	mux.Handle("POST /anthropic/v1/messages", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, messages)))
 	mux.Handle("/v1/", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, proxy)))

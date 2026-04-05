@@ -17,11 +17,6 @@ import (
 	"go-llm-proxy/internal/config"
 )
 
-// newGzipReader wraps gzip.NewReader for use in search response decoding.
-func newGzipReader(r io.Reader) (*gzip.Reader, error) {
-	return gzip.NewReader(r)
-}
-
 const webSearchFunctionName = "web_search"
 
 // newWebSearchToolDef returns a fresh function tool definition for web search.
@@ -278,7 +273,7 @@ func (p *Pipeline) executeBraveSearch(ctx context.Context, apiKey, query string)
 
 	var reader io.Reader = resp.Body
 	if resp.Header.Get("Content-Encoding") == "gzip" {
-		gr, gzErr := newGzipReader(resp.Body)
+		gr, gzErr := gzip.NewReader(resp.Body)
 		if gzErr != nil {
 			return "", nil, fmt.Errorf("brave gzip decode: %w", gzErr)
 		}
@@ -490,10 +485,10 @@ func (p *Pipeline) ExecuteSearchAndResend(ctx context.Context, chatReq map[strin
 	return newReq, searchResults, err
 }
 
-// streamingSearchState tracks accumulated tool calls during streaming to detect
+// StreamingSearchState tracks accumulated tool calls during streaming to detect
 // web_search calls that need proxy-side execution.
-type streamingSearchState struct {
-	ToolCalls []streamingToolCall
+type StreamingSearchState struct {
+	toolCalls []streamingToolCall
 }
 
 type streamingToolCall struct {
@@ -502,23 +497,28 @@ type streamingToolCall struct {
 	Args strings.Builder
 }
 
-// accumulateToolCall records a new tool call from a streaming chunk.
-func (s *streamingSearchState) accumulateToolCall(id, name string) int {
-	idx := len(s.ToolCalls)
-	s.ToolCalls = append(s.ToolCalls, streamingToolCall{ID: id, Name: name})
+// ToolCalls returns the accumulated tool calls (for logging/inspection).
+func (s *StreamingSearchState) ToolCalls() []streamingToolCall {
+	return s.toolCalls
+}
+
+// AccumulateToolCall records a new tool call from a streaming chunk.
+func (s *StreamingSearchState) AccumulateToolCall(id, name string) int {
+	idx := len(s.toolCalls)
+	s.toolCalls = append(s.toolCalls, streamingToolCall{ID: id, Name: name})
 	return idx
 }
 
-// appendArgs appends arguments to a tracked tool call.
-func (s *streamingSearchState) appendArgs(idx int, args string) {
-	if idx >= 0 && idx < len(s.ToolCalls) {
-		s.ToolCalls[idx].Args.WriteString(args)
+// AppendArgs appends arguments to a tracked tool call.
+func (s *StreamingSearchState) AppendArgs(idx int, args string) {
+	if idx >= 0 && idx < len(s.toolCalls) {
+		s.toolCalls[idx].Args.WriteString(args)
 	}
 }
 
-// hasSearchCall returns true if any accumulated tool call is web_search.
-func (s *streamingSearchState) hasSearchCall() bool {
-	for _, tc := range s.ToolCalls {
+// HasSearchCall returns true if any accumulated tool call is web_search.
+func (s *StreamingSearchState) HasSearchCall() bool {
+	for _, tc := range s.toolCalls {
 		if tc.Name == webSearchFunctionName {
 			return true
 		}
@@ -526,12 +526,12 @@ func (s *streamingSearchState) hasSearchCall() bool {
 	return false
 }
 
-// onlySearchCalls returns true if ALL accumulated tool calls are web_search.
-func (s *streamingSearchState) onlySearchCalls() bool {
-	if len(s.ToolCalls) == 0 {
+// OnlySearchCalls returns true if ALL accumulated tool calls are web_search.
+func (s *StreamingSearchState) OnlySearchCalls() bool {
+	if len(s.toolCalls) == 0 {
 		return false
 	}
-	for _, tc := range s.ToolCalls {
+	for _, tc := range s.toolCalls {
 		if tc.Name != webSearchFunctionName {
 			return false
 		}
@@ -539,10 +539,10 @@ func (s *streamingSearchState) onlySearchCalls() bool {
 	return true
 }
 
-// toChatChoiceToolCalls converts accumulated streaming state to ChatChoiceToolCall format.
-func (s *streamingSearchState) toChatChoiceToolCalls() []api.ChatChoiceToolCall {
-	result := make([]api.ChatChoiceToolCall, len(s.ToolCalls))
-	for i, tc := range s.ToolCalls {
+// ToChatChoiceToolCalls converts accumulated streaming state to ChatChoiceToolCall format.
+func (s *StreamingSearchState) ToChatChoiceToolCalls() []api.ChatChoiceToolCall {
+	result := make([]api.ChatChoiceToolCall, len(s.toolCalls))
+	for i, tc := range s.toolCalls {
 		result[i] = api.ChatChoiceToolCall{
 			ID:   tc.ID,
 			Type: "function",

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -36,14 +37,24 @@ func NewProxyHandler(cs *config.ConfigStore, usage *usage.UsageLogger, pipeline 
 	}
 }
 
+// proxyRequestContext bundles the per-request metadata that flows through the
+// proxy handler methods, avoiding 10+ parameter sprawl.
+type proxyRequestContext struct {
+	model       *config.ModelConfig
+	modelName   string
+	endpoint    string
+	requestBody []byte
+	keyName     string
+	keyHash     string
+	startTime   time.Time
+}
+
 func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Only allow POST — all proxied endpoints are POST.
 	if r.Method != http.MethodPost {
 		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
-	// Check for /anthropic prefix — requests via this path must route to anthropic backends.
 	cleanPath := path.Clean(r.URL.Path)
 	requireAnthropic := false
 	if strings.HasPrefix(cleanPath, "/anthropic/") {
@@ -51,13 +62,11 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		requireAnthropic = true
 	}
 
-	// Validate the request path against the allowlist.
 	if !AllowedPaths.MatchString(cleanPath) {
 		httputil.WriteError(w, http.StatusNotFound, "unsupported endpoint")
 		return
 	}
 
-	// Limit request body size to prevent memory exhaustion.
 	r.Body = http.MaxBytesReader(w, r.Body, api.MaxRequestBodySize)
 	body, err := io.ReadAll(r.Body)
 	r.Body.Close()
@@ -66,7 +75,6 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Detect content type for model extraction strategy.
 	contentType := r.Header.Get("Content-Type")
 	isMultipart := strings.HasPrefix(contentType, "multipart/form-data")
 
@@ -81,10 +89,8 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Snapshot config once to avoid race on reload.
 	cfg := p.config.Get()
 
-	// Check key authorization for this model.
 	key := auth.KeyFromContext(r.Context())
 	if !auth.KeyAllowsModel(key, modelName) {
 		httputil.WriteError(w, http.StatusForbidden, "not authorized for requested model")
@@ -97,13 +103,11 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Requests via /anthropic/ must only route to anthropic-type backends.
 	if requireAnthropic && model.Type != config.BackendAnthropic {
 		httputil.WriteError(w, http.StatusBadRequest, "model is not an anthropic backend")
 		return
 	}
 
-	// Rewrite the model name in the body if the backend expects a different name.
 	if model.Model != modelName {
 		if isMultipart {
 			body = RewriteModelInMultipart(body, contentType, model.Model)
@@ -112,19 +116,20 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Pipeline: selective parse for Chat Completions requests with processable content.
-	if p.pipeline != nil && cleanPath == "/v1/chat/completions" && !isMultipart &&
-		p.pipeline.BodyNeedsProcessing(body) {
-		var chatReq map[string]any
-		if err := json.Unmarshal(body, &chatReq); err != nil {
+	// Pipeline + search: parse body once for both if needed.
+	isChatCompletions := cleanPath == "/v1/chat/completions" && !isMultipart
+	var parsedChatReq map[string]any
+
+	if p.pipeline != nil && isChatCompletions && p.pipeline.BodyNeedsProcessing(body) {
+		if err := json.Unmarshal(body, &parsedChatReq); err != nil {
 			slog.Warn("pipeline: failed to parse request body for processing", "error", err)
 		} else {
-			processed, pErr := p.pipeline.ProcessRequest(r.Context(), chatReq, model)
+			processed, pErr := p.pipeline.ProcessRequest(r.Context(), parsedChatReq, model)
 			if pErr != nil {
 				slog.Warn("pipeline: processing failed, sending original request", "error", pErr)
 			} else {
-				newBody, mErr := json.Marshal(processed)
-				if mErr != nil {
+				parsedChatReq = processed
+				if newBody, mErr := json.Marshal(processed); mErr != nil {
 					slog.Error("pipeline: failed to re-marshal processed request", "error", mErr)
 				} else {
 					body = newBody
@@ -133,9 +138,17 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Check if post-response search is possible. Reuse already-parsed body if available.
+	searchEnabled := false
+	if p.pipeline != nil && isChatCompletions && p.pipeline.ResolveWebSearchKey(model) != "" {
+		if parsedChatReq != nil {
+			searchEnabled = true
+		} else if err := json.Unmarshal(body, &parsedChatReq); err == nil {
+			searchEnabled = true
+		}
+	}
+
 	// Build the upstream URL.
-	// OpenAI backends include /v1 in their base URL, so strip /v1 from the client path.
-	// Anthropic backends omit /v1 from their base URL (the SDK adds it), so keep the full path.
 	relPath := cleanPath
 	if model.Type != config.BackendAnthropic {
 		relPath = strings.TrimPrefix(cleanPath, "/v1")
@@ -151,10 +164,8 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Copy only specific headers from the client.
 	copyHeaders(upReq.Header, r.Header, model.Type)
 
-	// Set the backend API key using the appropriate auth scheme.
 	if model.APIKey != "" {
 		if model.Type == config.BackendAnthropic {
 			upReq.Header.Set("X-Api-Key", model.APIKey)
@@ -169,13 +180,13 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		keyName = key.Name
 		keyHash = usage.HashKey(key.Key)
 	}
-	slog.Info("proxying request",
-		"model", modelName,
-		"path", cleanPath,
-		"key", keyName,
-	)
+	slog.Info("proxying request", "model", modelName, "path", cleanPath, "key", keyName)
 
 	startTime := time.Now()
+	rc := proxyRequestContext{
+		model: model, modelName: modelName, endpoint: cleanPath,
+		requestBody: body, keyName: keyName, keyHash: keyHash, startTime: startTime,
+	}
 
 	resp, err := p.client.Do(upReq)
 	if err != nil {
@@ -189,20 +200,11 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	// Detect if this is a streaming response (SSE).
 	isStreaming := strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream")
 
-	// Copy only allowed response headers.
-	for k := range AllowedResponseHeaders {
-		if v := resp.Header.Get(k); v != "" {
-			w.Header().Set(k, v)
-		}
-	}
-
+	copyResponseHeaders(w, resp)
 	httputil.SetSecurityHeaders(w)
 
-	// For error responses, sanitize before sending to the client.
-	// Backend error bodies may contain internal URLs, API keys, or infrastructure details.
 	if resp.StatusCode >= 400 {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, api.MaxResponseBodySize))
 		slog.Error("upstream returned error", "model", modelName, "status", resp.StatusCode,
@@ -221,10 +223,23 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.WriteHeader(resp.StatusCode)
+	if searchEnabled && !isStreaming {
+		p.handleNonStreamingWithSearch(w, resp, parsedChatReq, rc)
+		return
+	}
+	if searchEnabled && isStreaming {
+		p.handleStreamingWithSearch(ctx, w, resp, parsedChatReq, rc)
+		return
+	}
 
-	// Stream the response, flushing after each read for SSE support.
-	// If usage logging is enabled, tee the response into a buffer for token extraction.
+	w.WriteHeader(resp.StatusCode)
+	p.streamRawResponse(w, resp, rc, isStreaming)
+}
+
+// streamRawResponse streams the upstream response to the client without parsing.
+func (p *ProxyHandler) streamRawResponse(w http.ResponseWriter, resp *http.Response,
+	rc proxyRequestContext, isStreaming bool) {
+
 	flusher, canFlush := w.(http.Flusher)
 	buf := make([]byte, 4096)
 	var totalBytes int64
@@ -235,7 +250,7 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if n > 0 {
 			totalBytes += int64(n)
 			if totalBytes > api.MaxResponseBodySize {
-				slog.Error("upstream response exceeded size limit", "model", modelName, "bytes", totalBytes)
+				slog.Error("upstream response exceeded size limit", "model", rc.modelName, "bytes", totalBytes)
 				captureResponse = false
 				break
 			}
@@ -254,32 +269,280 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	duration := time.Since(startTime)
-
-	// Log usage metrics asynchronously if enabled.
 	if p.usage != nil {
-		backendType := ""
-		if model.Type == config.BackendAnthropic {
-			backendType = config.BackendAnthropic
-		}
 		var tokens usage.TokenUsage
 		if captureResponse {
-			tokens = usage.ExtractTokenUsage(responseBuf.Bytes(), backendType, isStreaming)
+			tokens = usage.ExtractTokenUsage(responseBuf.Bytes(), rc.model.Type, isStreaming)
 		}
 		rec := usage.UsageRecord{
-			Timestamp:     startTime,
-			KeyHash:       keyHash,
-			KeyName:       keyName,
-			Model:         modelName,
-			Endpoint:      cleanPath,
+			Timestamp:     rc.startTime,
+			KeyHash:       rc.keyHash,
+			KeyName:       rc.keyName,
+			Model:         rc.modelName,
+			Endpoint:      rc.endpoint,
 			StatusCode:    resp.StatusCode,
-			RequestBytes:  int64(len(body)),
+			RequestBytes:  int64(len(rc.requestBody)),
 			ResponseBytes: totalBytes,
 			InputTokens:   tokens.InputTokens,
 			OutputTokens:  tokens.OutputTokens,
 			TotalTokens:   tokens.TotalTokens,
-			DurationMS:    duration.Milliseconds(),
+			DurationMS:    time.Since(rc.startTime).Milliseconds(),
 		}
 		go p.usage.Log(rec)
+	}
+}
+
+// handleNonStreamingWithSearch parses a non-streaming Chat Completions response,
+// detects web_search tool calls, executes them, and re-sends until a final response.
+func (p *ProxyHandler) handleNonStreamingWithSearch(w http.ResponseWriter, resp *http.Response,
+	chatReq map[string]any, rc proxyRequestContext) {
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, api.MaxResponseBodySize))
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadGateway, "failed to read upstream response")
+		return
+	}
+
+	var chatResp api.ChatResponse
+	if err := json.Unmarshal(respBody, &chatResp); err != nil {
+		w.WriteHeader(resp.StatusCode)
+		w.Write(respBody)
+		return
+	}
+
+	if len(chatResp.Choices) > 0 && pipeline.HasSearchToolCall(chatResp.Choices[0].Message.ToolCalls) {
+		ctx := resp.Request.Context()
+		finalResp, err := p.pipeline.HandleNonStreamingSearchLoop(ctx, chatReq, rc.model, &chatResp,
+			func(req map[string]any) (*api.ChatResponse, error) {
+				return sendChatCompletionsRequest(ctx, p.client, req, rc.model)
+			}, 5)
+		if err != nil {
+			slog.Error("proxy search loop failed", "model", rc.modelName, "error", err)
+		} else {
+			chatResp = *finalResp
+		}
+	}
+
+	finalBody, err := json.Marshal(chatResp)
+	if err != nil {
+		finalBody = respBody
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(finalBody)
+
+	logUsageFromChatResponse(p.usage, chatResp.Usage, rc, int64(len(finalBody)))
+}
+
+// handleStreamingWithSearch parses an SSE stream from a Chat Completions backend,
+// detecting web_search tool calls. If found, it executes the search and re-streams.
+// If no search calls are detected, the stream passes through to the client unchanged.
+func (p *ProxyHandler) handleStreamingWithSearch(ctx context.Context, w http.ResponseWriter,
+	resp *http.Response, chatReq map[string]any, rc proxyRequestContext) {
+
+	flusher, canFlush := w.(http.Flusher)
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+
+	flush := func() {
+		if canFlush {
+			flusher.Flush()
+		}
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 256*1024), 256*1024)
+
+	var searchState pipeline.StreamingSearchState
+	var finishReason string
+	var usageData *api.ChunkUsage
+	var bufferedLines []string
+	buffering := false
+	var contentAccum strings.Builder
+	var responseBytes int64
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		responseBytes += int64(len(line)) + 1
+
+		if responseBytes > api.MaxResponseBodySize {
+			break
+		}
+
+		if !strings.HasPrefix(line, "data: ") {
+			if !buffering {
+				fmt.Fprintf(w, "%s\n", line)
+				flush()
+			} else {
+				bufferedLines = append(bufferedLines, line)
+			}
+			continue
+		}
+
+		data := line[6:]
+		if data == "[DONE]" {
+			if !buffering {
+				fmt.Fprintf(w, "data: [DONE]\n\n")
+				flush()
+			}
+			break
+		}
+
+		var chunk api.ChatChunk
+		if json.Unmarshal([]byte(data), &chunk) != nil {
+			if !buffering {
+				fmt.Fprintf(w, "%s\n", line)
+				flush()
+			}
+			continue
+		}
+
+		if chunk.Usage != nil {
+			usageData = chunk.Usage
+		}
+
+		if len(chunk.Choices) > 0 {
+			choice := chunk.Choices[0]
+			delta := choice.Delta
+
+			if delta.Content != nil && *delta.Content != "" {
+				contentAccum.WriteString(*delta.Content)
+			}
+
+			for _, tc := range delta.ToolCalls {
+				if tc.ID != "" {
+					if !buffering {
+						buffering = true
+					}
+					name := ""
+					if tc.Function != nil {
+						name = tc.Function.Name
+					}
+					searchState.AccumulateToolCall(tc.ID, name)
+				}
+				if tc.Function != nil && tc.Function.Arguments != "" {
+					searchState.AppendArgs(tc.Index, tc.Function.Arguments)
+				}
+			}
+
+			if choice.FinishReason != nil {
+				finishReason = *choice.FinishReason
+			}
+		}
+
+		if buffering {
+			bufferedLines = append(bufferedLines, line)
+		} else {
+			fmt.Fprintf(w, "%s\n", line)
+			flush()
+		}
+	}
+
+	if buffering && finishReason == "tool_calls" && searchState.OnlySearchCalls() {
+		slog.Debug("proxy: detected web_search in streaming response, executing search",
+			"model", rc.modelName, "calls", len(searchState.ToolCalls()))
+
+		toolCalls := searchState.ToChatChoiceToolCalls()
+		searchDone := make(chan struct{})
+		var newChatReq map[string]any
+		var searchErr error
+
+		go func() {
+			defer close(searchDone)
+			newChatReq, _, searchErr = p.pipeline.ExecuteSearchAndResend(
+				ctx, chatReq, rc.model, toolCalls, contentAccum.String())
+		}()
+
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+	searchWait:
+		for {
+			select {
+			case <-searchDone:
+				break searchWait
+			case <-ticker.C:
+				fmt.Fprintf(w, ": searching\n\n")
+				flush()
+			case <-ctx.Done():
+				break searchWait
+			}
+		}
+
+		if searchErr != nil {
+			slog.Warn("proxy streaming search failed, replaying original", "error", searchErr)
+			replayBufferedLines(w, bufferedLines)
+			flush()
+		} else if newChatReq != nil {
+			p.reStreamFromBackend(ctx, w, flusher, canFlush, newChatReq, rc.model)
+		}
+	} else if buffering {
+		replayBufferedLines(w, bufferedLines)
+		flush()
+	}
+
+	logUsageFromChatResponse(p.usage, usageData, rc, responseBytes)
+}
+
+// replayBufferedLines writes accumulated SSE lines back to the client.
+func replayBufferedLines(w http.ResponseWriter, lines []string) {
+	for _, l := range lines {
+		fmt.Fprintf(w, "%s\n", l)
+	}
+	fmt.Fprintf(w, "\ndata: [DONE]\n\n")
+}
+
+// logUsageFromChatResponse logs usage from a Chat Completions response (streaming or non-streaming).
+func logUsageFromChatResponse(ul *usage.UsageLogger, usageData *api.ChunkUsage,
+	rc proxyRequestContext, responseBytes int64) {
+	logUsageRecord(ul, usageData, http.StatusOK, rc.modelName, rc.endpoint,
+		int64(len(rc.requestBody)), responseBytes, rc.keyName, rc.keyHash, rc.startTime)
+}
+
+// reStreamFromBackend sends a new streaming request and forwards the SSE response raw.
+func (p *ProxyHandler) reStreamFromBackend(ctx context.Context, w http.ResponseWriter,
+	flusher http.Flusher, canFlush bool, chatReq map[string]any, model *config.ModelConfig) {
+
+	chatReq["stream"] = true
+	chatReq["stream_options"] = map[string]any{"include_usage": true}
+	newBody, err := json.Marshal(chatReq)
+	if err != nil {
+		slog.Error("proxy search re-stream: marshal failed", "error", err)
+		return
+	}
+
+	upstreamURL := strings.TrimRight(model.Backend, "/") + api.ChatCompletionsPath
+	upReq, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(newBody))
+	if err != nil {
+		slog.Error("proxy search re-stream: request build failed", "error", err)
+		return
+	}
+	upReq.Header.Set("Content-Type", "application/json")
+	upReq.Header.Set("Accept", "text/event-stream")
+	if model.APIKey != "" {
+		upReq.Header.Set("Authorization", "Bearer "+model.APIKey)
+	}
+
+	resp, err := p.client.Do(upReq)
+	if err != nil {
+		slog.Error("proxy search re-stream: upstream failed", "error", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	buf := make([]byte, 4096)
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			w.Write(buf[:n])
+			if canFlush {
+				flusher.Flush()
+			}
+		}
+		if readErr != nil {
+			break
+		}
 	}
 }

@@ -165,6 +165,15 @@ var anthropicHeaders = []string{
 	"Anthropic-Beta",
 }
 
+// copyResponseHeaders copies allowed upstream response headers to the client response.
+func copyResponseHeaders(w http.ResponseWriter, resp *http.Response) {
+	for k := range AllowedResponseHeaders {
+		if v := resp.Header.Get(k); v != "" {
+			w.Header().Set(k, v)
+		}
+	}
+}
+
 func copyHeaders(dst, src http.Header, backendType string) {
 	for _, h := range forwardHeaders {
 		if v := src.Get(h); v != "" {

@@ -142,6 +142,29 @@ func translateUserMessage(content json.RawMessage) []map[string]any {
 				"content":      content,
 			})
 
+		case "web_search_tool_result":
+			// Search result blocks from prior proxy-injected searches. Convert to
+			// text context so the backend sees what was found.
+			var results []struct {
+				Type  string `json:"type"`
+				Title string `json:"title"`
+				URL   string `json:"url"`
+			}
+			if raw, ok := block["content"]; ok {
+				json.Unmarshal(raw, &results)
+			}
+			if len(results) > 0 {
+				var sb strings.Builder
+				sb.WriteString("[Web search results:")
+				for _, r := range results {
+					if r.Title != "" || r.URL != "" {
+						sb.WriteString("\n- " + r.Title + " (" + r.URL + ")")
+					}
+				}
+				sb.WriteString("]")
+				userParts = append(userParts, map[string]any{"type": "text", "text": sb.String()})
+			}
+
 		case "thinking", "redacted_thinking":
 			slog.Debug("stripping thinking block from user message", "type", blockType)
 			continue
@@ -217,6 +240,27 @@ func translateAssistantMessage(content json.RawMessage) map[string]any {
 					"arguments": string(argsBytes),
 				},
 			})
+
+		case "server_tool_use":
+			// Server tool calls (web_search_20250305 etc.) emitted by the proxy
+			// during search. Convert to text so the backend sees the search context.
+			var name string
+			json.Unmarshal(block["name"], &name)
+			var inputRaw json.RawMessage
+			if raw, ok := block["input"]; ok {
+				inputRaw = raw
+			}
+			var query string
+			if inputRaw != nil {
+				var inp struct {
+					Query string `json:"query"`
+				}
+				json.Unmarshal(inputRaw, &inp)
+				query = inp.Query
+			}
+			if query != "" {
+				textParts = append(textParts, "[Searched the web: "+query+"]")
+			}
 
 		case "thinking", "redacted_thinking":
 			slog.Debug("stripping thinking block from assistant message", "type", blockType)

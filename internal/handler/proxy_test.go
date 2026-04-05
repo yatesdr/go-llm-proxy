@@ -2,12 +2,14 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"go-llm-proxy/internal/config"
+	"go-llm-proxy/internal/pipeline"
 )
 
 func TestExtractModelFromJSON_Valid(t *testing.T) {
@@ -218,3 +220,124 @@ func TestProxyHandler_OpenAIUpstreamPath(t *testing.T) {
 }
 
 // Anthropic path/prefix tests moved to messages_test.go (MessagesHandler).
+
+// newTestProxyHandlerWithSearch creates a ProxyHandler with search enabled.
+func newTestProxyHandlerWithSearch(t *testing.T, upstream http.HandlerFunc) (*ProxyHandler, *httptest.Server) {
+	t.Helper()
+	ts := httptest.NewServer(upstream)
+	cfg := &config.Config{
+		Processors: config.ProcessorsConfig{WebSearchKey: "tvly-test"},
+		Models: []config.ModelConfig{{
+			Name: "test-model", Backend: ts.URL + "/v1", APIKey: "secret",
+			Model: "test-model", Timeout: 30,
+		}},
+	}
+	cs := config.NewTestConfigStore(cfg)
+	pl := pipeline.NewPipeline(cs, http.DefaultClient)
+	return NewProxyHandler(cs, nil, pl), ts
+}
+
+func TestProxyHandler_StreamingPassthrough_NoToolCalls(t *testing.T) {
+	// Backend returns a normal streaming response with no tool calls.
+	// Search is enabled, but the response should pass through cleanly.
+	proxy, ts := newTestProxyHandlerWithSearch(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher := w.(http.Flusher)
+		chunks := []string{
+			`{"id":"c1","model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,
+			`{"id":"c1","model":"test-model","choices":[{"index":0,"delta":{"content":"Hello world"},"finish_reason":null}]}`,
+			`{"id":"c1","model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		}
+		for _, c := range chunks {
+			fmt.Fprintf(w, "data: %s\n\n", c)
+			flusher.Flush()
+		}
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	})
+	defer ts.Close()
+
+	body := `{"model":"test-model","messages":[{"role":"user","content":"Hi"}],"stream":true}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	proxy.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	respBody := w.Body.String()
+	if !strings.Contains(respBody, "Hello world") {
+		t.Fatalf("expected content to pass through, got: %s", respBody)
+	}
+	if !strings.Contains(respBody, "[DONE]") {
+		t.Fatal("expected [DONE] marker in passthrough")
+	}
+}
+
+func TestProxyHandler_StreamingReplay_NonSearchToolCalls(t *testing.T) {
+	// Backend returns a tool call that is NOT web_search (e.g., "bash").
+	// Search is enabled but the tool call should be replayed to client, not intercepted.
+	proxy, ts := newTestProxyHandlerWithSearch(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher := w.(http.Flusher)
+		chunks := []string{
+			`{"id":"c1","model":"test-model","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
+			`{"id":"c1","model":"test-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"bash","arguments":""}}]},"finish_reason":null}]}`,
+			`{"id":"c1","model":"test-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"cmd\":\"ls\"}"}}]},"finish_reason":null}]}`,
+			`{"id":"c1","model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		}
+		for _, c := range chunks {
+			fmt.Fprintf(w, "data: %s\n\n", c)
+			flusher.Flush()
+		}
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	})
+	defer ts.Close()
+
+	body := `{"model":"test-model","messages":[{"role":"user","content":"Run ls"}],"stream":true,"tools":[{"type":"function","function":{"name":"bash","description":"Run bash","parameters":{"type":"object"}}}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	proxy.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	respBody := w.Body.String()
+	// The bash tool call should be replayed to the client.
+	if !strings.Contains(respBody, "bash") {
+		t.Fatalf("expected bash tool call replayed, got: %s", respBody)
+	}
+	if !strings.Contains(respBody, "[DONE]") {
+		t.Fatal("expected [DONE] after replay")
+	}
+}
+
+func TestProxyHandler_NonStreaming_UnparseableResponse(t *testing.T) {
+	// Backend returns non-JSON response. Search is enabled but should fall back to raw passthrough.
+	proxy, ts := newTestProxyHandlerWithSearch(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("not json at all"))
+	})
+	defer ts.Close()
+
+	body := `{"model":"test-model","messages":[{"role":"user","content":"Hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	proxy.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if w.Body.String() != "not json at all" {
+		t.Fatalf("expected raw response passthrough, got: %s", w.Body.String())
+	}
+}
