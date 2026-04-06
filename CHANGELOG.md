@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.3.3
+
+### Fixed
+- **PowerShell Tavily MCP config** — `claude mcp add-json` has quoting issues in PowerShell. Config generator now writes MCP server config directly to `~/.claude.json` using native PowerShell JSON handling
+
+## v0.3.2
+
+### Added
+- **`/v1/messages/count_tokens` endpoint** — proxies to native Anthropic backends, returns rough estimate for translated backends (fixes Claude Code context management)
+- **Standalone config generator** for GitHub Pages deployment
+- **Usage dashboard** requests/tokens chart toggle
+
+### Changed
+- Translate `server_tool_use` and `web_search_tool_result` blocks in conversation history so search context survives multi-turn translated conversations
+- Post-response search tool loop for Chat Completions clients (OpenCode, Qwen Code): streaming + non-streaming detection and re-send
+- Extract `copyResponseHeaders`, `proxyRequestContext`, and `logUsageFromChatResponse` helpers to reduce duplication in proxy
+- README: full compatibility matrix, supported clients list, config generator link in docs nav
+
+### Fixed
+- **PowerShell config generator** — write `--settings` JSON to a temp file to avoid PowerShell quoting issues with inline JSON containing curly braces and colons
+
 ## v0.3.1
 
 ### Security
