@@ -842,7 +842,14 @@ function genClaudeCodeCommand(apiKey, tavily){
     ps1Lines.push("claude mcp remove tavily -s user 2>$null");
     ps1Lines.push("claude mcp add-json tavily '" + tavilyMcpJSON + "' -s user");
   }
-  ps1Lines.push("", "try {", "  claude --settings '" + settingsJSON + "' @args", "} finally {");
+  // Write settings JSON to a temp file to avoid PowerShell quoting issues
+  // with inline JSON containing curly braces and colons.
+  ps1Lines.push("", "$settingsFile = [System.IO.Path]::GetTempFileName()");
+  ps1Lines.push("'" + settingsJSON + "' | Set-Content -Path $settingsFile -Encoding UTF8");
+  ps1Lines.push("try {");
+  ps1Lines.push("  claude --settings $settingsFile @args");
+  ps1Lines.push("} finally {");
+  ps1Lines.push("  Remove-Item $settingsFile -ErrorAction SilentlyContinue");
   vars.forEach(function(kv){ ps1Lines.push('  Remove-Item Env:' + kv[0] + ' -ErrorAction SilentlyContinue'); });
   ps1Lines.push("}");
   var ps1Content = ps1Lines.join("\r\n") + "\r\n";
