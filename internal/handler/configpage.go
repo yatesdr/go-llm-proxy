@@ -838,9 +838,26 @@ function genClaudeCodeCommand(apiKey, tavily){
   var ps1Lines = ["# go-llm-proxy: Claude Code start script", ""];
   vars.forEach(function(kv){ ps1Lines.push('$env:' + kv[0] + ' = "' + kv[1] + '"'); });
   if(useTavily){
-    ps1Lines.push("", "# Configure Tavily web search");
-    ps1Lines.push("claude mcp remove tavily -s user 2>$null");
-    ps1Lines.push("claude mcp add-json tavily '" + tavilyMcpJSON + "' -s user");
+    ps1Lines.push("", "# Configure Tavily web search in .claude.json");
+    ps1Lines.push('$configPath = "$env:USERPROFILE\\.claude.json"');
+    ps1Lines.push("if (Test-Path $configPath) {");
+    ps1Lines.push("  $config = Get-Content $configPath -Raw | ConvertFrom-Json");
+    ps1Lines.push("} else {");
+    ps1Lines.push("  $config = '{}' | ConvertFrom-Json");
+    ps1Lines.push("}");
+    ps1Lines.push("$tavilyObj = @{");
+    ps1Lines.push('  type = "http"');
+    ps1Lines.push('  url = "https://mcp.tavily.com/mcp"');
+    ps1Lines.push("  headers = @{");
+    ps1Lines.push('    Authorization = "Bearer ' + tavily + '"');
+    ps1Lines.push("  }");
+    ps1Lines.push("}");
+    ps1Lines.push('if (-not $config.mcpServers) {');
+    ps1Lines.push('  $config | Add-Member -NotePropertyName "mcpServers" -NotePropertyValue @{} -Force');
+    ps1Lines.push("}");
+    ps1Lines.push('$config.mcpServers | Add-Member -NotePropertyName "tavily" -NotePropertyValue $tavilyObj -Force');
+    ps1Lines.push('$config | ConvertTo-Json -Depth 10 | Set-Content $configPath -Encoding UTF8');
+    ps1Lines.push('Write-Host "Tavily MCP configured in .claude.json"');
   }
   // Write settings JSON to a temp file to avoid PowerShell quoting issues
   // with inline JSON containing curly braces and colons.
