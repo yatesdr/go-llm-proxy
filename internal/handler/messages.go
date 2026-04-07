@@ -397,19 +397,33 @@ func (h *MessagesHandler) handleNonStreaming(w http.ResponseWriter, resp *http.R
 		msg := choice.Message
 
 		// Reasoning -> thinking block (before text content).
-		if msg.Reasoning != nil && *msg.Reasoning != "" {
+		// Supports both "reasoning" and "reasoning_content" JSON fields.
+		if r := msg.EffectiveReasoning(); r != nil && *r != "" {
 			content = append(content, map[string]any{
 				"type":      "thinking",
-				"thinking":  *msg.Reasoning,
+				"thinking":  *r,
 				"signature": api.RandomID(""),
 			})
 		}
 
 		if msg.Content != nil && *msg.Content != "" {
-			content = append(content, map[string]any{
-				"type": "text",
-				"text": *msg.Content,
-			})
+			// Strip <think>...</think> tags from content; route to thinking block.
+			thinkText, contentText := stripThinkTags(*msg.Content)
+
+			if thinkText != "" && msg.EffectiveReasoning() == nil {
+				content = append(content, map[string]any{
+					"type":      "thinking",
+					"thinking":  thinkText,
+					"signature": api.RandomID(""),
+				})
+			}
+
+			if contentText != "" {
+				content = append(content, map[string]any{
+					"type": "text",
+					"text": contentText,
+				})
+			}
 		}
 
 		for _, tc := range msg.ToolCalls {

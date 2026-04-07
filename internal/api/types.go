@@ -32,10 +32,11 @@ type ChunkChoice struct {
 }
 
 type ChunkDelta struct {
-	Role      string          `json:"role,omitempty"`
-	Content   *string         `json:"content,omitempty"`
-	Reasoning *string         `json:"reasoning,omitempty"`
-	ToolCalls []ChunkToolCall `json:"tool_calls,omitempty"`
+	Role             string          `json:"role,omitempty"`
+	Content          *string         `json:"content,omitempty"`
+	Reasoning        *string         `json:"reasoning,omitempty"`
+	ReasoningContent *string         `json:"reasoning_content,omitempty"`
+	ToolCalls        []ChunkToolCall `json:"tool_calls,omitempty"`
 }
 
 type ChunkToolCall struct {
@@ -73,10 +74,29 @@ type ChatChoice struct {
 }
 
 type ChatChoiceMsg struct {
-	Role      string               `json:"role"`
-	Content   *string              `json:"content"`
-	Reasoning *string              `json:"reasoning,omitempty"`
-	ToolCalls []ChatChoiceToolCall `json:"tool_calls,omitempty"`
+	Role             string               `json:"role"`
+	Content          *string              `json:"content"`
+	Reasoning        *string              `json:"reasoning,omitempty"`
+	ReasoningContent *string              `json:"reasoning_content,omitempty"`
+	ToolCalls        []ChatChoiceToolCall `json:"tool_calls,omitempty"`
+}
+
+// EffectiveReasoning returns the reasoning text from whichever field the backend
+// populated: "reasoning" (OpenAI convention) or "reasoning_content" (DeepSeek convention).
+func (m *ChatChoiceMsg) EffectiveReasoning() *string {
+	if m.Reasoning != nil {
+		return m.Reasoning
+	}
+	return m.ReasoningContent
+}
+
+// EffectiveReasoning returns the reasoning text from whichever field the backend
+// populated: "reasoning" or "reasoning_content".
+func (d *ChunkDelta) EffectiveReasoning() *string {
+	if d.Reasoning != nil {
+		return d.Reasoning
+	}
+	return d.ReasoningContent
 }
 
 type ChatChoiceToolCall struct {

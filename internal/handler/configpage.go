@@ -820,7 +820,7 @@ function genClaudeCodeCommand(apiKey, tavily){
     shLines.push("claude mcp add-json tavily '" + tavilyMcpJSON + "' -s user");
     shLines.push("");
   }
-  shLines.push("exec env \\");
+  shLines.push("env \\");
   vars.forEach(function(kv){ shLines.push('  ' + kv[0] + '="' + kv[1] + '" \\'); });
   shLines.push("  claude --settings '" + settingsJSON + "' \"$@\"");
   var shContent = shLines.join("\n") + "\n";
@@ -1025,7 +1025,7 @@ function genCodexCommand(apiKey, tavily){
   ];
   if(useTavily) shLines.push('export TAVILY_API_KEY="' + tavily + '"');
   shLines.push("");
-  shLines.push("exec codex \\");
+  shLines.push("codex \\");
   cfgFlags.forEach(function(f){
     shLines.push("  " + f + " \\");
   });

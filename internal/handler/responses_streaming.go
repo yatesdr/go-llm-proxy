@@ -57,6 +57,9 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 	var reasoningBuf strings.Builder
 	reasoningStarted := false
 
+	// Think-tag filter: strips <think>...</think> from content and routes to reasoning.
+	var thinkFilter thinkTagFilter
+
 	// Message accumulation state.
 	msgID := ""
 	var textBuf strings.Builder
@@ -248,6 +251,63 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 		reasoningStarted = false
 	}
 
+	// emitReasoningText emits a reasoning text segment (used by both the
+	// reasoning JSON field path and think-tag filter).
+	emitReasoningText := func(text string) {
+		if !reasoningStarted {
+			reasoningID = api.RandomID("rs_")
+			emit("response.output_item.added", map[string]any{
+				"item": map[string]any{
+					"id":      reasoningID,
+					"type":    "reasoning",
+					"summary": []any{},
+				},
+				"output_index":    outputIdx,
+				"sequence_number": seq,
+			})
+			seq++
+			emit("response.reasoning_summary_part.added", map[string]any{
+				"item_id":         reasoningID,
+				"output_index":    outputIdx,
+				"summary_index":   0,
+				"sequence_number": seq,
+			})
+			seq++
+			reasoningStarted = true
+		}
+		reasoningBuf.WriteString(text)
+		emit("response.reasoning_summary_text.delta", map[string]any{
+			"delta":           text,
+			"item_id":         reasoningID,
+			"output_index":    outputIdx,
+			"summary_index":   0,
+			"sequence_number": seq,
+		})
+		seq++
+	}
+
+	// emitContentText emits a content text segment.
+	emitContentText := func(text string) {
+		if reasoningStarted {
+			finishReasoning()
+		}
+		if !msgStarted {
+			startMsg()
+		}
+		if !contentStarted {
+			startContent()
+		}
+		textBuf.WriteString(text)
+		emit("response.output_text.delta", map[string]any{
+			"delta":           text,
+			"content_index":   0,
+			"output_index":    outputIdx,
+			"item_id":         msgID,
+			"sequence_number": seq,
+		})
+		seq++
+	}
+
 	// Read and translate the upstream SSE stream.
 	// Usage is extracted from the parsed chunks, so no response buffering is needed.
 	var responseBytes int64
@@ -308,59 +368,20 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 
 		// Reasoning delta — emit as a Responses API reasoning output item.
 		// This gives Codex its native reasoning/thinking display.
-		if delta.Reasoning != nil && *delta.Reasoning != "" {
-			if !reasoningStarted {
-				reasoningID = api.RandomID("rs_")
-				emit("response.output_item.added", map[string]any{
-					"item": map[string]any{
-						"id":      reasoningID,
-						"type":    "reasoning",
-						"summary": []any{},
-					},
-					"output_index":    outputIdx,
-					"sequence_number": seq,
-				})
-				seq++
-				emit("response.reasoning_summary_part.added", map[string]any{
-					"item_id":         reasoningID,
-					"output_index":    outputIdx,
-					"summary_index":   0,
-					"sequence_number": seq,
-				})
-				seq++
-				reasoningStarted = true
-			}
-			reasoningBuf.WriteString(*delta.Reasoning)
-			emit("response.reasoning_summary_text.delta", map[string]any{
-				"delta":           *delta.Reasoning,
-				"item_id":         reasoningID,
-				"output_index":    outputIdx,
-				"summary_index":   0,
-				"sequence_number": seq,
-			})
-			seq++
+		// Supports both "reasoning" and "reasoning_content" JSON fields.
+		if r := delta.EffectiveReasoning(); r != nil && *r != "" {
+			emitReasoningText(*r)
 		}
 
-		// Content delta.
+		// Content delta — filter <think>...</think> tags and route to reasoning.
 		if delta.Content != nil && *delta.Content != "" {
-			if reasoningStarted {
-				finishReasoning()
+			for _, seg := range thinkFilter.Process(*delta.Content) {
+				if seg.IsReasoning {
+					emitReasoningText(seg.Text)
+				} else {
+					emitContentText(seg.Text)
+				}
 			}
-			if !msgStarted {
-				startMsg()
-			}
-			if !contentStarted {
-				startContent()
-			}
-			textBuf.WriteString(*delta.Content)
-			emit("response.output_text.delta", map[string]any{
-				"delta":           *delta.Content,
-				"content_index":   0,
-				"output_index":    outputIdx,
-				"item_id":         msgID,
-				"sequence_number": seq,
-			})
-			seq++
 		}
 
 		// Tool call deltas.
@@ -559,6 +580,15 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 		// No search case: replay any buffered events.
 		for _, ev := range toolCallBuffer {
 			emit(ev.eventType, ev.data)
+		}
+	}
+
+	// Flush any pending think-tag buffer before finalizing.
+	for _, seg := range thinkFilter.Flush() {
+		if seg.IsReasoning {
+			emitReasoningText(seg.Text)
+		} else {
+			emitContentText(seg.Text)
 		}
 	}
 
