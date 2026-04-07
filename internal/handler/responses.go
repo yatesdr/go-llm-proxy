@@ -453,19 +453,47 @@ func (h *ResponsesHandler) handleNonStreaming(w http.ResponseWriter, resp *http.
 		choice := chatResp.Choices[0]
 		msg := choice.Message
 
-		if msg.Content != nil && *msg.Content != "" {
-			outputText = *msg.Content
+		// Emit reasoning from JSON field (reasoning or reasoning_content).
+		if r := msg.EffectiveReasoning(); r != nil && *r != "" {
 			output = append(output, map[string]any{
-				"id":     api.RandomID("msg_"),
-				"type":   "message",
-				"role":   "assistant",
-				"status": "completed",
-				"content": []any{map[string]any{
-					"type":        "output_text",
-					"text":        *msg.Content,
-					"annotations": []any{},
+				"id":   api.RandomID("rs_"),
+				"type": "reasoning",
+				"summary": []any{map[string]any{
+					"type": "summary_text",
+					"text": *r,
 				}},
 			})
+		}
+
+		if msg.Content != nil && *msg.Content != "" {
+			// Strip <think>...</think> tags from content; route to reasoning.
+			thinkText, contentText := stripThinkTags(*msg.Content)
+
+			if thinkText != "" && msg.EffectiveReasoning() == nil {
+				output = append(output, map[string]any{
+					"id":   api.RandomID("rs_"),
+					"type": "reasoning",
+					"summary": []any{map[string]any{
+						"type": "summary_text",
+						"text": thinkText,
+					}},
+				})
+			}
+
+			if contentText != "" {
+				outputText = contentText
+				output = append(output, map[string]any{
+					"id":     api.RandomID("msg_"),
+					"type":   "message",
+					"role":   "assistant",
+					"status": "completed",
+					"content": []any{map[string]any{
+						"type":        "output_text",
+						"text":        contentText,
+						"annotations": []any{},
+					}},
+				})
+			}
 		}
 
 		for _, tc := range msg.ToolCalls {

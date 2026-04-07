@@ -143,6 +143,9 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 
 	var accumulatedContent strings.Builder
 
+	// Think-tag filter: strips <think>...</think> from content and routes to reasoning.
+	var thinkFilter thinkTagFilter
+
 	// Read and translate the upstream SSE stream.
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 256*1024), 256*1024)
@@ -188,30 +191,47 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 		choice := chunk.Choices[0]
 		delta := choice.Delta
 
-		// Reasoning tokens -> thinking block.
-		if delta.Reasoning != nil && *delta.Reasoning != "" {
+		// emitReasoningChunk emits a reasoning text segment as a thinking block delta.
+		emitReasoningChunk := func(text string) {
 			if !reasoningBlockOpen {
 				openReasoningBlock()
 			}
 			emit("content_block_delta", map[string]any{
 				"index": blockIndex,
-				"delta": map[string]any{"type": "thinking_delta", "thinking": *delta.Reasoning},
+				"delta": map[string]any{"type": "thinking_delta", "thinking": text},
 			})
 		}
 
-		// Content delta -> text block.
-		if delta.Content != nil && *delta.Content != "" {
+		// emitContentChunk emits a content text segment as a text block delta.
+		emitContentChunk := func(text string) {
 			if reasoningBlockOpen {
 				closeReasoningBlock()
 			}
 			if !textBlockOpen {
 				openTextBlock()
 			}
-			accumulatedContent.WriteString(*delta.Content)
+			accumulatedContent.WriteString(text)
 			emit("content_block_delta", map[string]any{
 				"index": blockIndex,
-				"delta": map[string]any{"type": "text_delta", "text": *delta.Content},
+				"delta": map[string]any{"type": "text_delta", "text": text},
 			})
+		}
+
+		// Reasoning tokens -> thinking block.
+		// Supports both "reasoning" and "reasoning_content" JSON fields.
+		if r := delta.EffectiveReasoning(); r != nil && *r != "" {
+			emitReasoningChunk(*r)
+		}
+
+		// Content delta -> text block, with <think> tag filtering.
+		if delta.Content != nil && *delta.Content != "" {
+			for _, seg := range thinkFilter.Process(*delta.Content) {
+				if seg.IsReasoning {
+					emitReasoningChunk(seg.Text)
+				} else {
+					emitContentChunk(seg.Text)
+				}
+			}
 		}
 
 		// Tool call deltas.
@@ -271,6 +291,31 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 		// Finish reason.
 		if choice.FinishReason != nil {
 			finishReason = *choice.FinishReason
+		}
+	}
+
+	// Flush any pending think-tag buffer before finalizing.
+	for _, seg := range thinkFilter.Flush() {
+		if seg.IsReasoning {
+			if !reasoningBlockOpen {
+				openReasoningBlock()
+			}
+			emit("content_block_delta", map[string]any{
+				"index": blockIndex,
+				"delta": map[string]any{"type": "thinking_delta", "thinking": seg.Text},
+			})
+		} else {
+			if reasoningBlockOpen {
+				closeReasoningBlock()
+			}
+			if !textBlockOpen {
+				openTextBlock()
+			}
+			accumulatedContent.WriteString(seg.Text)
+			emit("content_block_delta", map[string]any{
+				"index": blockIndex,
+				"delta": map[string]any{"type": "text_delta", "text": seg.Text},
+			})
 		}
 	}
 
