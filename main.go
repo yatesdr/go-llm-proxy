@@ -99,13 +99,16 @@ func main() {
 	// Auto-detect context window sizes from backends (async, non-blocking).
 	config.DetectContextWindows(cs)
 
+	// Start health checker for model availability tracking.
+	healthStore := config.NewHealthStore(cs, 30*time.Second, 5*time.Second)
+
 	// Create the processing pipeline (shared by all handlers).
 	pl := pipeline.NewPipeline(cs, httputil.NewHTTPClient())
 
 	proxy := handler.NewProxyHandler(cs, ul, pl)
 	responses := handler.NewResponsesHandler(cs, ul, pl)
 	messages := handler.NewMessagesHandler(cs, ul, pl)
-	models := handler.NewModelsHandler(cs)
+	models := handler.NewModelsHandler(cs, healthStore)
 	rl := ratelimit.NewRateLimiter(cfg.TrustedProxies)
 
 	var dashRl *ratelimit.RateLimiter
@@ -115,6 +118,7 @@ func main() {
 
 	cs.SetOnReload(func(newCfg *config.Config) {
 		rl.SetTrustedProxies(newCfg.TrustedProxies)
+		healthStore.RefreshFromConfig()
 		if dashRl != nil {
 			dashRl.SetTrustedProxies(newCfg.TrustedProxies)
 		}
@@ -141,7 +145,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	if *serveConfigPage || cfg.ServeConfigGenerator {
-		configPage := handler.NewConfigPageHandler(cs)
+		configPage := handler.NewConfigPageHandler(cs, healthStore)
 		mux.Handle("GET /{$}", configPage)
 		slog.Info("config generator page enabled at GET /")
 	}
@@ -153,6 +157,7 @@ func main() {
 		slog.Info("usage dashboard enabled at /usage")
 	}
 	mux.Handle("GET /v1/models", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, models)))
+	mux.Handle("GET /v1/models/status", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, http.HandlerFunc(models.ServeStatus))))
 	mux.Handle("POST /v1/responses", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, responses)))
 	mux.Handle("POST /v1/responses/compact", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs,
 		http.HandlerFunc(responses.HandleCompact),
@@ -172,6 +177,9 @@ func main() {
 	if cfg.Processors.WebSearchKey != "" {
 		slog.Info("MCP endpoint enabled at /mcp/sse (web_search tool available)")
 	}
+
+	// Start health checker background goroutine.
+	healthStore.Start(context.Background())
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
@@ -202,6 +210,8 @@ func main() {
 		if ul != nil {
 			ul.Close()
 		}
+		healthStore.Stop()
+
 		if stopWatch != nil {
 			stopWatch()
 		}

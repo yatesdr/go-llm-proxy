@@ -87,12 +87,14 @@ func modelInfoFromConfig(cfg *config.Config) []modelInfo {
 // ConfigPageHandler serves the config generator UI at GET /.
 type ConfigPageHandler struct {
 	config *config.ConfigStore
+	health *config.HealthStore
 	tmpl   *template.Template
 }
 
-func NewConfigPageHandler(cs *config.ConfigStore) *ConfigPageHandler {
+func NewConfigPageHandler(cs *config.ConfigStore, health *config.HealthStore) *ConfigPageHandler {
 	return &ConfigPageHandler{
 		config: cs,
+		health: health,
 		tmpl:   template.Must(template.New("page").Parse(configPageHTML)),
 	}
 }
@@ -100,6 +102,17 @@ func NewConfigPageHandler(cs *config.ConfigStore) *ConfigPageHandler {
 func (h *ConfigPageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	cfg := h.config.Get()
 	models := modelInfoFromConfig(cfg)
+	health := h.health.GetStatus()
+
+	// Create model status map for quick lookup.
+	modelStatus := make(map[string]map[string]any, len(health))
+	for name, s := range health {
+		modelStatus[name] = map[string]any{
+			"online":     s.Online,
+			"last_check": s.LastCheck.Unix(),
+			"error":      s.Error,
+		}
+	}
 
 	data, err := json.Marshal(models)
 	if err != nil {
@@ -108,15 +121,24 @@ func (h *ConfigPageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	healthData, err := json.Marshal(modelStatus)
+	if err != nil {
+		slog.Error("failed to marshal health status", "error", err)
+		httputil.WriteError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
 	// Pass processors config as separate JS variables.
 	type tmplData struct {
 		Models       template.JS
+		Health       template.JS
 		HasVision    bool
 		HasWebSearch bool
 		HasMCP       bool
 	}
 	td := tmplData{
 		Models:       template.JS(data),
+		Health:       template.JS(healthData),
 		HasVision:    cfg.Processors.Vision != "",
 		HasWebSearch: cfg.Processors.WebSearchKey != "",
 		HasMCP:       cfg.Processors.WebSearchKey != "",
@@ -190,6 +212,9 @@ select:focus,input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 
 .badge{display:inline-block;font-size:.72rem;font-weight:600;padding:2px 8px;border-radius:99px;white-space:nowrap}
 .badge-safe{background:var(--green-bg);color:var(--green)}
 .badge-warn{background:var(--amber-bg);color:var(--amber)}
+.badge-online{background:#ecfdf5;color:#047857}
+.badge-offline{background:#fef2f2;color:#b91c1c}
+.badge-error{background:#fef2f2;color:#b91c1c;margin-left:4px}
 .badge-proto-oai{background:#f0fdf4;color:#166534}
 .badge-proto-ant{background:var(--indigo-bg);color:var(--indigo)}
 .badge-vision{background:#dbeafe;color:#1e40af}
@@ -455,6 +480,7 @@ var MODELS = {{.Models}};
 var HAS_VISION = {{.HasVision}};
 var HAS_WEB_SEARCH = {{.HasWebSearch}};
 var HAS_MCP = {{.HasMCP}};
+var HEALTH = {{.Health}};
 var PROXY_ORIGIN = location.origin;
 var PROXY_URL = PROXY_ORIGIN + "/v1";
 
@@ -466,10 +492,17 @@ var PROXY_URL = PROXY_ORIGIN + "/v1";
     var row = document.createElement("tr");
     var badges = "";
     if (m.supports_vision) badges += ' <span class="badge badge-vision">vision</span>';
+    var healthStatus = HEALTH[m.id] || { online: true, error: '' };
+    var statusClass = healthStatus.online ? 'online' : 'offline';
+    var statusText = healthStatus.online ? 'Online' : 'Offline';
     var safety = m.local
       ? '<span class="badge badge-safe">Safe for data</span>'
       : '<span class="badge badge-warn">Warning &mdash; 3rd party</span>';
-    row.innerHTML = '<td><strong>' + esc(m.id) + '</strong>' + badges + '</td>' +
+    var statusBadge = '<span class="badge badge-' + statusClass + '">' + statusText + '</span>';
+    if (!healthStatus.online && healthStatus.error) {
+      statusBadge += ' <span class="badge badge-error" title="' + esc(healthStatus.error) + '">Error</span>';
+    }
+    row.innerHTML = '<td><strong>' + esc(m.id) + '</strong>' + badges + statusBadge + '</td>' +
       '<td><span class="badge ' + (m.protocol === "anthropic" ? "badge-proto-ant" : "badge-proto-oai") + '">' + m.protocol + '</span></td>' +
       '<td>' + safety + '</td>' +
       '<td>' + (m.context_window > 0 ? m.context_window.toLocaleString() : "unknown") + '</td>';
