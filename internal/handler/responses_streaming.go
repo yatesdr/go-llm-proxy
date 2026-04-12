@@ -75,13 +75,17 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 	var usageData *api.ChunkUsage
 	createdEmitted := false
 
-	// Search buffering: when pipeline search is enabled, buffer tool call events.
+	// Search buffering: when pipeline search is enabled, buffer tool call events
+	// AND content that appears before tool calls. This prevents "transition text"
+	// like "Good data. Let me search..." from being shown before a search.
 	searchEnabled := h.pipeline != nil && h.pipeline.ResolveWebSearchKey(model) != ""
 	type bufferedEvent struct {
 		eventType string
 		data      map[string]any
 	}
 	var toolCallBuffer []bufferedEvent
+	var contentBuffer strings.Builder // Buffer content when search enabled
+	contentBuffering := false         // True when we're buffering content before potential search
 	outputIdxBeforeTools := 0
 
 	emit := func(event string, data map[string]any) {
@@ -374,10 +378,18 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 		}
 
 		// Content delta — filter <think>...</think> tags and route to reasoning.
+		// When search is enabled, buffer content until we know if it's followed by
+		// a search tool call (to suppress "transition text" like "Let me search...").
 		if delta.Content != nil && *delta.Content != "" {
 			for _, seg := range thinkFilter.Process(*delta.Content) {
 				if seg.IsReasoning {
 					emitReasoningText(seg.Text)
+				} else if searchEnabled && !contentBuffering {
+					// Start buffering content when search is enabled
+					contentBuffering = true
+					contentBuffer.WriteString(seg.Text)
+				} else if contentBuffering {
+					contentBuffer.WriteString(seg.Text)
 				} else {
 					emitContentText(seg.Text)
 				}
@@ -474,6 +486,10 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 		}
 
 		if allSearch {
+			// Discard buffered content - it's transition text like "Let me search..."
+			contentBuffer.Reset()
+			contentBuffering = false
+
 			// Build chatChoiceToolCalls from accumulated state.
 			var searchCalls []api.ChatChoiceToolCall
 			for _, tc := range toolCalls {
@@ -539,6 +555,18 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 							"query": sr.Query,
 						}
 					}
+					// Include sources - required for Codex to display search results properly.
+					if len(sr.Hits) > 0 {
+						sources := make([]map[string]any, len(sr.Hits))
+						for i, hit := range sr.Hits {
+							sources[i] = map[string]any{
+								"type":  "url_citation",
+								"url":   hit.URL,
+								"title": hit.Title,
+							}
+						}
+						wsItem["sources"] = sources
+					}
 					emit("response.output_item.done", map[string]any{
 						"item":            wsItem,
 						"output_index":    outputIdxBeforeTools,
@@ -557,27 +585,146 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 				contentStarted = false
 				textBuf.Reset()
 
-				newFinish, newUsage, newTC, newSeq := h.streamResponsesFromBackend(
-					ctx, newChatReq, model, emit,
-					&outputIdx, &seq, &msgID, &msgStarted, &contentStarted, &textBuf,
-					startMsg, startContent, finishMsg)
-				if newFinish != "" {
-					finishReason = newFinish
+				// Search loop: keep executing searches until model stops or max iterations.
+				const maxSearchIterations = 10
+				currentChatReq := newChatReq
+				for searchIter := 0; searchIter < maxSearchIterations; searchIter++ {
+					newFinish, newUsage, newTC, newSeq := h.streamResponsesFromBackend(
+						ctx, currentChatReq, model, emit,
+						&outputIdx, &seq, &msgID, &msgStarted, &contentStarted, &textBuf,
+						startMsg, startContent, finishMsg,
+						emitReasoningText, emitContentText, &thinkFilter)
+					if newFinish != "" {
+						finishReason = newFinish
+					}
+					if newUsage != nil {
+						usageData = newUsage
+					}
+					toolCalls = newTC
+					seq = newSeq
+
+					// Check if continuation has only web_search tool calls.
+					if finishReason != "tool_calls" || len(newTC) == 0 {
+						break // No more tool calls, done.
+					}
+
+					allSearchContinuation := true
+					for _, tc := range newTC {
+						if tc != nil && tc.name != "web_search" {
+							allSearchContinuation = false
+							break
+						}
+					}
+					if !allSearchContinuation {
+						break // Mixed tools, pass to client.
+					}
+
+					// Build search calls from tool call state.
+					var continuationCalls []api.ChatChoiceToolCall
+					for _, tc := range newTC {
+						if tc == nil {
+							continue
+						}
+						continuationCalls = append(continuationCalls, api.ChatChoiceToolCall{
+							ID:   tc.callID,
+							Type: "function",
+							Function: struct {
+								Name      string `json:"name"`
+								Arguments string `json:"arguments"`
+							}{Name: tc.name, Arguments: tc.args.String()},
+						})
+					}
+
+					// Execute searches.
+					slog.Debug("streaming search continuation", "iteration", searchIter+1, "calls", len(continuationCalls))
+					nextReq, contResults, contErr := h.pipeline.ExecuteSearchAndResend(
+						ctx, currentChatReq, model, continuationCalls, textBuf.String())
+					if contErr != nil {
+						slog.Warn("streaming search continuation failed", "error", contErr)
+						break
+					}
+
+					// Emit web_search_call items for the continuation searches.
+					for _, sr := range contResults {
+						if sr.Error != "" {
+							continue
+						}
+						wsID := api.RandomID("ws_")
+						wsItem := map[string]any{
+							"id":     wsID,
+							"type":   "web_search_call",
+							"status": "completed",
+						}
+						if sr.Query != "" {
+							wsItem["action"] = map[string]any{
+								"type":  "search",
+								"query": sr.Query,
+							}
+						}
+						if len(sr.Hits) > 0 {
+							sources := make([]map[string]any, len(sr.Hits))
+							for i, hit := range sr.Hits {
+								sources[i] = map[string]any{
+									"type":  "url_citation",
+									"url":   hit.URL,
+									"title": hit.Title,
+								}
+							}
+							wsItem["sources"] = sources
+						}
+						emit("response.output_item.done", map[string]any{
+							"item":            wsItem,
+							"output_index":    outputIdx,
+							"sequence_number": seq,
+						})
+						seq++
+						outputItems = append(outputItems, wsItem)
+						outputIdx++
+					}
+
+					// Reset for next iteration.
+					currentChatReq = nextReq
+					toolCalls = nil
+					msgStarted = false
+					contentStarted = false
+					textBuf.Reset()
 				}
-				if newUsage != nil {
-					usageData = newUsage
+
+				// If we exited with pending all-search tool calls (hit max iterations),
+				// clear them - they can't be executed and we didn't emit their events.
+				if toolCalls != nil {
+					allPendingSearch := true
+					for _, tc := range toolCalls {
+						if tc != nil && tc.name != "web_search" {
+							allPendingSearch = false
+							break
+						}
+					}
+					if allPendingSearch {
+						slog.Debug("search loop hit max iterations, discarding pending search calls",
+							"pending", len(toolCalls))
+						toolCalls = nil
+					}
 				}
-				toolCalls = newTC
-				seq = newSeq
 			}
 		} else {
-			// Mixed or no-search: replay buffered events.
+			// Mixed or no-search: emit buffered content and replay buffered events.
+			if contentBuffer.Len() > 0 {
+				emitContentText(contentBuffer.String())
+				contentBuffer.Reset()
+			}
+			contentBuffering = false
 			for _, ev := range toolCallBuffer {
 				emit(ev.eventType, ev.data)
 			}
 		}
 	} else {
-		// No search case: replay any buffered events.
+		// No search case: emit buffered content and replay any buffered events.
+		if contentBuffer.Len() > 0 {
+			emitContentText(contentBuffer.String())
+			contentBuffer.Reset()
+		}
+		contentBuffering = false
 		for _, ev := range toolCallBuffer {
 			emit(ev.eventType, ev.data)
 		}
@@ -666,6 +813,7 @@ func (h *ResponsesHandler) streamResponsesFromBackend(
 	outputIdx *int, seq *int, msgID *string,
 	msgStarted *bool, contentStarted *bool, textBuf *strings.Builder,
 	startMsg func(), startContent func(), finishMsg func(),
+	emitReasoningText func(string), emitContentText func(string), thinkFilter *thinkTagFilter,
 ) (finishReason string, usageData *api.ChunkUsage, toolCalls []*toolCallState, finalSeq int) {
 
 	finalSeq = *seq
@@ -704,6 +852,16 @@ func (h *ResponsesHandler) streamResponsesFromBackend(
 		return
 	}
 
+	// Content buffering: buffer content until we know if it's followed by search tool calls.
+	// This prevents "transition text" like "Good data. Let me search..." from being emitted.
+	searchEnabled := h.pipeline != nil && h.pipeline.ResolveWebSearchKey(model) != ""
+	var contentBuffer strings.Builder
+	type bufferedEvent struct {
+		eventType string
+		data      map[string]any
+	}
+	var toolCallBuffer []bufferedEvent
+
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 256*1024), 256*1024)
 
@@ -730,22 +888,24 @@ func (h *ResponsesHandler) streamResponsesFromBackend(
 		choice := chunk.Choices[0]
 		delta := choice.Delta
 
+		// Handle reasoning_content field (same as main handler).
+		if r := delta.EffectiveReasoning(); r != nil && *r != "" {
+			emitReasoningText(*r)
+		}
+
+		// Handle content with think tag filtering.
+		// When search is enabled, buffer content instead of emitting immediately.
 		if delta.Content != nil && *delta.Content != "" {
-			if !*msgStarted {
-				startMsg()
+			for _, seg := range thinkFilter.Process(*delta.Content) {
+				if seg.IsReasoning {
+					emitReasoningText(seg.Text)
+				} else if searchEnabled {
+					// Buffer content when search is enabled
+					contentBuffer.WriteString(seg.Text)
+				} else {
+					emitContentText(seg.Text)
+				}
 			}
-			if !*contentStarted {
-				startContent()
-			}
-			textBuf.WriteString(*delta.Content)
-			emit("response.output_text.delta", map[string]any{
-				"delta":           *delta.Content,
-				"content_index":   0,
-				"output_index":    *outputIdx,
-				"item_id":         *msgID,
-				"sequence_number": *seq,
-			})
-			*seq++
 		}
 
 		for _, tc := range delta.ToolCalls {
@@ -768,7 +928,7 @@ func (h *ResponsesHandler) streamResponsesFromBackend(
 					toolCalls = append(toolCalls, nil)
 				}
 				toolCalls[tc.Index] = tcs
-				emit("response.output_item.added", map[string]any{
+				evData := map[string]any{
 					"item": map[string]any{
 						"id":        itemID,
 						"type":      "function_call",
@@ -779,7 +939,12 @@ func (h *ResponsesHandler) streamResponsesFromBackend(
 					},
 					"output_index":    *outputIdx,
 					"sequence_number": *seq,
-				})
+				}
+				if searchEnabled {
+					toolCallBuffer = append(toolCallBuffer, bufferedEvent{"response.output_item.added", evData})
+				} else {
+					emit("response.output_item.added", evData)
+				}
 				*seq++
 				*outputIdx++
 			}
@@ -787,12 +952,17 @@ func (h *ResponsesHandler) streamResponsesFromBackend(
 				if tc.Index < len(toolCalls) && toolCalls[tc.Index] != nil {
 					tcs := toolCalls[tc.Index]
 					tcs.args.WriteString(tc.Function.Arguments)
-					emit("response.function_call_arguments.delta", map[string]any{
+					evData := map[string]any{
 						"delta":           tc.Function.Arguments,
 						"item_id":         tcs.itemID,
 						"output_index":    tcs.outputIdx,
 						"sequence_number": *seq,
-					})
+					}
+					if searchEnabled {
+						toolCallBuffer = append(toolCallBuffer, bufferedEvent{"response.function_call_arguments.delta", evData})
+					} else {
+						emit("response.function_call_arguments.delta", evData)
+					}
 					*seq++
 				}
 			}
@@ -801,6 +971,34 @@ func (h *ResponsesHandler) streamResponsesFromBackend(
 		if choice.FinishReason != nil {
 			finishReason = *choice.FinishReason
 		}
+	}
+
+	// Handle buffered content based on whether we got search tool calls.
+	if searchEnabled && len(toolCalls) > 0 {
+		allSearch := true
+		for _, tc := range toolCalls {
+			if tc != nil && tc.name != "web_search" {
+				allSearch = false
+				break
+			}
+		}
+		if allSearch {
+			// Discard buffered content - it's transition text like "Let me search..."
+			// Don't emit tool call events - the caller will handle them by executing
+			// the searches and emitting web_search_call items instead.
+			contentBuffer.Reset()
+		} else {
+			// Mixed tool calls - emit the buffered content and replay tool events.
+			if contentBuffer.Len() > 0 {
+				emitContentText(contentBuffer.String())
+			}
+			for _, ev := range toolCallBuffer {
+				emit(ev.eventType, ev.data)
+			}
+		}
+	} else if contentBuffer.Len() > 0 {
+		// No tool calls - emit buffered content
+		emitContentText(contentBuffer.String())
 	}
 
 	finalSeq = *seq

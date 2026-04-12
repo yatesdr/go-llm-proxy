@@ -223,3 +223,89 @@ func TestHealthStore_AuthHeaders(t *testing.T) {
 	_ = receivedAPIKey
 	_ = receivedHeader
 }
+
+func TestIsExternalBackend(t *testing.T) {
+	tests := []struct {
+		url      string
+		expected bool
+	}{
+		// Local backends (should NOT be external)
+		{"http://localhost:8000/v1", false},
+		{"http://127.0.0.1:8000/v1", false},
+		{"http://192.168.1.100:8000/v1", false},
+		{"http://192.168.13.32:8001/v1", false},
+		{"http://10.0.0.5:8000/v1", false},
+		{"http://172.16.0.1:8000/v1", false},
+		{"http://172.31.255.255:8000", false},
+
+		// External backends (SHOULD be external)
+		{"https://api.openai.com/v1", true},
+		{"https://api.anthropic.com/v1", true},
+		{"https://api.z.ai/api/coding/paas/v4", true},
+		{"https://8.8.8.8:443/v1", true},
+		{"https://example.com/api", true},
+	}
+
+	for _, tt := range tests {
+		got := isExternalBackend(tt.url)
+		if got != tt.expected {
+			t.Errorf("isExternalBackend(%q) = %v, want %v", tt.url, got, tt.expected)
+		}
+	}
+}
+
+func TestHealthStore_ExternalFlag(t *testing.T) {
+	cfg := &Config{
+		Models: []ModelConfig{
+			{Name: "local-model", Backend: "http://192.168.1.100:8000/v1", Timeout: 300},
+			{Name: "external-model", Backend: "https://api.openai.com/v1", Timeout: 300},
+		},
+	}
+	cs := NewTestConfigStore(cfg)
+	hs := NewHealthStore(cs, time.Minute, 5*time.Second)
+
+	status := hs.GetStatus()
+
+	if status["local-model"].External {
+		t.Errorf("local-model should not be marked as external")
+	}
+	if !status["external-model"].External {
+		t.Errorf("external-model should be marked as external")
+	}
+}
+
+func TestHealthStore_RecordUsage(t *testing.T) {
+	cfg := &Config{
+		Models: []ModelConfig{
+			{Name: "test-model", Backend: "https://api.example.com/v1", Timeout: 300},
+		},
+	}
+	cs := NewTestConfigStore(cfg)
+	hs := NewHealthStore(cs, time.Minute, 5*time.Second)
+
+	// Initially online
+	status, _ := hs.GetStatusForModel("test-model")
+	if !status.Online {
+		t.Errorf("expected model to be online initially")
+	}
+
+	// Record a failure
+	hs.RecordUsage("test-model", false, "connection refused")
+	status, _ = hs.GetStatusForModel("test-model")
+	if status.Online {
+		t.Errorf("expected model to be offline after failure")
+	}
+	if status.Error != "connection refused" {
+		t.Errorf("expected error message, got %q", status.Error)
+	}
+
+	// Record a success
+	hs.RecordUsage("test-model", true, "")
+	status, _ = hs.GetStatusForModel("test-model")
+	if !status.Online {
+		t.Errorf("expected model to be online after success")
+	}
+	if status.Error != "" {
+		t.Errorf("expected no error, got %q", status.Error)
+	}
+}

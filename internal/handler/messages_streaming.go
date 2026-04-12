@@ -388,8 +388,19 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 				// (Claude Code) can display search results in their UI.
 				blockIndex = emitSearchResultBlocks(emit, blockIndex, searchResults)
 
+				// emitReasoningChunk for re-stream path - same logic as main handler.
+				emitReasoningChunk := func(text string) {
+					if !reasoningBlockOpen {
+						openReasoningBlock()
+					}
+					emit("content_block_delta", map[string]any{
+						"index": blockIndex,
+						"delta": map[string]any{"type": "thinking_delta", "thinking": text},
+					})
+				}
 				newFinish, newUsage, newTC := h.streamFromBackend(ctx, w, flusher, newChatReq, model,
-					blockIndex, &textBlockOpen, openTextBlock, closeTextBlock, emit)
+					blockIndex, &textBlockOpen, openTextBlock, closeTextBlock, emit,
+					emitReasoningChunk, &thinkFilter)
 				if newFinish != "" {
 					finishReason = newFinish
 				}
@@ -499,6 +510,7 @@ func (h *MessagesHandler) streamFromBackend(
 	startBlockIndex int, textBlockOpen *bool,
 	openTextBlock func(), closeTextBlock func(),
 	emit func(string, map[string]any),
+	emitReasoningChunk func(string), thinkFilter *thinkTagFilter,
 ) (finishReason string, usageData *api.ChunkUsage, toolCalls []*msgToolCallState) {
 
 	chatReq["stream"] = true
@@ -562,14 +574,26 @@ func (h *MessagesHandler) streamFromBackend(
 		choice := chunk.Choices[0]
 		delta := choice.Delta
 
+		// Handle reasoning_content field (same as main handler).
+		if r := delta.EffectiveReasoning(); r != nil && *r != "" {
+			emitReasoningChunk(*r)
+		}
+
+		// Handle content with think tag filtering (same as main handler).
 		if delta.Content != nil && *delta.Content != "" {
-			if !*textBlockOpen {
-				openTextBlock()
+			for _, seg := range thinkFilter.Process(*delta.Content) {
+				if seg.IsReasoning {
+					emitReasoningChunk(seg.Text)
+				} else {
+					if !*textBlockOpen {
+						openTextBlock()
+					}
+					emit("content_block_delta", map[string]any{
+						"index": blockIndex,
+						"delta": map[string]any{"type": "text_delta", "text": seg.Text},
+					})
+				}
 			}
-			emit("content_block_delta", map[string]any{
-				"index": blockIndex,
-				"delta": map[string]any{"type": "text_delta", "text": *delta.Content},
-			})
 		}
 
 		for _, tc := range delta.ToolCalls {

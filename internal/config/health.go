@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -15,6 +17,7 @@ type ModelHealth struct {
 	Online    bool      `json:"online"`
 	LastCheck time.Time `json:"last_check"`
 	Error     string    `json:"error,omitempty"`
+	External  bool      `json:"external"` // true if backend is an external API (not polled periodically)
 }
 
 // HealthStore manages health status for all configured models.
@@ -48,10 +51,52 @@ func (hs *HealthStore) initFromConfig() {
 	defer hs.mu.Unlock()
 	for _, m := range cfg.Models {
 		hs.health[m.Name] = &ModelHealth{
-			Name:   m.Name,
-			Online: true,
+			Name:     m.Name,
+			Online:   true,
+			External: isExternalBackend(m.Backend),
 		}
 	}
+}
+
+// isExternalBackend returns true if the backend URL points to an external API
+// (not localhost or a private IP range). External backends are checked once
+// at startup and then updated based on actual usage, not periodic polling.
+func isExternalBackend(backendURL string) bool {
+	u, err := url.Parse(backendURL)
+	if err != nil {
+		return false // can't parse, assume local
+	}
+
+	host := u.Hostname()
+
+	// Localhost variants
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return false
+	}
+
+	// Try to parse as IP
+	ip := net.ParseIP(host)
+	if ip != nil {
+		// Check private IP ranges (RFC 1918 + link-local)
+		privateRanges := []string{
+			"10.0.0.0/8",
+			"172.16.0.0/12",
+			"192.168.0.0/16",
+			"169.254.0.0/16", // link-local
+			"fc00::/7",       // IPv6 unique local
+			"fe80::/10",      // IPv6 link-local
+		}
+		for _, cidr := range privateRanges {
+			_, network, err := net.ParseCIDR(cidr)
+			if err == nil && network.Contains(ip) {
+				return false
+			}
+		}
+		return true // public IP
+	}
+
+	// Not an IP, must be a hostname - if it's not localhost, assume external
+	return true
 }
 
 // RefreshFromConfig syncs the health map after a config reload.
@@ -68,8 +113,9 @@ func (hs *HealthStore) RefreshFromConfig() {
 	for _, m := range cfg.Models {
 		if _, exists := hs.health[m.Name]; !exists {
 			hs.health[m.Name] = &ModelHealth{
-				Name:   m.Name,
-				Online: true,
+				Name:     m.Name,
+				Online:   true,
+				External: isExternalBackend(m.Backend),
 			}
 		}
 	}
@@ -93,6 +139,7 @@ func (hs *HealthStore) GetStatus() map[string]ModelHealth {
 			Online:    h.Online,
 			LastCheck: h.LastCheck,
 			Error:     h.Error,
+			External:  h.External,
 		}
 	}
 	return result
@@ -112,6 +159,7 @@ func (hs *HealthStore) GetStatusForModel(name string) (ModelHealth, bool) {
 		Online:    h.Online,
 		LastCheck: h.LastCheck,
 		Error:     h.Error,
+		External:  h.External,
 	}, true
 }
 
@@ -163,7 +211,8 @@ func (hs *HealthStore) runChecker(ctx context.Context, client *http.Client) {
 	ticker := time.NewTicker(hs.checkInterval)
 	defer ticker.Stop()
 
-	hs.checkAll(ctx, client)
+	// Initial check includes ALL backends (including external).
+	hs.checkAllInitial(ctx, client)
 
 	for {
 		select {
@@ -172,12 +221,30 @@ func (hs *HealthStore) runChecker(ctx context.Context, client *http.Client) {
 		case <-hs.stopCh:
 			return
 		case <-ticker.C:
+			// Periodic checks skip external backends.
 			hs.checkAll(ctx, client)
 		}
 	}
 }
 
+// checkAll checks all local (non-external) model backends.
+// External backends are only checked once at startup via checkAllInitial.
 func (hs *HealthStore) checkAll(ctx context.Context, client *http.Client) {
+	cfg := hs.config.Get()
+	for i := range cfg.Models {
+		m := &cfg.Models[i]
+		// Skip external backends - they're updated via RecordUsage instead.
+		if isExternalBackend(m.Backend) {
+			continue
+		}
+		hs.wg.Add(1)
+		go hs.checkOne(ctx, client, m)
+	}
+}
+
+// checkAllInitial checks ALL backends including external ones.
+// Called once at startup to establish initial state.
+func (hs *HealthStore) checkAllInitial(ctx context.Context, client *http.Client) {
 	cfg := hs.config.Get()
 	for i := range cfg.Models {
 		m := &cfg.Models[i]
@@ -238,5 +305,39 @@ func (hs *HealthStore) updateHealth(name string, online bool, errMsg string) {
 		slog.Debug("health: model online", "model", name)
 	} else {
 		slog.Info("health: model offline", "model", name, "error", errMsg)
+	}
+}
+
+// RecordUsage updates health status based on actual request results.
+// This is the primary health tracking mechanism for external backends,
+// which are not polled periodically to avoid spamming external APIs.
+// Call this after each request completes (success or failure).
+func (hs *HealthStore) RecordUsage(name string, success bool, errMsg string) {
+	hs.mu.Lock()
+	defer hs.mu.Unlock()
+
+	h, ok := hs.health[name]
+	if !ok {
+		return
+	}
+
+	// Only log state changes to reduce noise.
+	wasOnline := h.Online
+
+	h.Online = success
+	h.LastCheck = time.Now()
+	if success {
+		h.Error = ""
+	} else {
+		h.Error = errMsg
+	}
+
+	// Log state transitions for external backends.
+	if h.External && wasOnline != success {
+		if success {
+			slog.Info("health: external model back online", "model", name)
+		} else {
+			slog.Info("health: external model offline", "model", name, "error", errMsg)
+		}
 	}
 }

@@ -124,6 +124,13 @@ func (p *Pipeline) convertOrInjectSearchTool(chatReq map[string]any, targetModel
 		chatReq["tools"] = []any{newWebSearchToolDef()}
 	}
 
+	// Ensure tool_choice is set when tools are present. If web_search was the
+	// only tool in the original request (a server tool), tool_choice was dropped
+	// during translation because no function tools survived stripping.
+	if _, hasChoice := chatReq["tool_choice"]; !hasChoice {
+		chatReq["tool_choice"] = "auto"
+	}
+
 	return chatReq
 }
 
@@ -225,14 +232,18 @@ func (p *Pipeline) executeTavilySearch(ctx context.Context, apiKey, query string
 	}
 
 	var sb strings.Builder
-	if tavilyResp.Answer != "" {
-		sb.WriteString("Answer: ")
-		sb.WriteString(tavilyResp.Answer)
-		sb.WriteString("\n\n")
-	}
-	sb.WriteString("Search Results:\n")
-	for i, r := range tavilyResp.Results {
-		fmt.Fprintf(&sb, "\n%d. %s\n   URL: %s\n   %s\n", i+1, r.Title, r.URL, r.Content)
+	if tavilyResp.Answer == "" && len(tavilyResp.Results) == 0 {
+		sb.WriteString("No results found. Try a broader search query without quoted phrases.")
+	} else {
+		if tavilyResp.Answer != "" {
+			sb.WriteString("Answer: ")
+			sb.WriteString(tavilyResp.Answer)
+			sb.WriteString("\n\n")
+		}
+		sb.WriteString("Search Results:\n")
+		for i, r := range tavilyResp.Results {
+			fmt.Fprintf(&sb, "\n%d. %s\n   URL: %s\n   %s\n", i+1, r.Title, r.URL, r.Content)
+		}
 	}
 
 	var hits []SearchHit
@@ -305,9 +316,13 @@ func (p *Pipeline) executeBraveSearch(ctx context.Context, apiKey, query string)
 	}
 
 	var sb strings.Builder
-	sb.WriteString("Search Results:\n")
-	for i, r := range braveResp.Web.Results {
-		fmt.Fprintf(&sb, "\n%d. %s\n   URL: %s\n   %s\n", i+1, r.Title, r.URL, r.Description)
+	if len(braveResp.Web.Results) == 0 {
+		sb.WriteString("No results found. Try a broader search query without quoted phrases.")
+	} else {
+		sb.WriteString("Search Results:\n")
+		for i, r := range braveResp.Web.Results {
+			fmt.Fprintf(&sb, "\n%d. %s\n   URL: %s\n   %s\n", i+1, r.Title, r.URL, r.Description)
+		}
 	}
 
 	var hits []SearchHit

@@ -232,6 +232,17 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// For Chat Completions (without search), filter <think> tags from content.
+	if isChatCompletions && isStreaming {
+		usageData := streamChatWithThinkFilter(w, resp)
+		logUsageFromChatResponse(p.usage, usageData, rc, 0)
+		return
+	}
+	if isChatCompletions && !isStreaming {
+		p.handleNonStreamingChatWithFilter(w, resp, rc)
+		return
+	}
+
 	w.WriteHeader(resp.StatusCode)
 	p.streamRawResponse(w, resp, rc, isStreaming)
 }
@@ -322,6 +333,42 @@ func (p *ProxyHandler) handleNonStreamingWithSearch(w http.ResponseWriter, resp 
 			chatResp = *finalResp
 		}
 	}
+
+	// Filter think tags from content.
+	filterNonStreamingContent(&chatResp)
+
+	finalBody, err := json.Marshal(chatResp)
+	if err != nil {
+		finalBody = respBody
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(finalBody)
+
+	logUsageFromChatResponse(p.usage, chatResp.Usage, rc, int64(len(finalBody)))
+}
+
+// handleNonStreamingChatWithFilter handles non-streaming Chat Completions responses,
+// filtering <think>...</think> tags from the content.
+func (p *ProxyHandler) handleNonStreamingChatWithFilter(w http.ResponseWriter, resp *http.Response, rc proxyRequestContext) {
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, api.MaxResponseBodySize))
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadGateway, "failed to read upstream response")
+		return
+	}
+
+	var chatResp api.ChatResponse
+	if err := json.Unmarshal(respBody, &chatResp); err != nil {
+		// Can't parse - pass through unchanged.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		w.Write(respBody)
+		return
+	}
+
+	// Filter think tags from content.
+	filterNonStreamingContent(&chatResp)
 
 	finalBody, err := json.Marshal(chatResp)
 	if err != nil {
@@ -532,17 +579,6 @@ func (p *ProxyHandler) reStreamFromBackend(ctx context.Context, w http.ResponseW
 	}
 	defer resp.Body.Close()
 
-	buf := make([]byte, 4096)
-	for {
-		n, readErr := resp.Body.Read(buf)
-		if n > 0 {
-			w.Write(buf[:n])
-			if canFlush {
-				flusher.Flush()
-			}
-		}
-		if readErr != nil {
-			break
-		}
-	}
+	// Use the think tag filter for re-streamed content.
+	reStreamWithThinkFilter(w, resp.Body, flusher, canFlush)
 }

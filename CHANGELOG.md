@@ -1,6 +1,20 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+
+## v0.3.4
+
+### Added
+- **Recursive streaming search loop** — when the model requests additional searches after receiving results, the proxy now executes them (up to 10 iterations) instead of passing unexecutable `function_call` items to the client. Fixes "Try again" churn with search-heavy queries.
+- **Content buffering for search transitions** — buffers content when web search is enabled and discards "transition text" like "Let me search..." when followed by search tool calls. Prevents intermediate model commentary from appearing in client output.
+- **Search result sources in web_search_call** — `web_search_call` output items now include a `sources` array with URL citations, matching the Responses API spec and enabling proper Codex search result display.
+
+### Fixed
+- **Tool call event duplication** — when the proxy executes searches, it no longer emits `function_call` events followed by `web_search_call` events for the same search. Only the `web_search_call` items are emitted.
+- **Pending search calls at iteration limit** — when the search loop hits max iterations with pending search tool calls, they are now discarded instead of being emitted as orphaned `function_call` items.
+
+---
+
 ### Added
 - **Model availability tracking** — background health checker probes each backend every 30 seconds using HEAD requests, tracking online/offline status per model. New `GET /v1/models/status` endpoint exposes real-time health data. Config generator page now displays Online/Offline badges for each model including error messages when offline.
 
