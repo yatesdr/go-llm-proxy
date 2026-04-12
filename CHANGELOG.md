@@ -8,6 +8,9 @@ All notable changes to this project will be documented in this file.
 - **Recursive streaming search loop** — when the model requests additional searches after receiving results, the proxy now executes them (up to 10 iterations) instead of passing unexecutable `function_call` items to the client. Fixes "Try again" churn with search-heavy queries.
 - **Content buffering for search transitions** — buffers content when web search is enabled and discards "transition text" like "Let me search..." when followed by search tool calls. Prevents intermediate model commentary from appearing in client output.
 - **Search result sources in web_search_call** — `web_search_call` output items now include a `sources` array with URL citations, matching the Responses API spec and enabling proper Codex search result display.
+- **Think tag filtering for Chat Completions** — `<think>...</think>` tags are now stripped from Chat Completions responses (streaming and non-streaming), not just Responses API. Reasoning models using think tags now work cleanly with all API formats.
+- **External backend detection for health checks** — backends pointing to external APIs (api.openai.com, api.anthropic.com, etc.) are now detected and only checked once at startup, then updated based on actual usage. Prevents spamming external APIs with health check requests.
+- **Per-model sampling defaults** — new `defaults:` config section per model to set default `temperature`, `top_p`, `top_k`, `max_new_tokens`, and `stop` parameters. Defaults are injected into requests that don't specify them, useful for backends like SGLang that lack server-side default configuration.
 
 ### Fixed
 - **Tool call event duplication** — when the proxy executes searches, it no longer emits `function_call` events followed by `web_search_call` events for the same search. Only the `web_search_call` items are emitted.

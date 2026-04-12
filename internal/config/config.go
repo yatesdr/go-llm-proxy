@@ -44,19 +44,30 @@ const (
 	MessagesModeTranslate = "translate" // always translate Anthropic Messages to Chat Completions
 )
 
+// SamplingDefaults contains default sampling parameters for a model.
+// These are injected into requests that don't specify them.
+type SamplingDefaults struct {
+	Temperature  *float64 `yaml:"temperature"`    // controls randomness (0.0 = deterministic)
+	TopP         *float64 `yaml:"top_p"`          // nucleus sampling threshold
+	TopK         *int     `yaml:"top_k"`          // limits vocabulary to top K tokens
+	MaxNewTokens *int     `yaml:"max_new_tokens"` // maximum tokens to generate (maps to max_tokens)
+	Stop         []string `yaml:"stop"`           // strings that trigger end of generation
+}
+
 type ModelConfig struct {
-	Name           string           `yaml:"name"`
-	Backend        string           `yaml:"backend"`          // upstream URL e.g. http://192.168.100.10:8000/v1
-	APIKey         string           `yaml:"api_key"`          // key to send to the backend (if required)
-	Model          string           `yaml:"model"`            // model name to send to the backend (if different from Name)
-	Timeout        int              `yaml:"timeout"`          // request timeout in seconds (default 300)
-	Type           string           `yaml:"type"`             // backend type: "" or "openai" (default), "anthropic"
-	ResponsesMode  string           `yaml:"responses_mode"`   // "auto" (default), "native", or "translate"
-	MessagesMode   string           `yaml:"messages_mode"`    // "auto" (default), "native", or "translate"
-	ContextWindow  int              `yaml:"context_window"`   // max context tokens (0 = auto-detect from backend)
-	SupportsVision bool             `yaml:"supports_vision"`  // model handles images natively
-	ForcePipeline  bool             `yaml:"force_pipeline"`   // run pipeline even on native backends
-	Processors     *ProcessorsConfig `yaml:"processors"`      // per-model processor overrides (nil = use global)
+	Name           string            `yaml:"name"`
+	Backend        string            `yaml:"backend"`          // upstream URL e.g. http://192.168.100.10:8000/v1
+	APIKey         string            `yaml:"api_key"`          // key to send to the backend (if required)
+	Model          string            `yaml:"model"`            // model name to send to the backend (if different from Name)
+	Timeout        int               `yaml:"timeout"`          // request timeout in seconds (default 300)
+	Type           string            `yaml:"type"`             // backend type: "" or "openai" (default), "anthropic"
+	ResponsesMode  string            `yaml:"responses_mode"`   // "auto" (default), "native", or "translate"
+	MessagesMode   string            `yaml:"messages_mode"`    // "auto" (default), "native", or "translate"
+	ContextWindow  int               `yaml:"context_window"`   // max context tokens (0 = auto-detect from backend)
+	SupportsVision bool              `yaml:"supports_vision"`  // model handles images natively
+	ForcePipeline  bool              `yaml:"force_pipeline"`   // run pipeline even on native backends
+	Processors     *ProcessorsConfig `yaml:"processors"`       // per-model processor overrides (nil = use global)
+	Defaults       *SamplingDefaults `yaml:"defaults"`         // default sampling parameters (nil = use backend defaults)
 }
 
 type KeyConfig struct {
@@ -320,4 +331,50 @@ func validateConfig(cfg *Config) error {
 	}
 
 	return nil
+}
+
+// ApplySamplingDefaults injects default sampling parameters into a Chat Completions
+// request map. Only sets values that are not already present in the request.
+// This allows per-model defaults to be applied without overriding explicit user values.
+func (m *ModelConfig) ApplySamplingDefaults(chatReq map[string]any) {
+	if m.Defaults == nil {
+		return
+	}
+	d := m.Defaults
+	var applied []string
+
+	if d.Temperature != nil {
+		if _, exists := chatReq["temperature"]; !exists {
+			chatReq["temperature"] = *d.Temperature
+			applied = append(applied, fmt.Sprintf("temperature=%.2f", *d.Temperature))
+		}
+	}
+	if d.TopP != nil {
+		if _, exists := chatReq["top_p"]; !exists {
+			chatReq["top_p"] = *d.TopP
+			applied = append(applied, fmt.Sprintf("top_p=%.2f", *d.TopP))
+		}
+	}
+	if d.TopK != nil {
+		if _, exists := chatReq["top_k"]; !exists {
+			chatReq["top_k"] = *d.TopK
+			applied = append(applied, fmt.Sprintf("top_k=%d", *d.TopK))
+		}
+	}
+	if d.MaxNewTokens != nil {
+		if _, exists := chatReq["max_tokens"]; !exists {
+			chatReq["max_tokens"] = *d.MaxNewTokens
+			applied = append(applied, fmt.Sprintf("max_tokens=%d", *d.MaxNewTokens))
+		}
+	}
+	if len(d.Stop) > 0 {
+		if _, exists := chatReq["stop"]; !exists {
+			chatReq["stop"] = d.Stop
+			applied = append(applied, fmt.Sprintf("stop=%v", d.Stop))
+		}
+	}
+
+	if len(applied) > 0 {
+		slog.Debug("applied sampling defaults", "model", m.Name, "params", applied)
+	}
 }

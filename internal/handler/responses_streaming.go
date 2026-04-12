@@ -820,6 +820,7 @@ func (h *ResponsesHandler) streamResponsesFromBackend(
 
 	chatReq["stream"] = true
 	chatReq["stream_options"] = map[string]any{"include_usage": true}
+	model.ApplySamplingDefaults(chatReq)
 	newBody, err := json.Marshal(chatReq)
 	if err != nil {
 		slog.Error("streaming search: failed to marshal re-send request", "error", err)

@@ -202,6 +202,9 @@ func sendChatCompletionsRequest(ctx context.Context, client *http.Client, chatRe
 	}
 	reqCopy["stream"] = false
 
+	// Apply model's default sampling parameters (only for fields not already set).
+	model.ApplySamplingDefaults(reqCopy)
+
 	chatBody, err := json.Marshal(reqCopy)
 	if err != nil {
 		return nil, fmt.Errorf("marshal chat request: %w", err)

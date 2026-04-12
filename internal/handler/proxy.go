@@ -148,6 +148,21 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Apply model's default sampling parameters to Chat Completions requests.
+	if isChatCompletions && model.Defaults != nil {
+		if parsedChatReq == nil {
+			if err := json.Unmarshal(body, &parsedChatReq); err != nil {
+				slog.Warn("failed to parse chat request for defaults", "error", err)
+			}
+		}
+		if parsedChatReq != nil {
+			model.ApplySamplingDefaults(parsedChatReq)
+			if newBody, err := json.Marshal(parsedChatReq); err == nil {
+				body = newBody
+			}
+		}
+	}
+
 	// Build the upstream URL.
 	relPath := cleanPath
 	if model.Type != config.BackendAnthropic {
@@ -554,6 +569,7 @@ func (p *ProxyHandler) reStreamFromBackend(ctx context.Context, w http.ResponseW
 
 	chatReq["stream"] = true
 	chatReq["stream_options"] = map[string]any{"include_usage": true}
+	model.ApplySamplingDefaults(chatReq)
 	newBody, err := json.Marshal(chatReq)
 	if err != nil {
 		slog.Error("proxy search re-stream: marshal failed", "error", err)

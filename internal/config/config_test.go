@@ -259,3 +259,77 @@ func TestValidateConfig_ForcePipelineField(t *testing.T) {
 		t.Fatalf("expected no error for force_pipeline, got: %v", err)
 	}
 }
+
+func TestApplySamplingDefaults(t *testing.T) {
+	temp := 0.9
+	topP := 0.95
+	topK := 50
+	maxTokens := 1024
+	model := &ModelConfig{
+		Name:    "test",
+		Backend: "http://localhost:8000/v1",
+		Defaults: &SamplingDefaults{
+			Temperature:  &temp,
+			TopP:         &topP,
+			TopK:         &topK,
+			MaxNewTokens: &maxTokens,
+			Stop:         []string{"END", "STOP"},
+		},
+	}
+
+	// Test that defaults are applied to empty request.
+	req := map[string]any{"model": "test"}
+	model.ApplySamplingDefaults(req)
+
+	if req["temperature"] != temp {
+		t.Errorf("expected temperature %v, got %v", temp, req["temperature"])
+	}
+	if req["top_p"] != topP {
+		t.Errorf("expected top_p %v, got %v", topP, req["top_p"])
+	}
+	if req["top_k"] != topK {
+		t.Errorf("expected top_k %v, got %v", topK, req["top_k"])
+	}
+	if req["max_tokens"] != maxTokens {
+		t.Errorf("expected max_tokens %v, got %v", maxTokens, req["max_tokens"])
+	}
+	stop, ok := req["stop"].([]string)
+	if !ok || len(stop) != 2 {
+		t.Errorf("expected stop [END STOP], got %v", req["stop"])
+	}
+
+	// Test that existing values are not overwritten.
+	req2 := map[string]any{
+		"model":       "test",
+		"temperature": 0.5,
+		"max_tokens":  500,
+	}
+	model.ApplySamplingDefaults(req2)
+
+	if req2["temperature"] != 0.5 {
+		t.Errorf("temperature should not be overwritten, got %v", req2["temperature"])
+	}
+	if req2["max_tokens"] != 500 {
+		t.Errorf("max_tokens should not be overwritten, got %v", req2["max_tokens"])
+	}
+	// But other defaults should be applied.
+	if req2["top_p"] != topP {
+		t.Errorf("expected top_p %v, got %v", topP, req2["top_p"])
+	}
+}
+
+func TestApplySamplingDefaults_NilDefaults(t *testing.T) {
+	model := &ModelConfig{
+		Name:     "test",
+		Backend:  "http://localhost:8000/v1",
+		Defaults: nil,
+	}
+
+	req := map[string]any{"model": "test"}
+	model.ApplySamplingDefaults(req)
+
+	// Should not add any fields.
+	if _, exists := req["temperature"]; exists {
+		t.Error("should not add temperature when defaults is nil")
+	}
+}
