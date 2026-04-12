@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+### Added
+- **Model availability tracking** — background health checker probes each backend every 30 seconds using HEAD requests, tracking online/offline status per model. New `GET /v1/models/status` endpoint exposes real-time health data. Config generator page now displays Online/Offline badges for each model including error messages when offline.
+
+### Fixed
+- **Responses API auto-detection with SGLang** — native passthrough probe now treats HTTP 500 and 405 as "not supported" (in addition to 404), falling back to Chat Completions translation. SGLang returns 500 for unrecognized routes instead of 404, which previously caused the proxy to retry native passthrough indefinitely instead of falling back.
+
 
 ## v0.3.3
 

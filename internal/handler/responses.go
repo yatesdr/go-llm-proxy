@@ -109,13 +109,16 @@ func (h *ResponsesHandler) tryNativePassthrough(ctx context.Context, w http.Resp
 		return false
 	}
 
-	// 404 = backend does not support this endpoint.
+	// 404, 405, 500 = backend does not support this endpoint.
+	// Some backends (e.g. SGLang) return 500 instead of 404 for unrecognized routes.
 	cacheKey := nativeCacheKey(model.Backend, path)
-	if resp.StatusCode == http.StatusNotFound {
+	if resp.StatusCode == http.StatusNotFound ||
+		resp.StatusCode == http.StatusMethodNotAllowed ||
+		resp.StatusCode == http.StatusInternalServerError {
 		resp.Body.Close()
 		h.nativeCache.Store(cacheKey, false)
 		slog.Info("backend does not support native Responses API endpoint, falling back to translation",
-			"backend", model.Backend, "path", path, "model", modelName)
+			"backend", model.Backend, "path", path, "model", modelName, "status", resp.StatusCode)
 		return false
 	}
 
