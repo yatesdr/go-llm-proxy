@@ -25,12 +25,11 @@ import (
 )
 
 // AllowedPaths restricts which sub-paths can be proxied to backends.
-var AllowedPaths = regexp.MustCompile(`^/v1/(chat/completions|completions|embeddings|images/generations|audio/(transcriptions|translations|speech))$`)
+var AllowedPaths = regexp.MustCompile(`^/v1/(chat/completions|completions|embeddings|rerank|images/generations|audio/(transcriptions|translations|speech))$`)
 
 // AllowedResponseHeaders controls which upstream headers are forwarded to clients.
 var AllowedResponseHeaders = map[string]bool{
 	"Content-Type":          true,
-	"Content-Length":        true,
 	"X-Request-ID":         true, // OpenAI
 	"Openai-Processing-Ms": true,
 	"Openai-Model":         true,
