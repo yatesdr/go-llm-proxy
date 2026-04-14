@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## v0.3.5
+## v0.3.6
 
 ### Added
 - **Qdrant vector database proxy** — new `/qdrant/*` endpoint proxies requests to a Qdrant backend with separate authentication via app keys. Configured under `services.qdrant` in config. App keys are independent from model API keys, allowing fine-grained access control for vector database operations.
@@ -12,6 +12,14 @@ All notable changes to this project will be documented in this file.
 - **Context windows not refreshed on hot reload** — context window auto-detection now re-runs after config reload, so adding or changing models updates the status page without a restart.
 - **Inconsistent config hot reload** — file watcher now monitors the parent directory instead of the config file directly. Editors that save via rename (vim, etc.) no longer cause the watcher to lose track of the file.
 - **Content-Length mismatch on proxied responses** — removed forwarding of backend `Content-Length` header since the proxy may re-marshal the body (think tag filtering, search loops), changing its size. Go's HTTP server now sets the correct length automatically.
+
+## v0.3.5
+
+### Added
+- **`/v1/rerank` endpoint** — added reranking to the allowed proxy paths for backends that support it.
+
+### Fixed
+- **Context window detection using training size instead of runtime** — proxy now queries the llama.cpp `/props` endpoint first for the actual runtime `n_ctx` (respects `--ctx-size`), falling back to `/models` for other backends. Previously reported the training context size which could be much larger than allocated.
 
 ## v0.3.4
 
