@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -168,16 +169,25 @@ func (cs *ConfigStore) Get() *Config {
 }
 
 // Watch starts a goroutine that reloads config when the file changes on disk.
-// Errors are logged but do not stop the watcher. Returns a stop function.
+// Watches the parent directory to survive rename-based saves (vim, etc.).
+// Returns a stop function.
 func (cs *ConfigStore) Watch() (stop func(), err error) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, fmt.Errorf("creating file watcher: %w", err)
 	}
 
-	if err := watcher.Add(cs.path); err != nil {
+	absPath, err := filepath.Abs(cs.path)
+	if err != nil {
 		watcher.Close()
-		return nil, fmt.Errorf("watching %s: %w", cs.path, err)
+		return nil, fmt.Errorf("resolving config path: %w", err)
+	}
+	dir := filepath.Dir(absPath)
+	base := filepath.Base(absPath)
+
+	if err := watcher.Add(dir); err != nil {
+		watcher.Close()
+		return nil, fmt.Errorf("watching %s: %w", dir, err)
 	}
 
 	go func() {
@@ -189,6 +199,10 @@ func (cs *ConfigStore) Watch() (stop func(), err error) {
 			case event, ok := <-watcher.Events:
 				if !ok {
 					return
+				}
+				// Only react to events on our config file.
+				if filepath.Base(event.Name) != base {
+					continue
 				}
 				if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) == 0 {
 					continue
@@ -211,7 +225,7 @@ func (cs *ConfigStore) Watch() (stop func(), err error) {
 		}
 	}()
 
-	slog.Info("watching config file for changes", "path", cs.path)
+	slog.Info("watching config file for changes", "path", absPath)
 	return func() { watcher.Close() }, nil
 }
 

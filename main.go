@@ -122,6 +122,7 @@ func main() {
 		if dashRl != nil {
 			dashRl.SetTrustedProxies(newCfg.TrustedProxies)
 		}
+		config.DetectContextWindows(cs)
 	})
 
 	// Watch config file for changes (auto-reload on save).
