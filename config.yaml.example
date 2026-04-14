@@ -23,6 +23,12 @@ models:
     # supports_vision: false         # set true if the model handles images natively
     # responses_mode: auto           # auto | native | translate (for Codex CLI)
     # messages_mode: auto            # auto | native | translate (for Claude Code)
+    # defaults:                      # injected when the client doesn't send its own
+    #   temperature: 0.7
+    #   max_new_tokens: 4096
+    #   frequency_penalty: 0.3       # prevents repetition loops (0.0–2.0)
+    #   presence_penalty: 0.0        # encourages topic diversity (0.0–2.0)
+    #   reasoning_effort: medium     # thinking budget: low | medium | high
 
   # Cloud Anthropic backend (native passthrough — no translation needed)
   # - name: claude-sonnet-4

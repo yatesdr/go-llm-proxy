@@ -40,6 +40,36 @@ models:
 | `responses_mode` | no | `"auto"` | Responses API handling: `"auto"`, `"native"`, or `"translate"` (see [Responses mode](#responses-mode)) |
 | `messages_mode` | no | `"auto"` | Messages API handling: `"auto"`, `"native"`, or `"translate"` (see [Messages mode](#messages-mode)) |
 | `context_window` | no | `0` | Max context tokens. `0` = auto-detect from backend at startup |
+| `defaults` | no | — | Default sampling parameters (see below) |
+
+### Per-model sampling defaults
+
+The `defaults` block sets sampling parameters that are injected when the client doesn't send its own. Coding assistants (Claude Code, Codex, Cursor, etc.) send their own parameters and are unaffected.
+
+```yaml
+models:
+  - name: gemma4-31b
+    backend: http://192.168.13.30:8003/v1
+    defaults:
+      temperature: 0.7
+      top_p: 1.0
+      top_k: 40
+      max_new_tokens: 4096
+      frequency_penalty: 0.3
+      presence_penalty: 0.0
+      reasoning_effort: medium
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `temperature` | float | Controls randomness (0.0 = deterministic) |
+| `top_p` | float | Nucleus sampling threshold |
+| `top_k` | int | Limits vocabulary to top K tokens |
+| `max_new_tokens` | int | Maximum tokens to generate (maps to `max_tokens`) |
+| `frequency_penalty` | float | Penalizes repeated tokens by frequency (0.0–2.0) |
+| `presence_penalty` | float | Penalizes tokens that have appeared at all (0.0–2.0) |
+| `reasoning_effort` | string | Thinking budget: `low`, `medium`, or `high` |
+| `stop` | list | Strings that trigger end of generation |
 
 ## Processors (pipeline)
 
@@ -217,11 +247,11 @@ The translation supports text, tool calling, reasoning tokens (emitted as thinki
 
 ## Context window detection
 
-At startup, the proxy queries each backend's `/v1/models` endpoint to discover context window sizes:
+At startup, the proxy queries each backend to discover context window sizes:
 
-- **vLLM**: `max_model_len` field
-- **llama-server**: `meta.n_ctx_train` field
-- **Anthropic**: `max_input_tokens` from `GET /v1/models/{model_id}`
+- **llama.cpp / llama-server**: `/props` endpoint → `default_generation_settings.n_ctx` (actual runtime context respecting `--ctx-size`)
+- **vLLM**: `/v1/models` → `max_model_len` field
+- **Anthropic**: `GET /v1/models/{model_id}` → `max_input_tokens`
 
 Detection runs asynchronously (non-blocking). Results are served through the proxy's `/v1/models` endpoint and used in the config generator.
 
@@ -233,6 +263,32 @@ Set `context_window` explicitly for backends that don't report it:
   type: anthropic
   context_window: 1048576   # 1M tokens
 ```
+
+## Services
+
+External service proxies configured under the `services` key. Currently supports Qdrant vector database.
+
+```yaml
+services:
+  qdrant:
+    backend: http://192.168.5.143:6333
+    api_key: your-qdrant-api-key
+    app_keys:
+      - name: webapp
+        key: qd-webapp-abc123
+      - name: crawler
+        key: qd-crawler-def456
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `qdrant.backend` | yes | Qdrant server URL |
+| `qdrant.api_key` | no | API key sent to the Qdrant backend |
+| `qdrant.app_keys` | yes | Application keys for proxy authentication |
+| `qdrant.app_keys[].name` | yes | Friendly name (used for isolation and logging) |
+| `qdrant.app_keys[].key` | yes | The API key clients send via `Authorization: Bearer` |
+
+App keys are separate from model API keys. Each app's data is automatically isolated — the proxy injects the app name into point payloads on writes and filters by app on searches. See [docs/qdrant.md](qdrant.md) for full details.
 
 ## Config reload
 

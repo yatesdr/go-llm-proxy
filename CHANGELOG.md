@@ -7,6 +7,11 @@ All notable changes to this project will be documented in this file.
 ### Added
 - **Qdrant vector database proxy** — new `/qdrant/*` endpoint proxies requests to a Qdrant backend with separate authentication via app keys. Configured under `services.qdrant` in config. App keys are independent from model API keys, allowing fine-grained access control for vector database operations.
 - **App isolation for Qdrant** — automatic multi-tenant isolation without client changes. The proxy injects an `app` field into point payloads on writes and adds a filter clause on searches/queries to restrict results to the calling app's data. Apps cannot access each other's vectors.
+- **Sampling defaults: `frequency_penalty`, `presence_penalty`, `reasoning_effort`** — three new fields in per-model `defaults` config. Injected when the client doesn't send its own values. Prevents repetition loops on prone models and gives reasoning models a default thinking budget for simple clients.
+
+### Security
+- **Qdrant path traversal protection** — `/qdrant/*` paths are normalized with `path.Clean()` and `..` sequences are rejected, preventing directory traversal attacks against the Qdrant backend.
+- **Deduplicated constant-time key comparison** — extracted shared `constantTimeKeyMatch()` helper used by both model API key and app key authentication. Removed unused `FindAppKey()` from config that used non-constant-time comparison.
 
 ### Fixed
 - **Context windows not refreshed on hot reload** — context window auto-detection now re-runs after config reload, so adding or changing models updates the status page without a restart.
