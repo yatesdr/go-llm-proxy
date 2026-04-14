@@ -65,16 +65,20 @@ func extractToken(r *http.Request) string {
 }
 
 func findKey(cfg *config.Config, token string) *config.KeyConfig {
-	// Hash to fixed length before comparing to prevent length oracle attacks.
-	tokenHash := sha256.Sum256([]byte(token))
-
 	for i := range cfg.Keys {
-		keyHash := sha256.Sum256([]byte(cfg.Keys[i].Key))
-		if subtle.ConstantTimeCompare(tokenHash[:], keyHash[:]) == 1 {
+		if constantTimeKeyMatch(token, cfg.Keys[i].Key) {
 			return &cfg.Keys[i]
 		}
 	}
 	return nil
+}
+
+// constantTimeKeyMatch compares a token against a key using SHA256 hashing
+// and constant-time comparison to prevent timing attacks.
+func constantTimeKeyMatch(token, key string) bool {
+	tokenHash := sha256.Sum256([]byte(token))
+	keyHash := sha256.Sum256([]byte(key))
+	return subtle.ConstantTimeCompare(tokenHash[:], keyHash[:]) == 1
 }
 
 // KeyAllowsModel checks if the key is authorized for the given model.

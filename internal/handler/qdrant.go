@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"path"
 	"regexp"
 	"strings"
 	"time"
@@ -56,10 +57,14 @@ func (h *QdrantHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Strip /qdrant prefix to get the Qdrant API path.
-	path := strings.TrimPrefix(r.URL.Path, "/qdrant")
-	if path == "" {
-		path = "/"
+	// Strip /qdrant prefix and normalize to prevent path traversal.
+	qdrantPath := path.Clean(strings.TrimPrefix(r.URL.Path, "/qdrant"))
+	if qdrantPath == "." {
+		qdrantPath = "/"
+	}
+	if strings.Contains(qdrantPath, "..") {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid path")
+		return
 	}
 
 	// Read request body if present.
@@ -76,10 +81,10 @@ func (h *QdrantHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Apply app isolation transformations.
-	body = h.applyIsolation(path, r.Method, body, appKey.Name)
+	body = h.applyIsolation(qdrantPath, r.Method, body, appKey.Name)
 
 	// Build upstream URL.
-	upstreamURL := strings.TrimRight(cfg.Services.Qdrant.Backend, "/") + path
+	upstreamURL := strings.TrimRight(cfg.Services.Qdrant.Backend, "/") + qdrantPath
 	if r.URL.RawQuery != "" {
 		upstreamURL += "?" + r.URL.RawQuery
 	}
@@ -102,7 +107,7 @@ func (h *QdrantHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		upReq.Header.Set("api-key", cfg.Services.Qdrant.APIKey)
 	}
 
-	slog.Info("proxying qdrant request", "app", appKey.Name, "method", r.Method, "path", path)
+	slog.Info("proxying qdrant request", "app", appKey.Name, "method", r.Method, "path", qdrantPath)
 
 	// Execute request.
 	resp, err := h.client.Do(upReq)
@@ -119,7 +124,7 @@ func (h *QdrantHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Copy response headers.
 	for k, v := range resp.Header {
-		if k == "Content-Type" || k == "Content-Length" || k == "X-Request-Id" {
+		if k == "Content-Type" || k == "Content-Length" || k == "X-Request-ID" {
 			w.Header()[k] = v
 		}
 	}
@@ -143,7 +148,7 @@ func (h *QdrantHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			KeyHash:       usage.HashKey(appKey.Key),
 			KeyName:       appKey.Name,
 			Model:         "qdrant",
-			Endpoint:      "/qdrant" + path,
+			Endpoint:      "/qdrant" + qdrantPath,
 			StatusCode:    resp.StatusCode,
 			RequestBytes:  int64(len(body)),
 			ResponseBytes: int64(len(respBody)),

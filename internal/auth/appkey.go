@@ -2,8 +2,6 @@ package auth
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
 	"log/slog"
 	"net/http"
 
@@ -60,12 +58,8 @@ func findAppKey(cfg *config.Config, token string) *config.AppKeyConfig {
 		return nil
 	}
 
-	// Hash to fixed length before comparing to prevent length oracle attacks.
-	tokenHash := sha256.Sum256([]byte(token))
-
 	for i := range cfg.Services.Qdrant.AppKeys {
-		keyHash := sha256.Sum256([]byte(cfg.Services.Qdrant.AppKeys[i].Key))
-		if subtle.ConstantTimeCompare(tokenHash[:], keyHash[:]) == 1 {
+		if constantTimeKeyMatch(token, cfg.Services.Qdrant.AppKeys[i].Key) {
 			return &cfg.Services.Qdrant.AppKeys[i]
 		}
 	}

@@ -49,11 +49,14 @@ const (
 // SamplingDefaults contains default sampling parameters for a model.
 // These are injected into requests that don't specify them.
 type SamplingDefaults struct {
-	Temperature  *float64 `yaml:"temperature"`    // controls randomness (0.0 = deterministic)
-	TopP         *float64 `yaml:"top_p"`          // nucleus sampling threshold
-	TopK         *int     `yaml:"top_k"`          // limits vocabulary to top K tokens
-	MaxNewTokens *int     `yaml:"max_new_tokens"` // maximum tokens to generate (maps to max_tokens)
-	Stop         []string `yaml:"stop"`           // strings that trigger end of generation
+	Temperature      *float64 `yaml:"temperature"`       // controls randomness (0.0 = deterministic)
+	TopP             *float64 `yaml:"top_p"`             // nucleus sampling threshold
+	TopK             *int     `yaml:"top_k"`             // limits vocabulary to top K tokens
+	MaxNewTokens     *int     `yaml:"max_new_tokens"`    // maximum tokens to generate (maps to max_tokens)
+	FrequencyPenalty *float64 `yaml:"frequency_penalty"` // penalizes repeated tokens by frequency (0.0–2.0)
+	PresencePenalty  *float64 `yaml:"presence_penalty"`  // penalizes tokens that have appeared at all (0.0–2.0)
+	ReasoningEffort  *string  `yaml:"reasoning_effort"`  // thinking budget: low, medium, or high
+	Stop             []string `yaml:"stop"`              // strings that trigger end of generation
 }
 
 type ModelConfig struct {
@@ -239,18 +242,6 @@ func FindModel(cfg *Config, name string) *ModelConfig {
 	return nil
 }
 
-// FindAppKey returns the AppKeyConfig with the given key, or nil if not found.
-func FindAppKey(cfg *Config, key string) *AppKeyConfig {
-	if cfg.Services.Qdrant == nil {
-		return nil
-	}
-	for i := range cfg.Services.Qdrant.AppKeys {
-		if cfg.Services.Qdrant.AppKeys[i].Key == key {
-			return &cfg.Services.Qdrant.AppKeys[i]
-		}
-	}
-	return nil
-}
 
 func validateConfig(cfg *Config) error {
 	if len(cfg.Keys) == 0 {
@@ -306,6 +297,14 @@ func validateConfig(cfg *Config) error {
 		case "", "auto", MessagesModeNative, MessagesModeTranslate:
 		default:
 			return fmt.Errorf("model %q has unknown messages_mode %q (must be %q, %q, or omitted)", m.Name, m.MessagesMode, MessagesModeNative, MessagesModeTranslate)
+		}
+
+		if d := m.Defaults; d != nil && d.ReasoningEffort != nil {
+			switch *d.ReasoningEffort {
+			case "low", "medium", "high":
+			default:
+				return fmt.Errorf("model %q has unknown reasoning_effort %q (must be low, medium, or high)", m.Name, *d.ReasoningEffort)
+			}
 		}
 
 		if names[m.Name] {
@@ -442,6 +441,24 @@ func (m *ModelConfig) ApplySamplingDefaults(chatReq map[string]any) {
 		if _, exists := chatReq["max_tokens"]; !exists {
 			chatReq["max_tokens"] = *d.MaxNewTokens
 			applied = append(applied, fmt.Sprintf("max_tokens=%d", *d.MaxNewTokens))
+		}
+	}
+	if d.FrequencyPenalty != nil {
+		if _, exists := chatReq["frequency_penalty"]; !exists {
+			chatReq["frequency_penalty"] = *d.FrequencyPenalty
+			applied = append(applied, fmt.Sprintf("frequency_penalty=%.2f", *d.FrequencyPenalty))
+		}
+	}
+	if d.PresencePenalty != nil {
+		if _, exists := chatReq["presence_penalty"]; !exists {
+			chatReq["presence_penalty"] = *d.PresencePenalty
+			applied = append(applied, fmt.Sprintf("presence_penalty=%.2f", *d.PresencePenalty))
+		}
+	}
+	if d.ReasoningEffort != nil {
+		if _, exists := chatReq["reasoning_effort"]; !exists {
+			chatReq["reasoning_effort"] = *d.ReasoningEffort
+			applied = append(applied, fmt.Sprintf("reasoning_effort=%s", *d.ReasoningEffort))
 		}
 	}
 	if len(d.Stop) > 0 {
