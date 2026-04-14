@@ -71,10 +71,15 @@ func detectOne(client *http.Client, cs *ConfigStore, name, backend, modelID, api
 // detectOpenAI queries GET /models on an OpenAI-compatible backend and
 // extracts max_model_len from the matching model entry.
 func detectOpenAI(client *http.Client, backend, modelID, apiKey string) (int, error) {
-	// Append /models to the backend base URL. This works for standard
-	// /v1 backends (/v1/models) and non-standard paths like Zhipu's
-	// /api/coding/paas/v4 (/api/coding/paas/v4/models).
 	base := strings.TrimRight(backend, "/")
+
+	// Try llama.cpp /props endpoint first — it reports actual runtime n_ctx
+	// (respects --ctx-size), unlike /models which reports n_ctx_train.
+	if ctxWindow := detectLlamaCppProps(client, base, apiKey); ctxWindow > 0 {
+		return ctxWindow, nil
+	}
+
+	// Fall back to /models endpoint for other backends.
 	modelsURL := base + "/models"
 
 	req, err := http.NewRequest(http.MethodGet, modelsURL, nil)
@@ -136,6 +141,48 @@ func detectOpenAI(client *http.Client, backend, modelID, apiKey string) (int, er
 	}
 
 	return 0, fmt.Errorf("model %q not found or no context window reported", modelID)
+}
+
+// detectLlamaCppProps queries the llama.cpp /props endpoint to get the actual
+// runtime context size (n_ctx) which respects --ctx-size configuration.
+func detectLlamaCppProps(client *http.Client, base, apiKey string) int {
+	// Strip /v1 suffix if present to get the server root.
+	propsBase := strings.TrimSuffix(base, "/v1")
+	propsURL := propsBase + "/props"
+
+	req, err := http.NewRequest(http.MethodGet, propsURL, nil)
+	if err != nil {
+		return 0
+	}
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return 0
+	}
+
+	var result struct {
+		DefaultGenerationSettings struct {
+			NCtx int `json:"n_ctx"`
+		} `json:"default_generation_settings"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return 0
+	}
+
+	return result.DefaultGenerationSettings.NCtx
 }
 
 // detectAnthropic queries GET /v1/models/{model_id} on an Anthropic backend
