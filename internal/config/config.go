@@ -22,6 +22,7 @@ type Config struct {
 	Listen                 string           `yaml:"listen"`
 	Models                 []ModelConfig    `yaml:"models"`
 	Keys                   []KeyConfig      `yaml:"keys"`
+	Services               ServicesConfig   `yaml:"services"`                 // external service proxies (Qdrant, etc.)
 	Processors             ProcessorsConfig `yaml:"processors"`               // global processor defaults
 	TrustedProxies         []string         `yaml:"trusted_proxies"`          // CIDR or IPs allowed to set X-Real-IP
 	ServeConfigGenerator   bool             `yaml:"serve_config_generator"`   // enable the config generator page at GET /
@@ -74,6 +75,24 @@ type KeyConfig struct {
 	Key    string   `yaml:"key"`
 	Name   string   `yaml:"name"`   // friendly name for logging
 	Models []string `yaml:"models"` // allowed models, empty = all
+}
+
+// ServicesConfig contains configuration for external services proxied by the server.
+type ServicesConfig struct {
+	Qdrant *QdrantConfig `yaml:"qdrant"`
+}
+
+// QdrantConfig configures the Qdrant vector database proxy.
+type QdrantConfig struct {
+	Backend string         `yaml:"backend"` // Qdrant server URL e.g. http://192.168.5.143:6333
+	APIKey  string         `yaml:"api_key"` // API key to send to Qdrant backend
+	AppKeys []AppKeyConfig `yaml:"app_keys"`
+}
+
+// AppKeyConfig defines an application key for service access.
+type AppKeyConfig struct {
+	Name string `yaml:"name"` // friendly name for logging
+	Key  string `yaml:"key"`  // the actual API key
 }
 
 // ConfigStore provides thread-safe access to the current config.
@@ -206,6 +225,19 @@ func FindModel(cfg *Config, name string) *ModelConfig {
 	return nil
 }
 
+// FindAppKey returns the AppKeyConfig with the given key, or nil if not found.
+func FindAppKey(cfg *Config, key string) *AppKeyConfig {
+	if cfg.Services.Qdrant == nil {
+		return nil
+	}
+	for i := range cfg.Services.Qdrant.AppKeys {
+		if cfg.Services.Qdrant.AppKeys[i].Key == key {
+			return &cfg.Services.Qdrant.AppKeys[i]
+		}
+	}
+	return nil
+}
+
 func validateConfig(cfg *Config) error {
 	if len(cfg.Keys) == 0 {
 		slog.Warn("no API keys configured — all requests will be unauthenticated")
@@ -327,6 +359,37 @@ func validateConfig(cfg *Config) error {
 			if !names[m] {
 				return fmt.Errorf("key %q references unknown model %q", k.Name, m)
 			}
+		}
+	}
+
+	// Validate Qdrant service config.
+	if q := cfg.Services.Qdrant; q != nil {
+		if q.Backend == "" {
+			return fmt.Errorf("services.qdrant missing backend")
+		}
+		u, err := url.Parse(q.Backend)
+		if err != nil {
+			return fmt.Errorf("services.qdrant has invalid backend URL: %w", err)
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return fmt.Errorf("services.qdrant backend must use http or https scheme, got %q", u.Scheme)
+		}
+		if u.Host == "" {
+			return fmt.Errorf("services.qdrant backend missing host")
+		}
+
+		appKeys := make(map[string]bool)
+		for _, ak := range q.AppKeys {
+			if ak.Key == "" {
+				return fmt.Errorf("services.qdrant app_key entry missing key value")
+			}
+			if ak.Name == "" {
+				return fmt.Errorf("services.qdrant app_key entry missing name")
+			}
+			if appKeys[ak.Key] {
+				return fmt.Errorf("services.qdrant duplicate app_key for %q", ak.Name)
+			}
+			appKeys[ak.Key] = true
 		}
 	}
 

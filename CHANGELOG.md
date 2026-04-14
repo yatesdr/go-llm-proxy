@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.3.5
+
+### Added
+- **Qdrant vector database proxy** — new `/qdrant/*` endpoint proxies requests to a Qdrant backend with separate authentication via app keys. Configured under `services.qdrant` in config. App keys are independent from model API keys, allowing fine-grained access control for vector database operations.
+- **App isolation for Qdrant** — automatic multi-tenant isolation without client changes. The proxy injects an `app` field into point payloads on writes and adds a filter clause on searches/queries to restrict results to the calling app's data. Apps cannot access each other's vectors.
+
 ## v0.3.4
 
 ### Added

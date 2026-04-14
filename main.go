@@ -178,6 +178,13 @@ func main() {
 		slog.Info("MCP endpoint enabled at /mcp/sse (web_search tool available)")
 	}
 
+	// Qdrant vector database proxy with app isolation.
+	if cfg.Services.Qdrant != nil {
+		qdrant := handler.NewQdrantHandler(cs, ul)
+		mux.Handle("/qdrant/", ratelimit.RateLimitMiddleware(rl, auth.AppKeyAuthMiddleware(cs, qdrant)))
+		slog.Info("qdrant proxy enabled at /qdrant/", "backend", cfg.Services.Qdrant.Backend, "app_keys", len(cfg.Services.Qdrant.AppKeys))
+	}
+
 	// Start health checker background goroutine.
 	healthStore.Start(context.Background())
 

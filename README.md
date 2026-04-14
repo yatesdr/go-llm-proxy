@@ -17,6 +17,7 @@ You need data security and self-host models or have upstream secure vendors (Azu
 - **PDF processing** — Text extraction for native PDFs. OCR via dedicated model for scanned documents. Results cached across turns.
 - **Web search** — When coding assistants request web search, the proxy executes it via Tavily or Brave Search (auto-detected from key prefix) and injects the results. No client-side MCP setup needed.
 - **MCP endpoint** — `/mcp/sse` exposes web search for OpenCode, Qwen Code, and any MCP-compatible agent.
+- **Qdrant proxy** — `/qdrant/*` proxies to a Qdrant vector database with separate app key auth and automatic multi-tenant isolation.
 - **Usage monitoring** — Per-request logging to SQLite. Web dashboard, CLI reports, per-user/model breakdowns.
 - **Config generator** — Built-in web UI creates ready-to-use configs for Claude Code, Codex, OpenCode, and Qwen Code. Also available [standalone](https://go-llm-proxy.com/configure.html).
 - **Context window detection** — Auto-queries backends at startup. Manual override per model.
@@ -119,4 +120,5 @@ Without `processors`, the proxy just translates and routes. With it, images, PDF
 | Docker deployment | [docs/docker.md](docs/docker.md) |
 | Production deployment | [docs/deployment.md](docs/deployment.md) |
 | Usage monitoring | [docs/usage.md](docs/usage.md) |
+| Qdrant proxy | [docs/qdrant.md](docs/qdrant.md) |
 | Security | [docs/security.md](docs/security.md) |

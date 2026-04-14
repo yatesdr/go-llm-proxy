@@ -72,6 +72,24 @@ keys:
 # usage_dashboard: true
 # usage_dashboard_password: change-me
 
+# ── Services ─────────────────────────────────────────────────────────────────
+# External service proxies. Currently supports Qdrant vector database.
+
+# Qdrant proxy with app key isolation:
+# services:
+#   qdrant:
+#     backend: http://192.168.5.143:6333
+#     api_key: your-qdrant-api-key         # backend auth (optional)
+#     app_keys:                            # separate auth from model API keys
+#       - name: webapp
+#         key: qd-webapp-abc123
+#       - name: crawler
+#         key: qd-crawler-def456
+#
+# App isolation: each app's vectors are tagged with its name on write,
+# and filtered to only return its own data on search. Transparent to clients.
+# Access via /qdrant/* with Authorization: Bearer <app_key>
+
 # ── Network ────────────────────────────────────────────────────────────────────
 # IPs allowed to set X-Real-IP / X-Forwarded-For (for rate limiting behind a proxy).
 # trusted_proxies:
