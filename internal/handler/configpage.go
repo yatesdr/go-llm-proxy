@@ -19,8 +19,8 @@ type modelInfo struct {
 	ID             string `json:"id"`
 	Local          bool   `json:"local"`
 	Protocol       string `json:"protocol"`        // "openai" or "anthropic"
-	ContextWindow  int    `json:"context_window"`   // max tokens (0 = unknown)
-	SupportsVision bool   `json:"supports_vision"`  // model handles images natively
+	ContextWindow  int    `json:"context_window"`  // max tokens (0 = unknown)
+	SupportsVision bool   `json:"supports_vision"` // model handles images natively
 }
 
 var privateRanges = []struct{ start, end net.IP }{

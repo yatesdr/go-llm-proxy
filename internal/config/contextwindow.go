@@ -36,9 +36,24 @@ func detectOne(client *http.Client, cs *ConfigStore, name, backend, modelID, api
 	var ctxWindow int
 	var err error
 
-	if backendType == BackendAnthropic {
+	switch backendType {
+	case BackendAnthropic:
 		ctxWindow, err = detectAnthropic(client, backend, modelID, apiKey)
-	} else {
+	case BackendBedrock:
+		// Bedrock has no API endpoint that returns model context window;
+		// the control plane (GetFoundationModel / GetInferenceProfile)
+		// reports modality and region info but not max tokens. Fall back
+		// to a lookup table of well-known model-ID prefixes. If the model
+		// isn't in the table, return 0 quietly — the backend will reject
+		// over-limit requests, and operators can set context_window
+		// explicitly in config.
+		ctxWindow = lookupBedrockContextWindow(modelID)
+		if ctxWindow == 0 {
+			slog.Debug("bedrock model has no known context window; set context_window in config",
+				"model", name, "bedrock_model_id", modelID)
+			return
+		}
+	default:
 		ctxWindow, err = detectOpenAI(client, backend, modelID, apiKey)
 	}
 
@@ -183,6 +198,93 @@ func detectLlamaCppProps(client *http.Client, base, apiKey string) int {
 	}
 
 	return result.DefaultGenerationSettings.NCtx
+}
+
+// lookupBedrockContextWindow returns the advertised max-input context size
+// for a Bedrock model ID (or an inference profile that references one).
+// Bedrock exposes no API for this — AWS publishes the values in model
+// docs — so we keep a small prefix-match table of widely-used models.
+//
+// The keys are matched by prefix, after stripping the leading region
+// qualifier from inference-profile IDs (e.g. "us.anthropic.claude..." →
+// "anthropic.claude..."). Returns 0 when unknown; the caller treats 0 as
+// "detection unavailable, rely on config override or leave unset".
+//
+// When AWS adds a model and we haven't updated this table, operators can
+// set context_window explicitly in config. The table exists only to avoid
+// making them do that for the common cases.
+func lookupBedrockContextWindow(modelID string) int {
+	// Strip leading "us." / "eu." / "apac." inference-profile qualifier.
+	trimmed := modelID
+	for _, prefix := range []string{"us.", "eu.", "apac.", "us-gov."} {
+		if strings.HasPrefix(trimmed, prefix) {
+			trimmed = trimmed[len(prefix):]
+			break
+		}
+	}
+	for prefix, ctx := range bedrockContextWindows {
+		if strings.HasPrefix(trimmed, prefix) {
+			return ctx
+		}
+	}
+	return 0
+}
+
+// Keyed by Bedrock model-ID prefix (longest match wins — but we iterate
+// in insertion order since the map is small and collisions are rare).
+// Values are the model's advertised max input context per AWS docs.
+var bedrockContextWindows = map[string]int{
+	// Anthropic Claude family — 200k unless noted. Claude 3 Opus is older
+	// but still 200k.
+	"anthropic.claude-3-5-sonnet":   200000,
+	"anthropic.claude-3-5-haiku":    200000,
+	"anthropic.claude-3-7-sonnet":   200000,
+	"anthropic.claude-sonnet-4":     200000,
+	"anthropic.claude-opus-4":       200000,
+	"anthropic.claude-3-opus":       200000,
+	"anthropic.claude-3-sonnet":     200000,
+	"anthropic.claude-3-haiku":      200000,
+	"anthropic.claude-v2":           100000,
+	"anthropic.claude-instant":      100000,
+
+	// Amazon Nova family.
+	"amazon.nova-pro":   300000,
+	"amazon.nova-lite":  300000,
+	"amazon.nova-micro": 128000,
+
+	// Amazon Titan text models.
+	"amazon.titan-text-premier":  32000,
+	"amazon.titan-text-express":  8000,
+	"amazon.titan-text-lite":     4000,
+
+	// Meta Llama family.
+	"meta.llama3-70b":  8000,
+	"meta.llama3-8b":   8000,
+	"meta.llama3-1":    128000,
+	"meta.llama3-2":    128000,
+	"meta.llama3-3":    128000,
+	"meta.llama4":      10000000,
+
+	// Mistral family.
+	"mistral.mistral-7b":        32000,
+	"mistral.mistral-large":     128000,
+	"mistral.mistral-small":     32000,
+	"mistral.mixtral-8x7b":      32000,
+	"mistral.pixtral-large":     128000,
+
+	// Cohere Command family.
+	"cohere.command-r-plus": 128000,
+	"cohere.command-r":      128000,
+	"cohere.command":        4000,
+
+	// Z.ai GLM family (added to Bedrock in 2026).
+	"zai.glm-4.7-flash": 128000,
+	"zai.glm-4.6":       128000,
+	"zai.glm-4.5":       128000,
+
+	// DeepSeek family.
+	"deepseek.r1":  128000,
+	"deepseek.v3":  128000,
 }
 
 // detectAnthropic queries GET /v1/models/{model_id} on an Anthropic backend

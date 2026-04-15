@@ -585,8 +585,8 @@ func TestConvertOrInjectSearchTool_StrippedServerTool(t *testing.T) {
 	model := &config.ModelConfig{Name: "test"}
 
 	chatReq := map[string]any{
-		"messages":              []any{map[string]any{"role": "user", "content": "hello"}},
-		"tools":                 []map[string]any{{"type": "function", "function": map[string]any{"name": "bash"}}},
+		"messages":               []any{map[string]any{"role": "user", "content": "hello"}},
+		"tools":                  []map[string]any{{"type": "function", "function": map[string]any{"name": "bash"}}},
 		InternalKeyStrippedTools: []string{"web_search_20250305"},
 	}
 
@@ -621,7 +621,7 @@ func TestConvertOrInjectSearchTool_NoSearchKey(t *testing.T) {
 	model := &config.ModelConfig{Name: "test"}
 
 	chatReq := map[string]any{
-		"messages":              []any{},
+		"messages":               []any{},
 		InternalKeyStrippedTools: []string{"web_search_20250305"},
 	}
 
@@ -927,7 +927,7 @@ func TestPipeline_ProcessRequest_CleansUpInternalFields(t *testing.T) {
 	model := &config.ModelConfig{Name: "test", Backend: "http://localhost/v1"}
 
 	chatReq := map[string]any{
-		"messages":              []any{map[string]any{"role": "user", "content": "hi"}},
+		"messages":               []any{map[string]any{"role": "user", "content": "hi"}},
 		InternalKeyStrippedTools: []string{"web_search_20250305"},
 	}
 
@@ -948,8 +948,8 @@ func TestPipeline_ProcessRequest_InjectsSearchTool(t *testing.T) {
 	model := &config.ModelConfig{Name: "test", Backend: "http://localhost/v1"}
 
 	chatReq := map[string]any{
-		"messages": []any{map[string]any{"role": "user", "content": "search for news"}},
-		"tools":    []map[string]any{{"type": "function", "function": map[string]any{"name": "bash"}}},
+		"messages":               []any{map[string]any{"role": "user", "content": "search for news"}},
+		"tools":                  []map[string]any{{"type": "function", "function": map[string]any{"name": "bash"}}},
 		InternalKeyStrippedTools: []string{"web_search_20250305"},
 	}
 

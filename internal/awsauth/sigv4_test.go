@@ -11,7 +11,8 @@ import (
 // TestDeriveSigningKey verifies the HMAC chain against the published AWS
 // reference example from "Examples of how to derive a signing key for
 // Signature Version 4" — the canonical external test for this primitive.
-//   https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv-create-signing-key.html
+//
+//	https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv-create-signing-key.html
 func TestDeriveSigningKey(t *testing.T) {
 	secret := "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
 	date := "20120215"
@@ -90,10 +91,10 @@ func TestCanonicalQueryString(t *testing.T) {
 	cases := map[string]string{
 		"":                "",
 		"b=2&a=1":         "a=1&b=2",
-		"a=2&a=1":         "a=1&a=2",          // sorted by value when keys tie
-		"q=hello world":   "q=hello%20world",  // space encoded
-		"k=v+w":           "k=v%2Bw",          // '+' is literal, not space
-		"key with space=":  "key%20with%20space=",
+		"a=2&a=1":         "a=1&a=2",         // sorted by value when keys tie
+		"q=hello world":   "q=hello%20world", // space encoded
+		"k=v+w":           "k=v%2Bw",         // '+' is literal, not space
+		"key with space=": "key%20with%20space=",
 	}
 	for in, want := range cases {
 		if got := canonicalQueryString(in); got != want {

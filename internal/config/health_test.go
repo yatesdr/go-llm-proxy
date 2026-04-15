@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 )
@@ -193,11 +194,17 @@ func TestHealthStore_StartStop(t *testing.T) {
 }
 
 func TestHealthStore_AuthHeaders(t *testing.T) {
-	var receivedAPIKey string
-	var receivedHeader string
+	// hs.checkAll probes both models concurrently, so the httptest handler
+	// runs on two goroutines. Guard the captured headers with a mutex so
+	// the race detector is happy — this test's purpose is only to verify
+	// the store handles both auth types, so we don't assert on the values.
+	var mu sync.Mutex
+	var receivedAPIKey, receivedHeader string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
 		receivedAPIKey = r.Header.Get("Authorization")
 		receivedHeader = r.Header.Get("X-Api-Key")
+		mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer ts.Close()
@@ -216,12 +223,13 @@ func TestHealthStore_AuthHeaders(t *testing.T) {
 	hs.checkAll(ctx, client)
 	time.Sleep(100 * time.Millisecond)
 
-	// Just verify the store works with multiple models and auth types.
 	if len(hs.GetStatus()) != 2 {
 		t.Errorf("expected 2 models")
 	}
+	mu.Lock()
 	_ = receivedAPIKey
 	_ = receivedHeader
+	mu.Unlock()
 }
 
 func TestIsExternalBackend(t *testing.T) {

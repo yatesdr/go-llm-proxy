@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -14,7 +13,6 @@ import (
 	"go-llm-proxy/internal/awsauth"
 	"go-llm-proxy/internal/config"
 	"go-llm-proxy/internal/httputil"
-	"go-llm-proxy/internal/usage"
 )
 
 // handleBedrockChat dispatches an OAI Chat Completions request to AWS
@@ -33,7 +31,7 @@ func (p *ProxyHandler) handleBedrockChat(
 		return
 	}
 
-	applyConverseSamplingDefaultsForChat(converseReq, model)
+	applyConverseSamplingDefaults(converseReq, model)
 
 	includeUsage := false
 	if len(parsedReq.StreamOptions) > 0 {
@@ -50,33 +48,11 @@ func (p *ProxyHandler) handleBedrockChat(
 		return
 	}
 
-	upstreamURL, err := buildBedrockURL(model, parsedReq.Stream)
+	upReq, err := prepareBedrockRequest(ctx, model, converseBody, parsedReq.Stream, time.Now())
 	if err != nil {
-		slog.Error("bedrock url build failed", "model", modelName, "error", err)
+		slog.Error("bedrock request build failed", "model", modelName, "error", err)
 		httputil.WriteError(w, http.StatusInternalServerError, "invalid backend configuration")
 		return
-	}
-
-	upReq, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(converseBody))
-	if err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, "failed to create upstream request")
-		return
-	}
-	upReq.Header.Set("Content-Type", "application/json")
-	if parsedReq.Stream {
-		upReq.Header.Set("Accept", "application/vnd.amazon.eventstream")
-	} else {
-		upReq.Header.Set("Accept", "application/json")
-	}
-
-	if model.APIKey != "" {
-		upReq.Header.Set("Authorization", "Bearer "+model.APIKey)
-	} else {
-		awsauth.SignRequest(upReq, converseBody, awsauth.Credentials{
-			AccessKeyID:     model.AWSAccessKey,
-			SecretAccessKey: model.AWSSecretKey,
-			SessionToken:    model.AWSSessionToken,
-		}, model.Region, "bedrock", time.Now())
 	}
 
 	slog.Info("proxying chat completions request (bedrock)",
@@ -97,22 +73,20 @@ func (p *ProxyHandler) handleBedrockChat(
 	if resp.StatusCode >= 400 {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, api.MaxResponseBodySize))
 		slog.Error("bedrock returned error",
-			"model", modelName, "status", resp.StatusCode, "body", string(errBody))
+			"model", modelName, "status", resp.StatusCode,
+			"body", awsauth.ScrubAWSErrorBody(errBody))
 		errMsg := fmt.Sprintf("bedrock returned HTTP %d", resp.StatusCode)
 		if parsedReq.Stream {
 			emitChatSSEError(w, errMsg)
 		} else {
 			httputil.WriteError(w, resp.StatusCode, errMsg)
 		}
-		if p.usage != nil {
-			rec := usage.UsageRecord{
-				Timestamp: startTime, KeyHash: keyHash, KeyName: keyName,
-				Model: modelName, Endpoint: "/v1/chat/completions", StatusCode: resp.StatusCode,
-				RequestBytes: int64(len(body)), ResponseBytes: int64(len(errBody)),
-				DurationMS: time.Since(startTime).Milliseconds(),
-			}
-			go p.usage.Log(rec)
-		}
+		logUsage(p.usage, usageLogInput{
+			startTime: startTime, statusCode: resp.StatusCode,
+			keyName: keyName, keyHash: keyHash,
+			model: modelName, endpoint: "/v1/chat/completions",
+			requestBytes: int64(len(body)), responseBytes: int64(len(errBody)),
+		})
 		return
 	}
 
@@ -123,8 +97,12 @@ func (p *ProxyHandler) handleBedrockChat(
 		w.Header().Set("Connection", "keep-alive")
 		w.WriteHeader(http.StatusOK)
 		respBytes, usageData := streamBedrockToChatSSE(w, resp.Body, modelName, includeUsage)
-		logBedrockUsage(p.usage, modelName, "/v1/chat/completions", resp.StatusCode,
-			int64(len(body)), respBytes, usageData, keyName, keyHash, startTime)
+		logUsageConverse(p.usage, usageLogInput{
+			startTime: startTime, statusCode: resp.StatusCode,
+			keyName: keyName, keyHash: keyHash,
+			model: modelName, endpoint: "/v1/chat/completions",
+			requestBytes: int64(len(body)), responseBytes: respBytes,
+		}, usageData)
 		return
 	}
 
@@ -145,8 +123,12 @@ func (p *ProxyHandler) handleBedrockChat(
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(chatResp)
 
-	logBedrockUsage(p.usage, modelName, "/v1/chat/completions", resp.StatusCode,
-		int64(len(body)), int64(len(respBody)), usageData, keyName, keyHash, startTime)
+	logUsageConverse(p.usage, usageLogInput{
+		startTime: startTime, statusCode: resp.StatusCode,
+		keyName: keyName, keyHash: keyHash,
+		model: modelName, endpoint: "/v1/chat/completions",
+		requestBytes: int64(len(body)), responseBytes: int64(len(respBody)),
+	}, usageData)
 }
 
 // emitChatSSEError writes an OAI-style SSE error chunk followed by [DONE].
@@ -168,28 +150,4 @@ func emitChatSSEError(w http.ResponseWriter, msg string) {
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
-}
-
-func logBedrockUsage(ul *usage.UsageLogger, modelName, endpoint string, statusCode int,
-	reqBytes, respBytes int64, u *converseUsage, keyName, keyHash string, startTime time.Time) {
-	if ul == nil {
-		return
-	}
-	rec := usage.UsageRecord{
-		Timestamp:     startTime,
-		KeyHash:       keyHash,
-		KeyName:       keyName,
-		Model:         modelName,
-		Endpoint:      endpoint,
-		StatusCode:    statusCode,
-		RequestBytes:  reqBytes,
-		ResponseBytes: respBytes,
-		DurationMS:    time.Since(startTime).Milliseconds(),
-	}
-	if u != nil {
-		rec.InputTokens = u.Input
-		rec.OutputTokens = u.Output
-		rec.TotalTokens = u.Input + u.Output
-	}
-	go ul.Log(rec)
 }

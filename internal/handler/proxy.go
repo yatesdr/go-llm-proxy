@@ -252,15 +252,12 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"body", string(errBody))
 		httputil.WriteError(w, resp.StatusCode, fmt.Sprintf("backend returned HTTP %d", resp.StatusCode))
 
-		if p.usage != nil {
-			rec := usage.UsageRecord{
-				Timestamp: startTime, KeyHash: keyHash, KeyName: keyName,
-				Model: modelName, Endpoint: cleanPath, StatusCode: resp.StatusCode,
-				RequestBytes: int64(len(body)), ResponseBytes: int64(len(errBody)),
-				DurationMS: time.Since(startTime).Milliseconds(),
-			}
-			go p.usage.Log(rec)
-		}
+		logUsage(p.usage, usageLogInput{
+			startTime: startTime, statusCode: resp.StatusCode,
+			keyName: keyName, keyHash: keyHash,
+			model: modelName, endpoint: cleanPath,
+			requestBytes: int64(len(body)), responseBytes: int64(len(errBody)),
+		})
 		return
 	}
 
@@ -288,6 +285,24 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.streamRawResponse(w, resp, rc, isStreaming)
 }
 
+// maxUsageCaptureBytes bounds how much of the upstream response body we
+// keep in memory for token-usage extraction. Non-streaming responses carry
+// usage near the top of the JSON; streaming responses carry the include_usage
+// chunk near the end. Capturing the full body (up to MaxResponseBodySize =
+// 100 MB) into a buffer per request doesn't scale under concurrency — a
+// handful of parallel large streams can OOM the process.
+//
+// For non-streaming, 1 MB is well beyond any realistic LLM response (even
+// 100K tokens of JSON is ~400 KB).
+//
+// For streaming, we capture both the prefix (first chunk often has model
+// metadata) and the tail (final chunk has usage), which is handled below
+// via a head+tail ring strategy.
+const (
+	maxUsageCaptureBytes   = 1 * 1024 * 1024
+	streamTailCaptureBytes = 64 * 1024
+)
+
 // streamRawResponse streams the upstream response to the client without parsing.
 func (p *ProxyHandler) streamRawResponse(w http.ResponseWriter, resp *http.Response,
 	rc proxyRequestContext, isStreaming bool) {
@@ -295,19 +310,18 @@ func (p *ProxyHandler) streamRawResponse(w http.ResponseWriter, resp *http.Respo
 	flusher, canFlush := w.(http.Flusher)
 	buf := make([]byte, 4096)
 	var totalBytes int64
-	var responseBuf bytes.Buffer
-	captureResponse := p.usage != nil
+	capture := newCaptureBuffer(isStreaming)
 	for {
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
 			totalBytes += int64(n)
 			if totalBytes > api.MaxResponseBodySize {
 				slog.Error("upstream response exceeded size limit", "model", rc.modelName, "bytes", totalBytes)
-				captureResponse = false
+				capture.discard()
 				break
 			}
-			if captureResponse {
-				responseBuf.Write(buf[:n])
+			if p.usage != nil {
+				capture.write(buf[:n])
 			}
 			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
 				break
@@ -323,8 +337,8 @@ func (p *ProxyHandler) streamRawResponse(w http.ResponseWriter, resp *http.Respo
 
 	if p.usage != nil {
 		var tokens usage.TokenUsage
-		if captureResponse {
-			tokens = usage.ExtractTokenUsage(responseBuf.Bytes(), rc.model.Type, isStreaming)
+		if body := capture.bytes(); body != nil {
+			tokens = usage.ExtractTokenUsage(body, rc.model.Type, isStreaming)
 		}
 		rec := usage.UsageRecord{
 			Timestamp:     rc.startTime,
@@ -544,19 +558,16 @@ func (p *ProxyHandler) handleStreamingWithSearch(ctx context.Context, w http.Res
 				ctx, chatReq, rc.model, toolCalls, contentAccum.String())
 		}()
 
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-	searchWait:
-		for {
-			select {
-			case <-searchDone:
-				break searchWait
-			case <-ticker.C:
+		completed := waitForSearchOrDisconnect(ctx, searchDone,
+			func() {
 				fmt.Fprintf(w, ": searching\n\n")
 				flush()
-			case <-ctx.Done():
-				break searchWait
-			}
+			},
+			2*time.Second, 5*time.Second, "proxy streaming")
+		if !completed {
+			// Client disconnected; goroutine has been awaited so no race
+			// and no leak — just stop emitting to a dead connection.
+			return
 		}
 
 		if searchErr != nil {
@@ -582,11 +593,22 @@ func replayBufferedLines(w http.ResponseWriter, lines []string) {
 	fmt.Fprintf(w, "\ndata: [DONE]\n\n")
 }
 
-// logUsageFromChatResponse logs usage from a Chat Completions response (streaming or non-streaming).
+// logUsageFromChatResponse logs usage from a Chat Completions response
+// (streaming or non-streaming). Thin wrapper around logUsageChat that
+// extracts fields from the per-request proxyRequestContext — saves 6 lines
+// of boilerplate at each of the 4 call sites in this file.
 func logUsageFromChatResponse(ul *usage.UsageLogger, usageData *api.ChunkUsage,
 	rc proxyRequestContext, responseBytes int64) {
-	logUsageRecord(ul, usageData, http.StatusOK, rc.modelName, rc.endpoint,
-		int64(len(rc.requestBody)), responseBytes, rc.keyName, rc.keyHash, rc.startTime)
+	logUsageChat(ul, usageLogInput{
+		startTime:     rc.startTime,
+		statusCode:    http.StatusOK,
+		keyName:       rc.keyName,
+		keyHash:       rc.keyHash,
+		model:         rc.modelName,
+		endpoint:      rc.endpoint,
+		requestBytes:  int64(len(rc.requestBody)),
+		responseBytes: responseBytes,
+	}, usageData)
 }
 
 // reStreamFromBackend sends a new streaming request and forwards the SSE response raw.

@@ -199,7 +199,7 @@ func TestLongestTagSuffix(t *testing.T) {
 		{"hello<think", "<think>", 6},
 		{"hello", "<think>", 0},
 		{"</thi", "</think>", 5},
-		{"text<", "</think>", 1},  // "<" matches "<" of "</think>", but actually...
+		{"text<", "</think>", 1}, // "<" matches "<" of "</think>", but actually...
 		// "<" is prefix of "</think>"? No: "</think>" starts with "<". tag[:1] = "<". "text<" ends with "<". Yes!
 	}
 	for _, tt := range tests {

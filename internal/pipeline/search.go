@@ -79,9 +79,9 @@ func toolsContainName(tools any, name string) bool {
 }
 
 // convertOrInjectSearchTool handles web search for a translated Chat Completions request:
-// 1. If server tools (web_search_20250305, web_search_preview) were stripped during
-//    translation, re-inject as a regular function tool.
-// 2. Ownership: does NOT delete _stripped_server_tools — ProcessRequest owns that cleanup.
+//  1. If server tools (web_search_20250305, web_search_preview) were stripped during
+//     translation, re-inject as a regular function tool.
+//  2. Ownership: does NOT delete _stripped_server_tools — ProcessRequest owns that cleanup.
 func (p *Pipeline) convertOrInjectSearchTool(chatReq map[string]any, targetModel *config.ModelConfig) map[string]any {
 	searchKey := p.ResolveWebSearchKey(targetModel)
 	if searchKey == "" {

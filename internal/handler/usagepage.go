@@ -3,10 +3,10 @@ package handler
 import (
 	"crypto/hmac"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"html"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 
@@ -19,13 +19,19 @@ import (
 const dashboardCookieName = "usage_auth"
 
 type UsageDashboardHandler struct {
-	config *config.ConfigStore
-	usage  *usage.UsageLogger
-	rl     *ratelimit.RateLimiter
+	config   *config.ConfigStore
+	usage    *usage.UsageLogger
+	rl       *ratelimit.RateLimiter
+	sessions *sessionStore
 }
 
 func NewUsageDashboardHandler(cs *config.ConfigStore, ul *usage.UsageLogger, rl *ratelimit.RateLimiter) *UsageDashboardHandler {
-	return &UsageDashboardHandler{config: cs, usage: ul, rl: rl}
+	return &UsageDashboardHandler{
+		config:   cs,
+		usage:    ul,
+		rl:       rl,
+		sessions: newSessionStore(),
+	}
 }
 
 func (h *UsageDashboardHandler) LoginPage(w http.ResponseWriter, r *http.Request) {
@@ -53,7 +59,30 @@ func (h *UsageDashboardHandler) HandleLogin(w http.ResponseWriter, r *http.Reque
 		h.renderLogin(w, "Incorrect password")
 		return
 	}
-	h.setCookie(w, r, cfg.UsageDashboardPassword)
+	token := h.sessions.create()
+	if token == "" {
+		httputil.WriteError(w, http.StatusInternalServerError, "session creation failed")
+		return
+	}
+	h.setCookie(w, r, token)
+	http.Redirect(w, r, "/usage", http.StatusSeeOther)
+}
+
+// HandleLogout revokes the caller's session and clears the cookie.
+func (h *UsageDashboardHandler) HandleLogout(w http.ResponseWriter, r *http.Request) {
+	if cookie, err := r.Cookie(dashboardCookieName); err == nil {
+		h.sessions.revoke(cookie.Value)
+	}
+	// Expire the cookie on the client too.
+	http.SetCookie(w, &http.Cookie{
+		Name:     dashboardCookieName,
+		Value:    "",
+		Path:     "/usage",
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		Secure:   h.isTLS(r),
+		MaxAge:   -1,
+	})
 	http.Redirect(w, r, "/usage", http.StatusSeeOther)
 }
 
@@ -85,30 +114,37 @@ func (h *UsageDashboardHandler) checkCookie(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	cfg := h.config.Get()
-	expected := computeHMAC(cfg.UsageDashboardPassword)
-	return hmac.Equal([]byte(cookie.Value), []byte(expected))
+	return h.sessions.validate(cookie.Value)
 }
 
-func (h *UsageDashboardHandler) setCookie(w http.ResponseWriter, r *http.Request, password string) {
-	value := computeHMAC(password)
-	secure := r.Header.Get("X-Forwarded-Proto") == "https" || r.TLS != nil
+func (h *UsageDashboardHandler) setCookie(w http.ResponseWriter, r *http.Request, token string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     dashboardCookieName,
-		Value:    value,
+		Value:    token,
 		Path:     "/usage",
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
-		Secure:   secure,
-		MaxAge:   86400 * 30,
+		Secure:   h.isTLS(r),
+		MaxAge:   int(dashboardSessionTTL.Seconds()),
 	})
 }
 
-func computeHMAC(password string) string {
-	h := sha256.Sum256([]byte(password))
-	mac := hmac.New(sha256.New, h[:])
-	mac.Write([]byte("usage-dashboard-v1"))
-	return hex.EncodeToString(mac.Sum(nil))
+// isTLS reports whether the request arrived over TLS. We trust r.TLS
+// directly, and X-Forwarded-Proto only when the request came from a
+// configured trusted proxy — otherwise any client could spoof the header
+// to trick us into setting Secure (or, worse, not setting it).
+func (h *UsageDashboardHandler) isTLS(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	if h.rl.IsTrustedProxy(host) && r.Header.Get("X-Forwarded-Proto") == "https" {
+		return true
+	}
+	return false
 }
 
 func constantTimeEqual(a, b string) bool {
@@ -167,7 +203,7 @@ func (h *UsageDashboardHandler) renderDashboard(w http.ResponseWriter) {
 <style>` + dashboardCSS() + `</style>
 </head>
 <body>
-<div class="header"><div class="header-inner"><h1>Usage Dashboard</h1></div></div>
+<div class="header"><div class="header-inner"><h1>Usage Dashboard</h1><form method="POST" action="/usage/logout" style="margin-left:auto"><button class="btn-logout" type="submit">Sign out</button></form></div></div>
 <div class="container">
 <div class="summary-cards" id="summaryCards"></div>
 <div class="card">
@@ -324,7 +360,9 @@ func dashboardCSS() string {
 }
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;min-height:100vh}
 .header{background:var(--slate-bg);color:#f1f5f9;padding:28px 0;text-align:center}
-.header-inner{display:flex;align-items:center;justify-content:center;gap:16px}
+.header-inner{display:flex;align-items:center;justify-content:center;gap:16px;max-width:960px;margin:0 auto;padding:0 20px;position:relative}
+.btn-logout{background:transparent;border:1px solid rgba(226,232,240,0.35);color:#e2e8f0;padding:6px 14px;font-size:.82rem;font-weight:500;border-radius:6px;cursor:pointer;font-family:inherit}
+.btn-logout:hover{background:rgba(226,232,240,0.1)}
 .header h1{font-size:1.6rem;font-weight:700;letter-spacing:-.02em}
 .container{max-width:960px;margin:0 auto;padding:28px 20px 60px}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px;margin-bottom:22px;box-shadow:var(--shadow)}

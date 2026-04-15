@@ -168,7 +168,7 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 			} else {
 				slog.Error("pipeline processing failed", "model", req.Model, "error", err)
-			httputil.WriteAnthropicError(w, http.StatusInternalServerError, "api_error", "internal processing error")
+				httputil.WriteAnthropicError(w, http.StatusInternalServerError, "api_error", "internal processing error")
 			}
 			return
 		}
@@ -317,15 +317,12 @@ func (h *MessagesHandler) handleNativePassthrough(ctx context.Context, w http.Re
 			"model", req.Model, "status", resp.StatusCode, "body", string(errBody))
 		httputil.WriteAnthropicError(w, resp.StatusCode, "api_error",
 			fmt.Sprintf("backend returned HTTP %d", resp.StatusCode))
-		if h.usage != nil {
-			rec := usage.UsageRecord{
-				Timestamp: startTime, KeyHash: keyHash, KeyName: keyName,
-				Model: req.Model, Endpoint: "/v1/messages", StatusCode: resp.StatusCode,
-				RequestBytes: int64(len(body)), ResponseBytes: int64(len(errBody)),
-				DurationMS: time.Since(startTime).Milliseconds(),
-			}
-			go h.usage.Log(rec)
-		}
+		logUsage(h.usage, usageLogInput{
+			startTime: startTime, statusCode: resp.StatusCode,
+			keyName: keyName, keyHash: keyHash,
+			model: req.Model, endpoint: "/v1/messages",
+			requestBytes: int64(len(body)), responseBytes: int64(len(errBody)),
+		})
 		return
 	}
 
@@ -358,15 +355,12 @@ func (h *MessagesHandler) handleNativePassthrough(ctx context.Context, w http.Re
 		}
 	}
 
-	if h.usage != nil {
-		rec := usage.UsageRecord{
-			Timestamp: startTime, KeyHash: keyHash, KeyName: keyName,
-			Model: req.Model, Endpoint: "/v1/messages", StatusCode: resp.StatusCode,
-			RequestBytes: int64(len(body)), ResponseBytes: totalBytes,
-			DurationMS: time.Since(startTime).Milliseconds(),
-		}
-		go h.usage.Log(rec)
-	}
+	logUsage(h.usage, usageLogInput{
+		startTime: startTime, statusCode: resp.StatusCode,
+		keyName: keyName, keyHash: keyHash,
+		model: req.Model, endpoint: "/v1/messages",
+		requestBytes: int64(len(body)), responseBytes: totalBytes,
+	})
 }
 
 // --- Non-streaming handler ---
@@ -462,7 +456,7 @@ func (h *MessagesHandler) handleNonStreaming(w http.ResponseWriter, resp *http.R
 	if chatResp.Usage != nil {
 		usageObj = map[string]any{
 			"input_tokens":                chatResp.Usage.PromptTokens,
-			"output_tokens":              chatResp.Usage.CompletionTokens,
+			"output_tokens":               chatResp.Usage.CompletionTokens,
 			"cache_creation_input_tokens": 0,
 			"cache_read_input_tokens":     0,
 		}
@@ -483,17 +477,16 @@ func (h *MessagesHandler) handleNonStreaming(w http.ResponseWriter, resp *http.R
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 
-	h.logUsage(chatResp.Usage, resp.StatusCode, req.Model, requestBytes, int64(len(body)), keyName, keyHash, startTime)
+	logUsageChat(h.usage, usageLogInput{
+		startTime: startTime, statusCode: resp.StatusCode,
+		keyName: keyName, keyHash: keyHash,
+		model: req.Model, endpoint: "/v1/messages",
+		requestBytes: requestBytes, responseBytes: int64(len(body)),
+	}, chatResp.Usage)
 }
 
 // --- Shared helpers ---
 
 func (h *MessagesHandler) sendChatRequest(ctx context.Context, chatReq map[string]any, model *config.ModelConfig) (*api.ChatResponse, error) {
 	return sendChatCompletionsRequest(ctx, h.client, chatReq, model)
-}
-
-// --- Usage logging ---
-
-func (h *MessagesHandler) logUsage(usageData *api.ChunkUsage, statusCode int, model string, requestBytes, responseBytes int64, keyName, keyHash string, startTime time.Time) {
-	logUsageRecord(h.usage, usageData, statusCode, model, "/v1/messages", requestBytes, responseBytes, keyName, keyHash, startTime)
 }

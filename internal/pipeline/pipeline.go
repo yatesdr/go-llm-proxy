@@ -29,12 +29,12 @@ func NewPipeline(cs *config.ConfigStore, client *http.Client) *Pipeline {
 // processingSignatures are byte patterns that indicate a request body may contain
 // content that needs pipeline processing. Used for cheap pre-scan before full JSON parse.
 var processingSignatures = [][]byte{
-	[]byte(`"image_url"`),        // OpenAI image format
-	[]byte(`"type":"image"`),     // Anthropic image format (after translation)
-	[]byte(`"application/pdf"`),  // PDF media type
-	[]byte(`JVBERi0`),            // PDF magic bytes in base64
-	[]byte(`"type":"document"`),  // Anthropic document format
-	[]byte(`"pdf_data"`),         // Pipeline-internal PDF marker (after translation)
+	[]byte(`"image_url"`),       // OpenAI image format
+	[]byte(`"type":"image"`),    // Anthropic image format (after translation)
+	[]byte(`"application/pdf"`), // PDF media type
+	[]byte(`JVBERi0`),           // PDF magic bytes in base64
+	[]byte(`"type":"document"`), // Anthropic document format
+	[]byte(`"pdf_data"`),        // Pipeline-internal PDF marker (after translation)
 }
 
 // BodyNeedsProcessing does a fast string scan to detect if the raw request body

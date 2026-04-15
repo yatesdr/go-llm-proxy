@@ -1,6 +1,7 @@
 package ratelimit
 
 import (
+	"container/list"
 	"context"
 	"log/slog"
 	"net"
@@ -19,14 +20,24 @@ const (
 	maxTrackedIPs        = 100000 // hard cap to prevent memory exhaustion
 )
 
+// ipRecord tracks failed auth attempts from a single IP. `elem` points to
+// this record's position in the LRU list; the list is ordered oldest-first
+// by lastFailure time, allowing O(1) eviction of the least-recently-active
+// record when the tracker is at capacity. Without the list, eviction is a
+// linear scan of up to 100K entries under the write lock — which an
+// attacker with an IPv6 /64 can trivially force on every request,
+// amplifying both DoS and brute-force attacks.
 type ipRecord struct {
+	ip          string
 	failures    int
 	lastFailure time.Time
+	elem        *list.Element
 }
 
 type RateLimiter struct {
-	mu sync.Mutex
+	mu  sync.Mutex
 	ips map[string]*ipRecord
+	lru *list.List // front = oldest, back = most recent
 
 	throttleAfter int
 	decayInterval time.Duration
@@ -42,6 +53,7 @@ func NewRateLimiter(trustedProxies []string) *RateLimiter {
 	ctx, cancel := context.WithCancel(context.Background())
 	rl := &RateLimiter{
 		ips:           make(map[string]*ipRecord),
+		lru:           list.New(),
 		throttleAfter: defaultThrottleAfter,
 		decayInterval: defaultDecayInterval,
 		cancel:        cancel,
@@ -79,54 +91,64 @@ func (rl *RateLimiter) Close() {
 	rl.cancel()
 }
 
-// RecordFailure registers a failed auth attempt from an IP.
+// RecordFailure registers a failed auth attempt from an IP. If the tracker
+// is at capacity and this is a new IP, the least-recently-active record is
+// evicted in O(1).
 func (rl *RateLimiter) RecordFailure(ip string) {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
-	// Hard cap: if we're at capacity and this is a new IP, evict the oldest
-	// record before inserting. This prevents distributed attacks from exhausting
-	// the tracker and bypassing rate limiting for new source IPs.
+	now := time.Now()
 	rec, ok := rl.ips[ip]
 	if !ok {
 		if len(rl.ips) >= maxTrackedIPs {
-			slog.Warn("rate limiter at capacity, evicting oldest entry", "ip", ip)
-			rl.evictOldest()
+			rl.evictOldestLocked()
 		}
-		rec = &ipRecord{}
+		rec = &ipRecord{ip: ip}
+		rec.elem = rl.lru.PushBack(rec)
 		rl.ips[ip] = rec
+	} else {
+		// Move to the back of the LRU list — this record is now the most
+		// recently active, so it should be last to be evicted.
+		rl.lru.MoveToBack(rec.elem)
 	}
 
 	rec.failures++
-	rec.lastFailure = time.Now()
+	rec.lastFailure = now
 
 	if rec.failures >= rl.throttleAfter {
-		slog.Warn("IP throttled",
-			"ip", ip,
-			"failures", rec.failures,
-		)
+		slog.Warn("IP throttled", "ip", ip, "failures", rec.failures)
 	}
 }
 
-// evictOldest removes the IP record with the oldest lastFailure time.
-// Must be called with rl.mu held.
-func (rl *RateLimiter) evictOldest() {
-	var oldestIP string
-	var oldestTime time.Time
-	first := true
-	for ip, rec := range rl.ips {
-		if first || rec.lastFailure.Before(oldestTime) {
-			oldestIP = ip
-			oldestTime = rec.lastFailure
-			first = false
-		}
+// evictOldestLocked removes the record at the front of the LRU list (the
+// one with the oldest lastFailure). O(1). Must be called with rl.mu held.
+func (rl *RateLimiter) evictOldestLocked() {
+	front := rl.lru.Front()
+	if front == nil {
+		return
 	}
-	if oldestIP != "" {
-		delete(rl.ips, oldestIP)
-	}
+	rec := front.Value.(*ipRecord)
+	rl.lru.Remove(front)
+	delete(rl.ips, rec.ip)
+	slog.Warn("rate limiter at capacity, evicted oldest entry", "evicted_ip", rec.ip)
 }
 
-// Check returns the action to take for a given IP.
+// deleteLocked removes a record from both the map and the LRU list. Must
+// be called with rl.mu held.
+func (rl *RateLimiter) deleteLocked(rec *ipRecord) {
+	if rec.elem != nil {
+		rl.lru.Remove(rec.elem)
+	}
+	delete(rl.ips, rec.ip)
+}
+
+// Check returns whether the given IP should be allowed through.
+//
+// The return value is named after the semantic, not the impl: `true` means
+// allow, `false` means reject with 429. At the decay interval threshold,
+// expired records are garbage-collected inline so the tracker shrinks as
+// naturally as it grows.
 func (rl *RateLimiter) Check(ip string) (allowed bool) {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
@@ -143,7 +165,7 @@ func (rl *RateLimiter) Check(ip string) (allowed bool) {
 		if decay > 0 {
 			rec.failures = max(0, rec.failures-decay)
 			if rec.failures == 0 {
-				delete(rl.ips, ip)
+				rl.deleteLocked(rec)
 				return true
 			}
 		}
@@ -161,6 +183,7 @@ func (rl *RateLimiter) Check(ip string) (allowed bool) {
 }
 
 // cleanup periodically removes stale IP records until ctx is cancelled.
+// Runs on a slow timer; the inline decay in Check() is the primary GC.
 func (rl *RateLimiter) cleanup(ctx context.Context) {
 	ticker := time.NewTicker(defaultCleanupEvery)
 	defer ticker.Stop()
@@ -171,10 +194,18 @@ func (rl *RateLimiter) cleanup(ctx context.Context) {
 		case <-ticker.C:
 			rl.mu.Lock()
 			now := time.Now()
-			for ip, rec := range rl.ips {
+			// Walk the LRU list from oldest forward. Since list is ordered by
+			// lastFailure, the first record that is NOT stale means we can
+			// stop — every subsequent record is even more recent.
+			for e := rl.lru.Front(); e != nil; {
+				rec := e.Value.(*ipRecord)
+				next := e.Next()
 				if now.Sub(rec.lastFailure) > rl.decayInterval*time.Duration(rec.failures+1) {
-					delete(rl.ips, ip)
+					rl.deleteLocked(rec)
+				} else {
+					break
 				}
+				e = next
 			}
 			rl.mu.Unlock()
 		}
@@ -232,6 +263,12 @@ func ClientIP(rl *RateLimiter, r *http.Request) string {
 
 	return remoteHost
 }
+
+// IsTrustedProxy reports whether the given host (bare IP, no port) is in
+// the configured trusted-proxy list. Exported so callers outside this
+// package (e.g. the usage dashboard deciding whether to honor
+// X-Forwarded-Proto) can reuse the same trust model.
+func (rl *RateLimiter) IsTrustedProxy(host string) bool { return rl.isTrustedProxy(host) }
 
 func (rl *RateLimiter) isTrustedProxy(host string) bool {
 	rl.trustedMu.RLock()

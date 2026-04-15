@@ -419,7 +419,7 @@ func applyConverseSamplingDefaults(req map[string]any, model *config.ModelConfig
 type converseResponse struct {
 	Output struct {
 		Message struct {
-			Role    string                     `json:"role"`
+			Role    string                       `json:"role"`
 			Content []map[string]json.RawMessage `json:"content"`
 		} `json:"message"`
 	} `json:"output"`

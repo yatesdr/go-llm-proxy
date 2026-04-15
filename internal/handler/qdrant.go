@@ -34,13 +34,46 @@ func NewQdrantHandler(cs *config.ConfigStore, usage *usage.UsageLogger) *QdrantH
 	}
 }
 
-// Path patterns for app isolation
+// Path patterns for app isolation. Any path accepted by isAllowedQdrantPath
+// must match exactly one of these (or the bare-collection-name infoPattern
+// used for the GET schema case), otherwise isolation isn't applied and the
+// caller could reach a collection's contents as a different tenant.
 var (
 	putPointsPattern    = regexp.MustCompile(`^/collections/[^/]+/points$`)
-	searchPattern       = regexp.MustCompile(`^/collections/[^/]+/points/(search|scroll|query)$`)
-	getPointPattern     = regexp.MustCompile(`^/collections/[^/]+/points/[^/]+$`)
+	searchPattern       = regexp.MustCompile(`^/collections/[^/]+/points/(search|scroll|query|count)$`)
 	deletePointsPattern = regexp.MustCompile(`^/collections/[^/]+/points/delete$`)
+	getCollectionInfo   = regexp.MustCompile(`^/collections/[^/]+$`)
 )
+
+// isAllowedQdrantPath decides whether a (method, path) combination is
+// permitted for an app-keyed client.
+//
+// The previous implementation proxied **every** path through to Qdrant
+// after applying isolation only to a narrow allowlist of points-level
+// routes. That meant app keys could create/delete collections, read
+// snapshots, hit /cluster, etc. — capabilities that bypass the
+// per-tenant filter entirely. Tenant A could list or destroy tenant B's
+// collections.
+//
+// The fix is to flip the model to strict allowlist: only the operational,
+// isolation-covered routes are accepted; everything else returns 403.
+// Operators who need admin routes (schema migrations, snapshots, cluster
+// health) should go straight to Qdrant with the backend API key, not
+// through this proxy.
+func isAllowedQdrantPath(method, path string) bool {
+	switch method {
+	case http.MethodGet:
+		// Collection schema is safe to expose — it doesn't leak points.
+		return getCollectionInfo.MatchString(path)
+	case http.MethodPut:
+		// Upsert points; isolation injects the caller's app name.
+		return putPointsPattern.MatchString(path)
+	case http.MethodPost:
+		// Search / query / scroll / count / delete — all isolation-filtered.
+		return searchPattern.MatchString(path) || deletePointsPattern.MatchString(path)
+	}
+	return false
+}
 
 func (h *QdrantHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
@@ -64,6 +97,17 @@ func (h *QdrantHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.Contains(qdrantPath, "..") {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+
+	// Strict allowlist: block admin/discovery routes (list collections,
+	// snapshots, cluster, telemetry, /collections/{name} create+delete,
+	// etc.). Only operational, isolation-filtered paths are accepted.
+	if !isAllowedQdrantPath(r.Method, qdrantPath) {
+		slog.Warn("qdrant: blocked non-allowlisted path",
+			"app", appKey.Name, "method", r.Method, "path", qdrantPath)
+		httputil.WriteError(w, http.StatusForbidden,
+			"this path is not available via the proxy; only points-level operations are exposed to app keys")
 		return
 	}
 
@@ -141,21 +185,12 @@ func (h *QdrantHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 	w.Write(respBody)
 
-	// Log usage.
-	if h.usage != nil {
-		rec := usage.UsageRecord{
-			Timestamp:     startTime,
-			KeyHash:       usage.HashKey(appKey.Key),
-			KeyName:       appKey.Name,
-			Model:         "qdrant",
-			Endpoint:      "/qdrant" + qdrantPath,
-			StatusCode:    resp.StatusCode,
-			RequestBytes:  int64(len(body)),
-			ResponseBytes: int64(len(respBody)),
-			DurationMS:    time.Since(startTime).Milliseconds(),
-		}
-		go h.usage.Log(rec)
-	}
+	logUsage(h.usage, usageLogInput{
+		startTime: startTime, statusCode: resp.StatusCode,
+		keyName: appKey.Name, keyHash: usage.HashKey(appKey.Key),
+		model: "qdrant", endpoint: "/qdrant" + qdrantPath,
+		requestBytes: int64(len(body)), responseBytes: int64(len(respBody)),
+	})
 }
 
 // applyIsolation modifies request bodies to enforce app-level isolation.

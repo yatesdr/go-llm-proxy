@@ -65,10 +65,10 @@ func (h *ModelsHandler) ServeStatus(w http.ResponseWriter, r *http.Request) {
 	key := auth.KeyFromContext(r.Context())
 
 	type modelStatus struct {
-		ID        string    `json:"id"`
-		Online    bool      `json:"online"`
-		LastCheck int64     `json:"last_check"` // unix timestamp, 0 if never checked
-		Error     string    `json:"error,omitempty"`
+		ID        string `json:"id"`
+		Online    bool   `json:"online"`
+		LastCheck int64  `json:"last_check"` // unix timestamp, 0 if never checked
+		Error     string `json:"error,omitempty"`
 	}
 
 	statuses := make([]modelStatus, 0, len(cfg.Models))

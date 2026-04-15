@@ -62,18 +62,18 @@ type SamplingDefaults struct {
 
 type ModelConfig struct {
 	Name           string            `yaml:"name"`
-	Backend        string            `yaml:"backend"`          // upstream URL e.g. http://192.168.100.10:8000/v1
-	APIKey         string            `yaml:"api_key"`          // key to send to the backend (if required)
-	Model          string            `yaml:"model"`            // model name to send to the backend (if different from Name)
-	Timeout        int               `yaml:"timeout"`          // request timeout in seconds (default 300)
-	Type           string            `yaml:"type"`             // backend type: "" or "openai" (default), "anthropic"
-	ResponsesMode  string            `yaml:"responses_mode"`   // "auto" (default), "native", or "translate"
-	MessagesMode   string            `yaml:"messages_mode"`    // "auto" (default), "native", or "translate"
-	ContextWindow  int               `yaml:"context_window"`   // max context tokens (0 = auto-detect from backend)
-	SupportsVision bool              `yaml:"supports_vision"`  // model handles images natively
-	ForcePipeline  bool              `yaml:"force_pipeline"`   // run pipeline even on native backends
-	Processors     *ProcessorsConfig `yaml:"processors"`       // per-model processor overrides (nil = use global)
-	Defaults       *SamplingDefaults `yaml:"defaults"`         // default sampling parameters (nil = use backend defaults)
+	Backend        string            `yaml:"backend"`         // upstream URL e.g. http://192.168.100.10:8000/v1
+	APIKey         string            `yaml:"api_key"`         // key to send to the backend (if required)
+	Model          string            `yaml:"model"`           // model name to send to the backend (if different from Name)
+	Timeout        int               `yaml:"timeout"`         // request timeout in seconds (default 300)
+	Type           string            `yaml:"type"`            // backend type: "" or "openai" (default), "anthropic"
+	ResponsesMode  string            `yaml:"responses_mode"`  // "auto" (default), "native", or "translate"
+	MessagesMode   string            `yaml:"messages_mode"`   // "auto" (default), "native", or "translate"
+	ContextWindow  int               `yaml:"context_window"`  // max context tokens (0 = auto-detect from backend)
+	SupportsVision bool              `yaml:"supports_vision"` // model handles images natively
+	ForcePipeline  bool              `yaml:"force_pipeline"`  // run pipeline even on native backends
+	Processors     *ProcessorsConfig `yaml:"processors"`      // per-model processor overrides (nil = use global)
+	Defaults       *SamplingDefaults `yaml:"defaults"`        // default sampling parameters (nil = use backend defaults)
 
 	// AWS Bedrock fields (only used when type: "bedrock").
 	// If api_key is set, it is sent as a Bedrock API key bearer token and the
@@ -278,7 +278,6 @@ func FindModel(cfg *Config, name string) *ModelConfig {
 	}
 	return nil
 }
-
 
 func validateConfig(cfg *Config) error {
 	if len(cfg.Keys) == 0 {

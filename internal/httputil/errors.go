@@ -3,8 +3,10 @@ package httputil
 import (
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
 	"runtime/debug"
+	"time"
 )
 
 // SetSecurityHeaders applies standard security headers to all responses.
@@ -80,10 +82,45 @@ func RecoveryMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// NewHTTPClient returns an http.Client that refuses to follow redirects.
-// All proxy HTTP clients must use this to prevent SSRF via backend redirect responses.
+// NewHTTPClient returns the standard HTTP client used for upstream calls.
+//
+// Three properties matter:
+//
+//  1. **No redirect following.** A compromised or misconfigured backend
+//     could 3xx the proxy into an internal address; we refuse redirects
+//     outright and let the caller decide.
+//
+//  2. **Transport-level timeouts at every phase.** Go's default transport
+//     has no dial, TLS handshake, or response-header timeout, only an
+//     overall request timeout (which callers set via context). A
+//     slow-loris upstream that accepts the TCP connection then stalls
+//     headers ties up a goroutine for the full context timeout (up to
+//     300s) per in-flight request; a few parallel slow-loris targets can
+//     exhaust the server. The values here bound every phase explicitly.
+//
+//  3. **Bounded idle-connection pool.** Prevents unbounded growth of
+//     keepalive sockets against a single upstream.
+//
+// Per-request context timeouts still apply on top for the total-request
+// bound; these transport settings just stop the connection from hanging
+// forever if the upstream misbehaves at a specific phase.
 func NewHTTPClient() *http.Client {
 	return &http.Client{
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   10 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			IdleConnTimeout:       90 * time.Second,
+			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   10,
+			// ForceAttemptHTTP2 is on by default since Go 1.13; explicit here
+			// for visibility — we do want HTTP/2 for streaming backends.
+			ForceAttemptHTTP2: true,
+		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},

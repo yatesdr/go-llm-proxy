@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"go-llm-proxy/internal/api"
-	"go-llm-proxy/internal/config"
 )
 
 // --- OAI Chat Completions -> Bedrock Converse ---
@@ -143,11 +142,11 @@ func translateChatMessagesToConverse(msgs []json.RawMessage) (string, []map[stri
 
 	for _, raw := range msgs {
 		var msg struct {
-			Role       string          `json:"role"`
-			Content    json.RawMessage `json:"content"`
-			Name       string          `json:"name,omitempty"`
+			Role       string            `json:"role"`
+			Content    json.RawMessage   `json:"content"`
+			Name       string            `json:"name,omitempty"`
 			ToolCalls  []json.RawMessage `json:"tool_calls,omitempty"`
-			ToolCallID string          `json:"tool_call_id,omitempty"`
+			ToolCallID string            `json:"tool_call_id,omitempty"`
 		}
 		if json.Unmarshal(raw, &msg) != nil {
 			continue
@@ -485,14 +484,6 @@ func translateChatToolChoiceToConverse(tc json.RawMessage) map[string]any {
 		return map[string]any{"tool": map[string]any{"name": obj.Function.Name}}
 	}
 	return nil
-}
-
-// applyConverseSamplingDefaultsForChat behaves like
-// applyConverseSamplingDefaults but is called after a chat-shape translation,
-// so it has the same effect — it's a thin shim kept separate in case the
-// chat path eventually needs different defaults handling.
-func applyConverseSamplingDefaultsForChat(req map[string]any, model *config.ModelConfig) {
-	applyConverseSamplingDefaults(req, model)
 }
 
 // --- Bedrock Converse -> OAI Chat Completions response ---

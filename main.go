@@ -154,6 +154,7 @@ func main() {
 		dash := handler.NewUsageDashboardHandler(cs, ul, dashRl)
 		mux.Handle("GET /usage", http.HandlerFunc(dash.LoginPage))
 		mux.Handle("POST /usage", http.HandlerFunc(dash.HandleLogin))
+		mux.Handle("POST /usage/logout", http.HandlerFunc(dash.HandleLogout))
 		mux.Handle("GET /usage/data", http.HandlerFunc(dash.ServeData))
 		slog.Info("usage dashboard enabled at /usage")
 	}

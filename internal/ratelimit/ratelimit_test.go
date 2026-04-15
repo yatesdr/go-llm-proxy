@@ -1,6 +1,7 @@
 package ratelimit
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -144,6 +145,77 @@ func TestClose_StopsCleanup(t *testing.T) {
 	rl := NewRateLimiter(nil)
 	rl.Close()
 	// Just verifying Close() doesn't panic or deadlock.
+}
+
+// TestCapacityEviction_EvictsOldestAndStaysBounded exercises the LRU cap
+// path that used to be O(n) and DoSable. With 100K concurrent tracked IPs,
+// pushing a 100,001st must evict the oldest in constant time and keep the
+// total bounded.
+func TestCapacityEviction_EvictsOldestAndStaysBounded(t *testing.T) {
+	rl := NewRateLimiter(nil)
+	defer rl.Close()
+
+	// Fill the tracker to capacity. Each RecordFailure uses a unique IP so
+	// no entries merge.
+	for i := 0; i < maxTrackedIPs; i++ {
+		rl.RecordFailure(fmt.Sprintf("10.%d.%d.%d", (i>>16)&0xff, (i>>8)&0xff, i&0xff))
+	}
+
+	rl.mu.Lock()
+	atCap := len(rl.ips)
+	rl.mu.Unlock()
+	if atCap != maxTrackedIPs {
+		t.Fatalf("setup: expected %d entries, got %d", maxTrackedIPs, atCap)
+	}
+
+	// The oldest entry inserted is the one we expect to be evicted on
+	// the next new-IP push.
+	oldestIP := "10.0.0.0"
+
+	// Push one more new IP — triggers capacity eviction.
+	rl.RecordFailure("192.0.2.1")
+
+	rl.mu.Lock()
+	total := len(rl.ips)
+	_, oldestStillThere := rl.ips["10.0.0.0"]
+	_, newerThere := rl.ips["192.0.2.1"]
+	rl.mu.Unlock()
+
+	if total > maxTrackedIPs {
+		t.Errorf("tracker exceeded cap: %d", total)
+	}
+	if oldestStillThere {
+		t.Errorf("oldest IP %q should have been evicted", oldestIP)
+	}
+	if !newerThere {
+		t.Errorf("new IP should be present")
+	}
+}
+
+// TestLRUOrder_MoveToBackOnRepeatFailure confirms that repeated failures
+// from the same IP move it to the back of the LRU list, so a single
+// chatty attacker doesn't get evicted while idle victims stay tracked.
+func TestLRUOrder_MoveToBackOnRepeatFailure(t *testing.T) {
+	rl := NewRateLimiter(nil)
+	defer rl.Close()
+
+	rl.RecordFailure("1.1.1.1")
+	rl.RecordFailure("2.2.2.2")
+	rl.RecordFailure("3.3.3.3")
+	// Touch 1.1.1.1 again — it should now be the *most* recent, not oldest.
+	rl.RecordFailure("1.1.1.1")
+
+	rl.mu.Lock()
+	front := rl.lru.Front().Value.(*ipRecord)
+	back := rl.lru.Back().Value.(*ipRecord)
+	rl.mu.Unlock()
+
+	if front.ip != "2.2.2.2" {
+		t.Errorf("front of LRU should be 2.2.2.2 after touch, got %s", front.ip)
+	}
+	if back.ip != "1.1.1.1" {
+		t.Errorf("back of LRU should be 1.1.1.1 after touch, got %s", back.ip)
+	}
 }
 
 func TestClientIP_DirectConnection(t *testing.T) {

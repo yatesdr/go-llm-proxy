@@ -12,6 +12,12 @@ import (
 	"go-llm-proxy/internal/awsstream"
 )
 
+// maxBedrockStreamBytes bounds the total response bytes we will write to the
+// client in one streaming request. Prevents a rogue or compromised upstream
+// from streaming unbounded data through the proxy; matches the
+// api.MaxResponseBodySize used by the non-streaming paths.
+const maxBedrockStreamBytes = api.MaxResponseBodySize
+
 // streamBedrockToAnthropicSSE consumes an AWS event-stream from Bedrock
 // ConverseStream and re-emits it on w as an Anthropic Messages SSE stream.
 //
@@ -73,6 +79,17 @@ func streamBedrockToAnthropicSSE(w http.ResponseWriter, body io.Reader, modelNam
 
 	r := awsstream.NewReader(body)
 	for {
+		if responseBytes > maxBedrockStreamBytes {
+			slog.Error("bedrock stream exceeded size limit",
+				"model", modelName, "bytes", responseBytes)
+			emit("error", map[string]any{
+				"error": map[string]any{
+					"type":    "api_error",
+					"message": "upstream stream exceeded size limit",
+				},
+			})
+			break
+		}
 		msg, err := r.Next()
 		if err != nil {
 			if errors.Is(err, io.EOF) {

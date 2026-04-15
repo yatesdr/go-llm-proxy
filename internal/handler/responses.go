@@ -314,7 +314,7 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 			} else {
 				slog.Error("pipeline processing failed", "model", req.Model, "error", err)
-			httputil.WriteError(w, http.StatusInternalServerError, "internal processing error")
+				httputil.WriteError(w, http.StatusInternalServerError, "internal processing error")
 			}
 			return
 		}
@@ -552,15 +552,14 @@ func (h *ResponsesHandler) handleNonStreaming(w http.ResponseWriter, resp *http.
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 
-	h.logUsage(chatResp.Usage, resp.StatusCode, req.Model, requestBytes, int64(len(body)), keyName, keyHash, startTime)
+	logUsageChat(h.usage, usageLogInput{
+		startTime: startTime, statusCode: resp.StatusCode,
+		keyName: keyName, keyHash: keyHash,
+		model: req.Model, endpoint: "/v1/responses",
+		requestBytes: requestBytes, responseBytes: int64(len(body)),
+	}, chatResp.Usage)
 }
 
 func (h *ResponsesHandler) sendChatRequest(ctx context.Context, chatReq map[string]any, model *config.ModelConfig) (*api.ChatResponse, error) {
 	return sendChatCompletionsRequest(ctx, h.client, chatReq, model)
-}
-
-// --- Usage logging ---
-
-func (h *ResponsesHandler) logUsage(usageData *api.ChunkUsage, statusCode int, model string, requestBytes, responseBytes int64, keyName, keyHash string, startTime time.Time) {
-	logUsageRecord(h.usage, usageData, statusCode, model, "/v1/responses", requestBytes, responseBytes, keyName, keyHash, startTime)
 }

@@ -119,8 +119,12 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 				continue
 			}
 
-			// Block SSRF: reject URLs targeting internal/private networks.
-			if !isSSRFSafe(url) {
+			// SSRF pre-flight: cheaply reject URLs whose hostname itself is
+			// an obvious block-target (literal private IP, metadata name).
+			// The authoritative enforcement is the safeHTTPClient dialer
+			// used later in describeImage — it re-validates every resolved
+			// IP at connect time, which closes the DNS-rebinding window.
+			if !imageURLPreflight(url) {
 				slog.Warn("blocked image URL targeting internal network", "url_prefix", url[:min(len(url), 60)])
 				continue
 			}
@@ -361,77 +365,68 @@ func extractImageURL(part map[string]any) string {
 	return u
 }
 
-// isSSRFSafe validates that an image URL is safe to forward to a backend model.
-// Blocks internal/private network targets to prevent SSRF attacks where a user
-// could make the vision backend fetch internal services or cloud metadata.
-// Data URIs are always allowed (processed in-memory, no network fetch).
-func isSSRFSafe(imageURL string) bool {
-	// Data URIs are always safe — no network request is made.
+// imageURLPreflight returns false for URLs that are obviously unsafe just
+// from the raw string — wrong scheme, literal private IP, metadata hostname.
+// Deliberately does NOT resolve DNS: the authoritative IP check happens at
+// dial time inside safeHTTPClient, which closes the rebinding window.
+func imageURLPreflight(imageURL string) bool {
 	if strings.HasPrefix(imageURL, "data:") {
 		return true
 	}
-
 	parsed, err := url.Parse(imageURL)
 	if err != nil {
 		return false
 	}
-
-	// Only allow http and https schemes.
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return false
 	}
-
-	hostname := parsed.Hostname()
-	if hostname == "" {
-		return false
-	}
-
-	// Block well-known metadata hostnames.
-	if hostname == "metadata.google.internal" {
-		return false
-	}
-
-	ip := net.ParseIP(hostname)
-	if ip == nil {
-		// Hostname — resolve to check for internal IPs.
-		addrs, err := net.LookupHost(hostname)
-		if err != nil || len(addrs) == 0 {
-			// Can't resolve — block to be safe.
-			return false
-		}
-		// Check all resolved addresses.
-		for _, addr := range addrs {
-			if resolved := net.ParseIP(addr); resolved != nil && isPrivateIP(resolved) {
-				return false
-			}
-		}
-		return true
-	}
-
-	return !isPrivateIP(ip)
+	return preflightURLSafe(parsed)
 }
 
 // isPrivateIP returns true if the IP is in a private, loopback, link-local,
-// or cloud metadata range that should not be accessible via user-supplied URLs.
+// unspecified, or cloud-metadata range that should not be reachable from
+// user-supplied URLs. Normalizes IPv4-mapped IPv6 (::ffff:a.b.c.d) to its
+// IPv4 form so attackers can't bypass the filter by using the v6-mapped
+// encoding of a private v4 address.
 func isPrivateIP(ip net.IP) bool {
-	privateRanges := []string{
-		"10.0.0.0/8",
-		"172.16.0.0/12",
-		"192.168.0.0/16",
-		"127.0.0.0/8",
-		"169.254.0.0/16", // link-local + cloud metadata (169.254.169.254)
-		"::1/128",
-		"fc00::/7",       // IPv6 unique local
-		"fe80::/10",      // IPv6 link-local
+	if ip == nil {
+		return true
 	}
-	for _, cidr := range privateRanges {
-		_, network, _ := net.ParseCIDR(cidr)
-		if network.Contains(ip) {
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4
+	}
+	// Unspecified (0.0.0.0 / ::) is routed to the local host on most
+	// platforms — treat as loopback.
+	if ip.IsUnspecified() || ip.IsLoopback() || ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsInterfaceLocalMulticast() {
+		return true
+	}
+	// IsPrivate() covers RFC 1918 and ULA (fc00::/7). Explicit ranges below
+	// cover AWS/GCP/Azure metadata endpoints (169.254.169.254 is inside
+	// 169.254.0.0/16, which IsLinkLocalUnicast already catches) plus
+	// carrier-grade NAT.
+	for _, cidr := range extraPrivateCIDRs {
+		if cidr.Contains(ip) {
 			return true
 		}
 	}
 	return false
 }
+
+var extraPrivateCIDRs = func() []*net.IPNet {
+	ranges := []string{
+		"100.64.0.0/10", // carrier-grade NAT (RFC 6598)
+		"::/128",        // unspecified (defense-in-depth; IsUnspecified covers this too)
+	}
+	out := make([]*net.IPNet, 0, len(ranges))
+	for _, cidr := range ranges {
+		if _, n, err := net.ParseCIDR(cidr); err == nil {
+			out = append(out, n)
+		}
+	}
+	return out
+}()
 
 // describeImage sends an image to a vision-capable model and returns a text description.
 // The prompt and maxTokens control the style of description (general vs OCR).
@@ -448,6 +443,15 @@ func (p *Pipeline) describeImage(ctx context.Context, visionModel *config.ModelC
 
 	start := time.Now()
 
+	// Fetch http(s) images in-process via the SSRF-safe client and forward
+	// the bytes inline as a data: URL. This eliminates DNS rebinding (the
+	// upstream never resolves the remote hostname) and removes our
+	// dependence on the vision model's own SSRF protection, if any.
+	forwardedURL, err := fetchImageAsDataURL(visionCtx, imageURL)
+	if err != nil {
+		return "", fmt.Errorf("fetch image: %w", err)
+	}
+
 	reqBody := map[string]any{
 		"model": visionModel.Model,
 		"messages": []any{
@@ -461,7 +465,7 @@ func (p *Pipeline) describeImage(ctx context.Context, visionModel *config.ModelC
 					map[string]any{
 						"type": "image_url",
 						"image_url": map[string]any{
-							"url": imageURL,
+							"url": forwardedURL,
 						},
 					},
 				},
@@ -526,7 +530,6 @@ func (p *Pipeline) describeImage(ctx context.Context, visionModel *config.ModelC
 
 	return desc, nil
 }
-
 
 // RequestContainsImageURLs checks if a translated Chat Completions request
 // contains any image_url content parts. Handles both []any and []map[string]any

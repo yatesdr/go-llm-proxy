@@ -81,6 +81,12 @@ func streamBedrockToChatSSE(w http.ResponseWriter, body io.Reader, modelName str
 
 	r := awsstream.NewReader(body)
 	for {
+		if responseBytes > maxBedrockStreamBytes {
+			slog.Error("bedrock stream exceeded size limit",
+				"model", modelName, "bytes", responseBytes)
+			emitError("upstream stream exceeded size limit")
+			break
+		}
 		msg, err := r.Next()
 		if err != nil {
 			if errors.Is(err, io.EOF) {

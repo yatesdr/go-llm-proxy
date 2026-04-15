@@ -206,7 +206,12 @@ func (h *ResponsesHandler) HandleCompact(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 
-	h.logUsage(chatResp.Usage, resp.StatusCode, req.Model, int64(len(chatBody)), int64(len(respBody)), keyName, keyHash, startTime)
+	logUsageChat(h.usage, usageLogInput{
+		startTime: startTime, statusCode: resp.StatusCode,
+		keyName: keyName, keyHash: keyHash,
+		model: req.Model, endpoint: "/v1/responses/compact",
+		requestBytes: int64(len(chatBody)), responseBytes: int64(len(respBody)),
+	}, chatResp.Usage)
 }
 
 // extractUserMessages returns all user-role messages from the input array,

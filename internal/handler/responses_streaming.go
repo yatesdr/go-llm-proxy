@@ -520,19 +520,15 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 					ctx, chatReq, model, searchCalls, textBuf.String())
 			}()
 
-			ticker := time.NewTicker(2 * time.Second)
-			defer ticker.Stop()
-		searchWait:
-			for {
-				select {
-				case <-searchDone:
-					break searchWait
-				case <-ticker.C:
+			completed := waitForSearchOrDisconnect(ctx, searchDone,
+				func() {
 					fmt.Fprintf(w, ": searching\n\n")
 					flusher.Flush()
-				case <-ctx.Done():
-					break searchWait
-				}
+				},
+				2*time.Second, 5*time.Second, "responses streaming")
+			if !completed {
+				// Client disconnected; goroutine awaited. Stop emitting.
+				return
 			}
 
 			if searchErr != nil {
@@ -800,7 +796,12 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 		})
 	}
 
-	h.logUsage(usageData, resp.StatusCode, req.Model, requestBytes, responseBytes, keyName, keyHash, startTime)
+	logUsageChat(h.usage, usageLogInput{
+		startTime: startTime, statusCode: resp.StatusCode,
+		keyName: keyName, keyHash: keyHash,
+		model: req.Model, endpoint: "/v1/responses",
+		requestBytes: requestBytes, responseBytes: responseBytes,
+	}, usageData)
 }
 
 // sendChatRequest sends a Chat Completions request to the model's backend and returns the parsed response.

@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.3.8
+
+### Security
+
+- **SSRF via DNS rebinding (vision pipeline) — fixed.** The old `isSSRFSafe` check resolved the image hostname once up-front, then passed the hostname string to the vision backend, which resolved it again. A short-TTL DNS record could flip between a public IP (check) and `169.254.169.254` or loopback (fetch). Fixed structurally: the proxy now fetches the image in-process via an SSRF-safe `http.Transport` whose dialer validates every resolved IP at connect time (`net.Dialer.Control`), base64-encodes it, and forwards a `data:` URL to the vision backend — so the backend never makes an outbound request of its own. Expanded the blocklist to cover `0.0.0.0`, `::`, CGNAT (`100.64.0.0/10`), and IPv4-mapped IPv6 (`::ffff:*`).
+- **Rate-limiter DoS / brute-force amplification — fixed.** Prior `evictOldest()` was an O(n) scan over up to 100,000 tracked IPs under a write lock that the auth hot path also took. An attacker with an IPv6 /64 could push the tracker to capacity, then every subsequent failed-auth request scanned 100k entries while blocking *all* auth checks system-wide. Replaced the linear scan with a doubly-linked-list LRU so insert/evict are O(1) and auth latency is independent of tracker size.
+- **Usage dashboard session takeover — fixed.** Cookie value was a deterministic HMAC of the password — no per-session entropy, no server-side expiry, no way to revoke without rotating the password, no logout endpoint. Captured cookies retained access forever. Replaced with 256-bit random session tokens backed by a bounded server-side store with explicit TTL and logout. The `Secure` flag is now set only when the request arrived over TLS or from a trusted proxy (previously any client could spoof `X-Forwarded-Proto: https`).
+- **AWS error-body log leakage — fixed.** Bedrock error responses include AWS account IDs, ARNs, and request IDs; these were being written verbatim to logs. Added `awsauth.ScrubAWSErrorBody` to redact identifiers before logging.
+- **HTTP transport lacked phase-level timeouts.** Every upstream call used `&http.Client{}` with default transport — no dial, TLS-handshake, or response-header timeout, so a slow-loris upstream could pin a goroutine for the full context window. Added explicit timeouts at every phase plus bounded idle-connection pool.
+- **Qdrant admin-endpoint isolation bypass — fixed.** App keys could list, create, or delete collections through `/qdrant/collections/*` — the isolation filter only applied to points-level routes. Flipped to strict allowlist: only isolation-covered operational paths (points upsert / search / scroll / query / count / delete + GET collection schema) are accepted. All other paths return 403.
+- **Bedrock streaming size cap.** `streamBedrockToAnthropicSSE` / `streamBedrockToChatSSE` had no aggregate byte limit; a compromised or runaway upstream could stream unbounded data. Now capped at `api.MaxResponseBodySize` (100 MB), matching every other SSE path.
+- **Goroutine leak + data race on client disconnect during streaming search.** When a client disconnected mid-search, the handler broke out of its wait loop but left the search goroutine running and read its output variables racily. Extracted `waitForSearchOrDisconnect` helper that awaits the goroutine (bounded by a grace period) before returning, applied to all three streaming handlers (Messages, Responses, ProxyChat).
+- **Memory bloat on large streaming responses.** `streamRawResponse` captured the full body (up to 100 MB) into memory solely for token-usage extraction, doubling memory per request and risking OOM under concurrency. Introduced `captureBuffer` that keeps a 16 KB prefix + 64 KB rolling tail for streaming (enough to catch both the first-chunk metadata and the final `include_usage` chunk), or a 1 MB cap for non-streaming.
+- **Multipart model-field OOM — fixed.** `ExtractModelFromMultipart` read the `model` field via `io.ReadAll` with no size cap; a 50 MB field could OOM the parser. Now capped at 1 KB.
+- **Auth timing side-channel — fixed.** `findKey` and `findAppKey` early-returned on the first matching key, leaking which index matched via total request latency. Changed to iterate all keys unconditionally so total time is independent of match position.
+
+### Changed
+
+- Consolidated ten hand-rolled `usage.UsageRecord` constructions behind a single `logUsage` helper with typed `logUsageChat` / `logUsageConverse` adapters; fields can no longer drift between call sites.
+- Extracted `prepareBedrockRequest` plumbing shared by `MessagesHandler.handleBedrock` and `ProxyHandler.handleBedrockChat` (URL build, SigV4 vs API-key auth, headers).
+- Split model-extraction / multipart rewrite helpers out of `shared.go` into a dedicated `model_rewrite.go`.
+- Rate limiter exposes `IsTrustedProxy` for reuse by the usage dashboard's TLS-detection path.
+
+### Fixed
+
+- **Bedrock context window auto-detection.** v0.3.7 attempted a `/models` probe against `bedrock-runtime.*.amazonaws.com`, which doesn't exist on that endpoint, producing a spurious warning for every Bedrock model at startup. Replaced with a prefix-match lookup table of well-known Bedrock models (Claude, Nova, Llama, Mistral, Cohere, Z.ai GLM, DeepSeek, Titan) so common models get a sensible default. Unknown models log at debug (not warn) and the operator can always set `context_window` explicitly.
+- Race in `TestHealthStore_AuthHeaders` — concurrent health-check goroutines wrote to shared captured-header vars without synchronization.
+- Broken indentation under bare-brace `else` branches in `messages.go` (compile-correct today, trap for the next edit).
+- Dead `applyConverseSamplingDefaultsForChat` one-line wrapper removed.
+- `.gitignore` now covers platform-suffixed build artifacts (`go-llm-proxy-linux`, etc).
+
+### Verified
+
+Live-tested end-to-end against AWS Bedrock (`zai.glm-4.7-flash` on-demand + `us.amazon.nova-lite-v1:0` inference profile, us-east-2) across all four client × stream-mode combinations plus tool calls. No regressions; context-window auto-detection works (128k and 300k respectively).
+
 ## v0.3.7
 
 ### Added

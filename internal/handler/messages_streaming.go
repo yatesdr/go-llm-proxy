@@ -361,19 +361,15 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 					ctx, chatReq, model, searchCalls, accumulatedContent.String())
 			}()
 
-			ticker := time.NewTicker(2 * time.Second)
-			defer ticker.Stop()
-		searchWait:
-			for {
-				select {
-				case <-searchDone:
-					break searchWait
-				case <-ticker.C:
+			completed := waitForSearchOrDisconnect(ctx, searchDone,
+				func() {
 					fmt.Fprintf(w, ": searching\n\n")
 					flusher.Flush()
-				case <-ctx.Done():
-					break searchWait
-				}
+				},
+				2*time.Second, 5*time.Second, "messages streaming")
+			if !completed {
+				// Client disconnected; goroutine awaited. Stop emitting.
+				return
 			}
 
 			if searchErr != nil {
@@ -482,8 +478,8 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 			"usage": map[string]any{
 				"input_tokens":                inputTokens,
 				"output_tokens":               outputTokens,
-				"cache_creation_input_tokens":  0,
-				"cache_read_input_tokens":      0,
+				"cache_creation_input_tokens": 0,
+				"cache_read_input_tokens":     0,
 			},
 		})
 
@@ -495,7 +491,12 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 			"model", req.Model, "response_bytes", responseBytes)
 	}
 
-	h.logUsage(usageData, resp.StatusCode, req.Model, requestBytes, responseBytes, keyName, keyHash, startTime)
+	logUsageChat(h.usage, usageLogInput{
+		startTime: startTime, statusCode: resp.StatusCode,
+		keyName: keyName, keyHash: keyHash,
+		model: req.Model, endpoint: "/v1/messages",
+		requestBytes: requestBytes, responseBytes: responseBytes,
+	}, usageData)
 }
 
 // streamFromBackend sends a streaming Chat Completions request and translates the SSE

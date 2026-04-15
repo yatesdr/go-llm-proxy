@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"mime"
-	"mime/multipart"
 	"net/http"
 	"regexp"
 	"strings"
@@ -21,7 +19,6 @@ import (
 	"go-llm-proxy/internal/config"
 	"go-llm-proxy/internal/httputil"
 	"go-llm-proxy/internal/pipeline"
-	"go-llm-proxy/internal/usage"
 )
 
 // AllowedPaths restricts which sub-paths can be proxied to backends.
@@ -29,128 +26,11 @@ var AllowedPaths = regexp.MustCompile(`^/v1/(chat/completions|completions|embedd
 
 // AllowedResponseHeaders controls which upstream headers are forwarded to clients.
 var AllowedResponseHeaders = map[string]bool{
-	"Content-Type":          true,
+	"Content-Type":         true,
 	"X-Request-ID":         true, // OpenAI
 	"Openai-Processing-Ms": true,
 	"Openai-Model":         true,
 	"Request-Id":           true, // Anthropic (different header from X-Request-ID)
-}
-
-// ExtractModelFromJSON pulls the model name from a JSON request body.
-func ExtractModelFromJSON(body []byte) string {
-	var req struct {
-		Model string `json:"model"`
-	}
-	if json.Unmarshal(body, &req) == nil {
-		return req.Model
-	}
-	return ""
-}
-
-// ExtractModelFromMultipart pulls the model name from a multipart/form-data body.
-func ExtractModelFromMultipart(body []byte, contentType string) string {
-	_, params, err := mime.ParseMediaType(contentType)
-	if err != nil {
-		return ""
-	}
-	boundary := params["boundary"]
-	if boundary == "" {
-		return ""
-	}
-
-	reader := multipart.NewReader(bytes.NewReader(body), boundary)
-	for {
-		part, err := reader.NextPart()
-		if err != nil {
-			break
-		}
-		if part.FormName() == "model" {
-			val, err := io.ReadAll(part)
-			part.Close()
-			if err == nil {
-				return strings.TrimSpace(string(val))
-			}
-			break
-		}
-		part.Close()
-	}
-	return ""
-}
-
-// RewriteModelName replaces the "model" field in a JSON body. Other field values
-// are preserved as raw bytes via json.RawMessage, but top-level key order may change.
-func RewriteModelName(body []byte, newName string) []byte {
-	var m map[string]json.RawMessage
-	if json.Unmarshal(body, &m) != nil {
-		return body
-	}
-	if _, ok := m["model"]; !ok {
-		return body
-	}
-	nameBytes, err := json.Marshal(newName)
-	if err != nil {
-		return body
-	}
-	m["model"] = json.RawMessage(nameBytes)
-	out, err := json.Marshal(m)
-	if err != nil {
-		return body
-	}
-	return out
-}
-
-// RewriteModelInMultipart rebuilds a multipart body with the model field replaced.
-func RewriteModelInMultipart(body []byte, contentType string, newModel string) []byte {
-	_, params, err := mime.ParseMediaType(contentType)
-	if err != nil {
-		return body
-	}
-	boundary := params["boundary"]
-	if boundary == "" {
-		return body
-	}
-
-	var buf bytes.Buffer
-	writer := multipart.NewWriter(&buf)
-	writer.SetBoundary(boundary) // preserve original boundary so Content-Type header stays valid
-
-	reader := multipart.NewReader(bytes.NewReader(body), boundary)
-	for {
-		part, err := reader.NextPart()
-		if err != nil {
-			break
-		}
-
-		if part.FormName() == "model" {
-			// Replace model value.
-			fw, err := writer.CreateFormField("model")
-			if err != nil {
-				part.Close()
-				return body
-			}
-			if _, err := fw.Write([]byte(newModel)); err != nil {
-				part.Close()
-				return body
-			}
-			part.Close()
-			continue
-		}
-
-		// Copy other parts as-is.
-		header := part.Header
-		pw, err := writer.CreatePart(header)
-		if err != nil {
-			part.Close()
-			return body
-		}
-		if _, err := io.Copy(pw, part); err != nil {
-			part.Close()
-			return body
-		}
-		part.Close()
-	}
-	writer.Close()
-	return buf.Bytes()
 }
 
 var forwardHeaders = []string{
@@ -294,32 +174,3 @@ func runPipelineWithKeepalives(ctx context.Context, w http.ResponseWriter, pl *p
 }
 
 // logUsageRecord logs a usage record for both Messages and Responses handlers.
-func logUsageRecord(ul *usage.UsageLogger, usageData *api.ChunkUsage, statusCode int, model, endpoint string,
-	requestBytes, responseBytes int64, keyName, keyHash string, startTime time.Time) {
-	if ul == nil {
-		return
-	}
-	var tokens usage.TokenUsage
-	if usageData != nil {
-		tokens = usage.TokenUsage{
-			InputTokens:  usageData.PromptTokens,
-			OutputTokens: usageData.CompletionTokens,
-			TotalTokens:  usageData.TotalTokens,
-		}
-	}
-	rec := usage.UsageRecord{
-		Timestamp:     startTime,
-		KeyHash:       keyHash,
-		KeyName:       keyName,
-		Model:         model,
-		Endpoint:      endpoint,
-		StatusCode:    statusCode,
-		RequestBytes:  requestBytes,
-		ResponseBytes: responseBytes,
-		InputTokens:   tokens.InputTokens,
-		OutputTokens:  tokens.OutputTokens,
-		TotalTokens:   tokens.TotalTokens,
-		DurationMS:    time.Since(startTime).Milliseconds(),
-	}
-	go ul.Log(rec)
-}

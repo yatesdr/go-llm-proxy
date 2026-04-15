@@ -297,14 +297,14 @@ func TestBuildAnthropicResponseFromConverse_ReasoningHoistedFirst(t *testing.T) 
 
 func TestMapConverseStopReason(t *testing.T) {
 	cases := map[string]string{
-		"end_turn":              "end_turn",
-		"tool_use":              "tool_use",
-		"max_tokens":            "max_tokens",
-		"stop_sequence":         "stop_sequence",
-		"guardrail_intervened":  "end_turn",
-		"content_filtered":      "end_turn",
-		"unknown_future_value":  "end_turn",
-		"":                      "end_turn",
+		"end_turn":             "end_turn",
+		"tool_use":             "tool_use",
+		"max_tokens":           "max_tokens",
+		"stop_sequence":        "stop_sequence",
+		"guardrail_intervened": "end_turn",
+		"content_filtered":     "end_turn",
+		"unknown_future_value": "end_turn",
+		"":                     "end_turn",
 	}
 	for in, want := range cases {
 		if got := mapConverseStopReason(in); got != want {
