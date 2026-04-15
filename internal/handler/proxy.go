@@ -116,6 +116,32 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// AWS Bedrock backends use the Converse API (translated from Chat
+	// Completions, signed with SigV4 or a Bedrock API key). Dispatched here
+	// because the wire protocol diverges entirely from the standard OpenAI-
+	// compatible passthrough below. Implementation in proxy_bedrock.go.
+	if model.Type == config.BackendBedrock {
+		if cleanPath != "/v1/chat/completions" {
+			httputil.WriteError(w, http.StatusBadRequest,
+				"bedrock models only support /v1/chat/completions on this endpoint; use /v1/messages for the Anthropic protocol")
+			return
+		}
+		if isMultipart {
+			httputil.WriteError(w, http.StatusBadRequest, "multipart requests are not supported for bedrock backends")
+			return
+		}
+		keyName := ""
+		keyHash := ""
+		if key != nil {
+			keyName = key.Name
+			keyHash = usage.HashKey(key.Key)
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(model.Timeout)*time.Second)
+		defer cancel()
+		p.handleBedrockChat(ctx, w, body, modelName, model, keyName, keyHash, time.Now())
+		return
+	}
+
 	// Pipeline + search: parse body once for both if needed.
 	isChatCompletions := cleanPath == "/v1/chat/completions" && !isMultipart
 	var parsedChatReq map[string]any

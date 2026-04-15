@@ -240,6 +240,11 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "responses API is not supported for anthropic backends")
 		return
 	}
+	if model.Type == config.BackendBedrock {
+		httputil.WriteError(w, http.StatusBadRequest,
+			"responses API is not supported for bedrock backends; use /v1/chat/completions or /v1/messages")
+		return
+	}
 
 	keyName, keyHash := "", ""
 	if key != nil {

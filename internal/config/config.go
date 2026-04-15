@@ -36,6 +36,7 @@ type Config struct {
 const (
 	BackendOpenAI    = "openai"
 	BackendAnthropic = "anthropic"
+	BackendBedrock   = "bedrock"
 
 	ResponsesModeAuto      = ""          // default: probe backend, cache result
 	ResponsesModeNative    = "native"    // always passthrough
@@ -73,6 +74,16 @@ type ModelConfig struct {
 	ForcePipeline  bool              `yaml:"force_pipeline"`   // run pipeline even on native backends
 	Processors     *ProcessorsConfig `yaml:"processors"`       // per-model processor overrides (nil = use global)
 	Defaults       *SamplingDefaults `yaml:"defaults"`         // default sampling parameters (nil = use backend defaults)
+
+	// AWS Bedrock fields (only used when type: "bedrock").
+	// If api_key is set, it is sent as a Bedrock API key bearer token and the
+	// SigV4 fields below are ignored. Otherwise SigV4 signing is used with the
+	// provided IAM credentials, falling back to AWS_ACCESS_KEY_ID /
+	// AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN environment variables.
+	Region          string `yaml:"region"`            // AWS region, e.g. "us-east-1"
+	AWSAccessKey    string `yaml:"aws_access_key"`    // IAM access key ID (AKIA...)
+	AWSSecretKey    string `yaml:"aws_secret_key"`    // IAM secret access key
+	AWSSessionToken string `yaml:"aws_session_token"` // optional STS session token
 }
 
 type KeyConfig struct {
@@ -136,11 +147,15 @@ func (cs *ConfigStore) Load() error {
 	}
 
 	for i := range cfg.Models {
-		if cfg.Models[i].Timeout == 0 {
-			cfg.Models[i].Timeout = 300
+		m := &cfg.Models[i]
+		if m.Timeout == 0 {
+			m.Timeout = 300
 		}
-		if cfg.Models[i].Model == "" {
-			cfg.Models[i].Model = cfg.Models[i].Name
+		if m.Model == "" {
+			m.Model = m.Name
+		}
+		if m.Type == BackendBedrock {
+			applyBedrockDefaults(m)
 		}
 	}
 
@@ -232,6 +247,28 @@ func (cs *ConfigStore) Watch() (stop func(), err error) {
 	return func() { watcher.Close() }, nil
 }
 
+// applyBedrockDefaults fills in the default Bedrock backend URL and pulls AWS
+// credentials from the environment when not explicitly configured. Called for
+// every model with type: "bedrock" during config load.
+func applyBedrockDefaults(m *ModelConfig) {
+	if m.Backend == "" && m.Region != "" {
+		m.Backend = fmt.Sprintf("https://bedrock-runtime.%s.amazonaws.com", m.Region)
+	}
+	// API-key auth shortcuts SigV4 entirely; only fall back to env for IAM keys.
+	if m.APIKey != "" {
+		return
+	}
+	if m.AWSAccessKey == "" {
+		m.AWSAccessKey = os.Getenv("AWS_ACCESS_KEY_ID")
+	}
+	if m.AWSSecretKey == "" {
+		m.AWSSecretKey = os.Getenv("AWS_SECRET_ACCESS_KEY")
+	}
+	if m.AWSSessionToken == "" {
+		m.AWSSessionToken = os.Getenv("AWS_SESSION_TOKEN")
+	}
+}
+
 // FindModel returns the ModelConfig with the given name, or nil if not found.
 func FindModel(cfg *Config, name string) *ModelConfig {
 	for i := range cfg.Models {
@@ -283,8 +320,15 @@ func validateConfig(cfg *Config) error {
 
 		switch m.Type {
 		case "", BackendOpenAI, BackendAnthropic:
+		case BackendBedrock:
+			if m.Region == "" {
+				return fmt.Errorf("model %q (bedrock) requires region", m.Name)
+			}
+			if m.APIKey == "" && (m.AWSAccessKey == "" || m.AWSSecretKey == "") {
+				return fmt.Errorf("model %q (bedrock) requires either api_key (Bedrock API key) or aws_access_key + aws_secret_key (set in config or environment)", m.Name)
+			}
 		default:
-			return fmt.Errorf("model %q has unknown type %q (must be %q or %q)", m.Name, m.Type, BackendOpenAI, BackendAnthropic)
+			return fmt.Errorf("model %q has unknown type %q (must be %q, %q, or %q)", m.Name, m.Type, BackendOpenAI, BackendAnthropic, BackendBedrock)
 		}
 
 		switch m.ResponsesMode {

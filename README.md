@@ -10,7 +10,7 @@ You need data security and self-host models or have upstream secure vendors (Azu
 
 ## What it does
 
-- **Protocol translation** — Claude Code speaks Anthropic Messages. Codex speaks OpenAI Responses. Your vLLM speaks Chat Completions. The proxy translates between them automatically.
+- **Protocol translation** — Claude Code speaks Anthropic Messages. Codex speaks OpenAI Responses. Your vLLM speaks Chat Completions. AWS Bedrock speaks Converse with SigV4. The proxy translates between them automatically.
 - **Model multiplexing** — Aggregate local GPU servers, cloud APIs, and third-party providers behind one endpoint. Clients see one model list.
 - **API key management** — Issue proxy keys with per-key model restrictions. Backend credentials stay on the server.
 - **Vision pipeline** — Images sent to text-only models are described by a vision-capable model and replaced with text. Transparent to the client.

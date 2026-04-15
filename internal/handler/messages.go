@@ -115,6 +115,17 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(model.Timeout)*time.Second)
 	defer cancel()
 
+	// AWS Bedrock backends use the Converse API (translated from Anthropic
+	// Messages, signed with SigV4 or a Bedrock API key) instead of Chat
+	// Completions. Dispatched here because the Bedrock wire format differs
+	// from both anthropic-native and openai-translated paths, and
+	// messages_mode is not a meaningful knob for Bedrock — it's always
+	// Converse. Implementation lives in messages_bedrock.go.
+	if model.Type == config.BackendBedrock {
+		h.handleBedrock(ctx, w, body, req, model, keyName, keyHash, startTime)
+		return
+	}
+
 	// Native passthrough for anthropic backends or native mode.
 	if !h.shouldTranslate(model) {
 		h.handleNativePassthrough(ctx, w, r, body, req, model, keyName, keyHash, startTime)

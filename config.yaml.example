@@ -46,6 +46,29 @@ models:
   #   backend: https://api.z.ai/api/coding/paas/v4
   #   api_key: your-zhipu-key
 
+  # AWS Bedrock — Converse API with auto-translation from /v1/messages,
+  # /v1/chat/completions. Pick ONE of the auth options:
+  #
+  # (a) Bedrock API key (simplest — bearer token, no SigV4):
+  # - name: claude-sonnet-4-bedrock
+  #   type: bedrock
+  #   region: us-east-1
+  #   model: us.anthropic.claude-sonnet-4-20250514-v1:0
+  #   api_key: bdrk-your-bedrock-api-key
+  #
+  # (b) Static IAM credentials (SigV4 signing). Falls back to
+  #     AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY env vars if omitted:
+  # - name: claude-sonnet-4-bedrock
+  #   type: bedrock
+  #   region: us-east-1
+  #   model: us.anthropic.claude-sonnet-4-20250514-v1:0
+  #   aws_access_key: AKIA...
+  #   aws_secret_key: ...
+  #   # aws_session_token: ...        # optional, for temporary STS credentials
+  #
+  # The proxy auto-derives backend URL from region; override only for VPC
+  # endpoints: backend: https://bedrock-runtime.us-east-1.amazonaws.com
+
 # ── Processing Pipeline ────────────────────────────────────────────────────────
 # Optional. Handles images, PDFs, and web search for backends that don't support them.
 # processors:

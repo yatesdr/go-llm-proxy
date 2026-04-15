@@ -141,6 +141,63 @@ func TestValidateConfig_UnknownType(t *testing.T) {
 	}
 }
 
+func TestValidateConfig_ValidBedrockTypeWithIAMKeys(t *testing.T) {
+	cfg := validConfig()
+	cfg.Models[0].Type = BackendBedrock
+	cfg.Models[0].Backend = "https://bedrock-runtime.us-east-1.amazonaws.com"
+	cfg.Models[0].Region = "us-east-1"
+	cfg.Models[0].AWSAccessKey = "AKIAEXAMPLE"
+	cfg.Models[0].AWSSecretKey = "secret"
+	if err := validateConfig(cfg); err != nil {
+		t.Fatalf("expected no error for bedrock type with IAM keys, got: %v", err)
+	}
+}
+
+func TestValidateConfig_ValidBedrockTypeWithAPIKey(t *testing.T) {
+	cfg := validConfig()
+	cfg.Models[0].Type = BackendBedrock
+	cfg.Models[0].Backend = "https://bedrock-runtime.us-east-1.amazonaws.com"
+	cfg.Models[0].Region = "us-east-1"
+	cfg.Models[0].APIKey = "bdrk-key"
+	if err := validateConfig(cfg); err != nil {
+		t.Fatalf("expected no error for bedrock type with API key, got: %v", err)
+	}
+}
+
+func TestValidateConfig_BedrockMissingRegion(t *testing.T) {
+	cfg := validConfig()
+	cfg.Models[0].Type = BackendBedrock
+	cfg.Models[0].Backend = "https://bedrock-runtime.us-east-1.amazonaws.com"
+	cfg.Models[0].APIKey = "bdrk-key"
+	err := validateConfig(cfg)
+	if err == nil || !strings.Contains(err.Error(), "region") {
+		t.Fatalf("expected region required error, got: %v", err)
+	}
+}
+
+func TestValidateConfig_BedrockMissingCredentials(t *testing.T) {
+	cfg := validConfig()
+	cfg.Models[0].Type = BackendBedrock
+	cfg.Models[0].Backend = "https://bedrock-runtime.us-east-1.amazonaws.com"
+	cfg.Models[0].Region = "us-east-1"
+	err := validateConfig(cfg)
+	if err == nil || !strings.Contains(err.Error(), "api_key") {
+		t.Fatalf("expected credentials required error, got: %v", err)
+	}
+}
+
+func TestValidateConfig_BedrockMissingSecretKey(t *testing.T) {
+	cfg := validConfig()
+	cfg.Models[0].Type = BackendBedrock
+	cfg.Models[0].Backend = "https://bedrock-runtime.us-east-1.amazonaws.com"
+	cfg.Models[0].Region = "us-east-1"
+	cfg.Models[0].AWSAccessKey = "AKIAEXAMPLE"
+	err := validateConfig(cfg)
+	if err == nil || !strings.Contains(err.Error(), "aws_secret_key") {
+		t.Fatalf("expected secret key required error, got: %v", err)
+	}
+}
+
 func TestValidateConfig_ValidMessagesMode(t *testing.T) {
 	for _, mode := range []string{"", "auto", "native", "translate"} {
 		cfg := validConfig()

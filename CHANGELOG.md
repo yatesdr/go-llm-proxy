@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.3.7
+
+### Added
+- **AWS Bedrock backend** — new `type: bedrock` model type proxies to Bedrock's Converse / ConverseStream API. Both `/v1/messages` (Anthropic-protocol clients) and `/v1/chat/completions` (OpenAI-protocol clients) work end-to-end against the same Bedrock-hosted model — the proxy translates each client shape to Converse, signs the request, then translates the response back. Streaming, tool calls, vision (data URLs), and reasoning content are supported in both directions. Configured per model with `region` plus either `api_key` (Bedrock API key — bearer auth) or `aws_access_key` + `aws_secret_key` (IAM credentials, falling back to `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN` env vars). Backend URL auto-derives from the region; override only for VPC endpoints.
+- **Hand-rolled SigV4 signer** (`internal/awsauth`) — implements AWS Signature Version 4 for Bedrock requests. Validated against the canonical AWS-published signing-key derivation vector. No AWS SDK dependency; the implementation is ~330 lines.
+- **AWS event-stream decoder** (`internal/awsstream`) — parses `application/vnd.amazon.eventstream` binary frames (prelude + headers + payload + CRC32) used by Bedrock streaming responses. Powers the streaming bridges that translate Bedrock events into Anthropic SSE and OpenAI Chat Completions SSE.
+- **Inference-profile model IDs** — Bedrock cross-region inference profile IDs (e.g. `us.anthropic.claude-sonnet-4-20250514-v1:0`) are accepted unchanged as the `model` field; the proxy URL-escapes them correctly for both the request path and SigV4 canonical URI.
+- **Documentation** — new "Bedrock backends" section in `docs/config-reference.md` covering both auth styles, field reference, and notes on vision / tools / reasoning. `config.yaml.example` includes a commented Bedrock entry.
+
+### Changed
+- `type` field in model config now accepts `bedrock` in addition to `openai` and `anthropic`. Unknown types still error out.
+- `/v1/responses` returns a 400 with a helpful pointer (`use /v1/chat/completions or /v1/messages`) when targeted at a Bedrock-typed model — the Responses API has no Converse equivalent.
+
 ## v0.3.6
 
 ### Added

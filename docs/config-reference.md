@@ -36,7 +36,7 @@ models:
 | `api_key` | no | — | Token sent upstream (`Bearer` for OpenAI, `x-api-key` for Anthropic) |
 | `model` | no | same as `name` | Model name sent to the backend (for rewriting) |
 | `timeout` | no | `300` | Request timeout in seconds |
-| `type` | no | `"openai"` | Backend protocol: `"openai"` or `"anthropic"` |
+| `type` | no | `"openai"` | Backend protocol: `"openai"`, `"anthropic"`, or `"bedrock"` (see [Bedrock backends](#bedrock-backends)) |
 | `responses_mode` | no | `"auto"` | Responses API handling: `"auto"`, `"native"`, or `"translate"` (see [Responses mode](#responses-mode)) |
 | `messages_mode` | no | `"auto"` | Messages API handling: `"auto"`, `"native"`, or `"translate"` (see [Messages mode](#messages-mode)) |
 | `context_window` | no | `0` | Max context tokens. `0` = auto-detect from backend at startup |
@@ -201,6 +201,57 @@ models:
     api_key: your-key
     type: anthropic
 ```
+
+## Bedrock backends
+
+`type: bedrock` routes requests to AWS Bedrock's [Converse API](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html). Both Anthropic-style (`/v1/messages`) and OpenAI-style (`/v1/chat/completions`) clients are supported — the proxy translates each into Converse, signs the request, and translates the response back to whatever shape the client speaks. Streaming and tool calls work end-to-end in both directions.
+
+The Responses API (`/v1/responses`) is **not** supported for Bedrock; clients hit those endpoints will receive a 400 with a pointer to `/v1/chat/completions` or `/v1/messages`.
+
+### Authentication
+
+Bedrock supports two auth styles. Pick whichever fits your deployment.
+
+**Bedrock API key (simplest).** Set `api_key` to a Bedrock-issued key (introduced 2025; mint via the Bedrock console). The proxy sends it as a bearer token — no SigV4 signing.
+
+```yaml
+- name: claude-sonnet-4-bedrock
+  type: bedrock
+  region: us-east-1
+  model: us.anthropic.claude-sonnet-4-20250514-v1:0
+  api_key: bdrk-...
+```
+
+**IAM static credentials (SigV4).** Set `aws_access_key` + `aws_secret_key`, or omit them and the proxy reads `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` from the environment. Each request is signed with SigV4.
+
+```yaml
+- name: claude-sonnet-4-bedrock
+  type: bedrock
+  region: us-east-1
+  model: us.anthropic.claude-sonnet-4-20250514-v1:0
+  aws_access_key: AKIA...
+  aws_secret_key: ...
+  # aws_session_token: ...   # optional, for STS temporary credentials
+```
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `region` | yes | — | AWS region, e.g. `us-east-1` |
+| `model` | yes | — | Bedrock model ID or inference profile (e.g. `us.anthropic.claude-sonnet-4-20250514-v1:0`) |
+| `backend` | no | `https://bedrock-runtime.<region>.amazonaws.com` | Override only for VPC endpoints |
+| `api_key` | one of | — | Bedrock API key (bearer auth, no SigV4) |
+| `aws_access_key` | one of | env `AWS_ACCESS_KEY_ID` | IAM access key ID for SigV4 |
+| `aws_secret_key` | one of | env `AWS_SECRET_ACCESS_KEY` | IAM secret for SigV4 |
+| `aws_session_token` | no | env `AWS_SESSION_TOKEN` | STS session token if using temporary credentials |
+
+Either `api_key` OR (`aws_access_key` + `aws_secret_key`) is required. `messages_mode` and `responses_mode` have no effect on Bedrock backends — the wire protocol is always Converse.
+
+### Notes
+
+- **Inference profiles** (cross-region routing IDs like `us.anthropic.claude-sonnet-4-20250514-v1:0`) work as the `model` value; the proxy URL-escapes them correctly for SigV4.
+- **Vision** works natively for Anthropic models on Bedrock — image content blocks (Anthropic-style) and `image_url` data: URLs (OpenAI-style) are both translated to Converse `image` blocks. Remote `https://` image URLs are dropped (Bedrock does not fetch external images).
+- **Tools** translate in both directions, including streaming tool-call deltas.
+- **Reasoning** (`reasoningContent`) from Claude is preserved: as `thinking` blocks for Anthropic clients, and as the non-standard `reasoning` field for OpenAI clients.
 
 ## Responses mode
 
