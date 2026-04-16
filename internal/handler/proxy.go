@@ -138,7 +138,7 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(model.Timeout)*time.Second)
 		defer cancel()
-		p.handleBedrockChat(ctx, w, body, modelName, model, keyName, keyHash, time.Now())
+		p.handleBedrockChat(ctx, w, body, modelName, model, keyName, keyHash, r.Header.Get("X-Request-ID"), time.Now())
 		return
 	}
 

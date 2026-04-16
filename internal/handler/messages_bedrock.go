@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"go-llm-proxy/internal/api"
-	"go-llm-proxy/internal/awsauth"
 	"go-llm-proxy/internal/config"
 	"go-llm-proxy/internal/httputil"
 )
@@ -21,6 +20,12 @@ import (
 // response is translated back to the Anthropic Messages shape — non-streaming
 // as a JSON document, streaming as Anthropic SSE events.
 //
+// Known limitation: if the caller's SigV4 temporary credentials expire
+// mid-stream, the in-flight request is not re-signed. AWS STS creds live
+// ≥15 min; connections that outlive them surface as a client-visible
+// disconnect/reconnect. A mid-flight refresh would require re-forming the
+// entire signed request and is not worth the complexity for an uncommon edge.
+//
 // Pipeline pre-processors (vision, PDF) are not invoked here: Bedrock-hosted
 // Claude models support vision and document blocks natively via Converse.
 // If a future use case requires the pipeline (e.g. routing PDFs through a
@@ -29,18 +34,21 @@ import (
 func (h *MessagesHandler) handleBedrock(
 	ctx context.Context, w http.ResponseWriter,
 	body []byte, req messagesRequest, model *config.ModelConfig,
-	keyName, keyHash string, startTime time.Time,
+	keyName, keyHash, requestID string, startTime time.Time,
 ) {
-	slog.Info("proxying messages request (bedrock)", "model", req.Model, "key", keyName, "stream", req.Stream)
+	slog.Info("proxying messages request (bedrock)",
+		"model", req.Model, "key", keyName, "stream", req.Stream, "request_id", requestID)
 
 	converseReq, err := buildConverseRequestFromAnthropic(req)
 	if err != nil {
-		slog.Error("bedrock translation failed", "model", req.Model, "error", err)
+		slog.Error("bedrock translation failed",
+			"model", req.Model, "error", err, "request_id", requestID)
 		httputil.WriteAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "request translation failed")
 		return
 	}
 
 	applyConverseSamplingDefaults(converseReq, model)
+	applyGuardrails(converseReq, model)
 
 	converseBody, err := json.Marshal(converseReq)
 	if err != nil {
@@ -50,9 +58,13 @@ func (h *MessagesHandler) handleBedrock(
 
 	upReq, err := prepareBedrockRequest(ctx, model, converseBody, req.Stream, time.Now())
 	if err != nil {
-		slog.Error("bedrock request build failed", "model", req.Model, "error", err)
+		slog.Error("bedrock request build failed",
+			"model", req.Model, "error", err, "request_id", requestID)
 		httputil.WriteAnthropicError(w, http.StatusInternalServerError, "api_error", "invalid backend configuration")
 		return
+	}
+	if requestID != "" {
+		upReq.Header.Set("X-Request-ID", requestID)
 	}
 
 	resp, err := h.client.Do(upReq)
@@ -61,7 +73,8 @@ func (h *MessagesHandler) handleBedrock(
 			httputil.WriteAnthropicError(w, http.StatusGatewayTimeout, "api_error", "upstream request timed out")
 			return
 		}
-		slog.Error("bedrock upstream request failed", "error", err, "model", req.Model)
+		slog.Error("bedrock upstream request failed",
+			"error", err, "model", req.Model, "request_id", requestID)
 		httputil.WriteAnthropicError(w, http.StatusBadGateway, "api_error", "upstream request failed")
 		return
 	}
@@ -69,17 +82,20 @@ func (h *MessagesHandler) handleBedrock(
 
 	if resp.StatusCode >= 400 {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, api.MaxResponseBodySize))
+		clientStatus, errType, publicMsg, upstreamType, scrubbed := classifyBedrockError(resp.StatusCode, errBody)
+
+		// INFO: short, always-safe summary — category only, no upstream detail.
 		slog.Error("bedrock returned error",
-			"model", req.Model, "status", resp.StatusCode,
-			"body", awsauth.ScrubAWSErrorBody(errBody))
-		// Sanitized error: never forward raw AWS error bodies to clients —
-		// they may include account IDs, ARNs, request IDs.
-		errMsg := fmt.Sprintf("bedrock returned HTTP %d", resp.StatusCode)
-		if req.Stream {
-			emitBedrockSSEError(w, errMsg)
-		} else {
-			httputil.WriteAnthropicError(w, resp.StatusCode, "api_error", errMsg)
-		}
+			"model", req.Model, "upstream_status", resp.StatusCode,
+			"client_status", clientStatus, "category", errType, "request_id", requestID)
+		// DEBUG (only emitted with -log-debug): full scrubbed context so
+		// operators can trace the upstream failure without the info ever
+		// reaching the client.
+		slog.Debug("bedrock error detail",
+			"model", req.Model, "upstream_type", upstreamType,
+			"scrubbed_body", scrubbed, "request_id", requestID)
+
+		renderBedrockError(w, shapeAnthropic, req.Stream, clientStatus, errType, publicMsg)
 		logUsage(h.usage, usageLogInput{
 			startTime: startTime, statusCode: resp.StatusCode,
 			keyName: keyName, keyHash: keyHash,
@@ -95,7 +111,7 @@ func (h *MessagesHandler) handleBedrock(
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 		w.WriteHeader(http.StatusOK)
-		respBytes, usageData := streamBedrockToAnthropicSSE(w, resp.Body, req.Model)
+		respBytes, usageData := streamBedrockToAnthropicSSE(w, resp.Body, req.Model, requestID)
 		logUsageConverse(h.usage, usageLogInput{
 			startTime: startTime, statusCode: resp.StatusCode,
 			keyName: keyName, keyHash: keyHash,
@@ -113,7 +129,8 @@ func (h *MessagesHandler) handleBedrock(
 
 	out, usageData, err := buildAnthropicResponseFromConverse(respBody, req.Model)
 	if err != nil {
-		slog.Error("bedrock response decode failed", "model", req.Model, "error", err)
+		slog.Error("bedrock response decode failed",
+			"model", req.Model, "error", err, "request_id", requestID)
 		httputil.WriteAnthropicError(w, http.StatusBadGateway, "api_error", "invalid upstream response")
 		return
 	}

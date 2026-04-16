@@ -3,6 +3,8 @@ package handler
 import (
 	"encoding/json"
 	"testing"
+
+	"go-llm-proxy/internal/config"
 )
 
 // --- Request translation: Anthropic -> Converse ---
@@ -310,5 +312,197 @@ func TestMapConverseStopReason(t *testing.T) {
 		if got := mapConverseStopReason(in); got != want {
 			t.Errorf("mapConverseStopReason(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// --- cache_control → cachePoint ---
+
+func TestBuildConverseRequest_CachePointOnSystem(t *testing.T) {
+	req := messagesRequest{
+		MaxTokens: 1024,
+		System:    json.RawMessage(`[{"type":"text","text":"big static prompt"},{"type":"text","text":"cache me","cache_control":{"type":"ephemeral"}}]`),
+		Messages:  []json.RawMessage{json.RawMessage(`{"role":"user","content":"hi"}`)},
+	}
+	got, err := buildConverseRequestFromAnthropic(req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	sys, _ := got["system"].([]map[string]any)
+	if len(sys) != 3 {
+		t.Fatalf("expected 3 system blocks (text, text, cachePoint); got %d: %#v", len(sys), sys)
+	}
+	if _, ok := sys[2]["cachePoint"]; !ok {
+		t.Errorf("last system block should be cachePoint: %#v", sys[2])
+	}
+}
+
+func TestBuildConverseRequest_CachePointOnContentBlock(t *testing.T) {
+	req := messagesRequest{
+		MaxTokens: 1024,
+		Messages: []json.RawMessage{
+			json.RawMessage(`{"role":"user","content":[{"type":"text","text":"big doc"},{"type":"text","text":"cache me","cache_control":{"type":"ephemeral"}},{"type":"text","text":"question"}]}`),
+		},
+	}
+	got, err := buildConverseRequestFromAnthropic(req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	msgs, _ := got["messages"].([]map[string]any)
+	blocks, _ := msgs[0]["content"].([]map[string]any)
+	if len(blocks) != 4 { // text, text, cachePoint, text
+		t.Fatalf("expected 4 blocks (incl. cachePoint); got %d: %#v", len(blocks), blocks)
+	}
+	if _, ok := blocks[2]["cachePoint"]; !ok {
+		t.Errorf("third block should be cachePoint, got %#v", blocks[2])
+	}
+}
+
+func TestBuildConverseRequest_CachePointOnTool(t *testing.T) {
+	req := messagesRequest{
+		MaxTokens: 1024,
+		Tools: []json.RawMessage{
+			json.RawMessage(`{"name":"a","description":"","input_schema":{"type":"object"}}`),
+			json.RawMessage(`{"name":"b","description":"","input_schema":{"type":"object"},"cache_control":{"type":"ephemeral"}}`),
+		},
+		Messages: []json.RawMessage{json.RawMessage(`{"role":"user","content":"hi"}`)},
+	}
+	got, err := buildConverseRequestFromAnthropic(req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	cfg, _ := got["toolConfig"].(map[string]any)
+	tools, _ := cfg["tools"].([]map[string]any)
+	if len(tools) != 3 { // toolSpec, toolSpec, cachePoint
+		t.Fatalf("expected 3 tool entries incl cachePoint; got %d: %#v", len(tools), tools)
+	}
+	if _, ok := tools[2]["cachePoint"]; !ok {
+		t.Errorf("last tool entry should be cachePoint, got %#v", tools[2])
+	}
+}
+
+// --- toolResult.status always explicit ---
+
+func TestBuildConverseRequest_ToolResultStatusAlwaysSet(t *testing.T) {
+	cases := []struct {
+		name     string
+		block    string
+		expected string
+	}{
+		{"success when is_error absent", `{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}`, "success"},
+		{"success when is_error false", `{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":false,"content":"ok"}]}`, "success"},
+		{"error when is_error true", `{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"bad"}]}`, "error"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			req := messagesRequest{MaxTokens: 10, Messages: []json.RawMessage{json.RawMessage(c.block)}}
+			got, err := buildConverseRequestFromAnthropic(req)
+			if err != nil {
+				t.Fatalf("err: %v", err)
+			}
+			msgs, _ := got["messages"].([]map[string]any)
+			blocks, _ := msgs[0]["content"].([]map[string]any)
+			tr, _ := blocks[0]["toolResult"].(map[string]any)
+			if tr["status"] != c.expected {
+				t.Errorf("status: got %v want %q", tr["status"], c.expected)
+			}
+		})
+	}
+}
+
+// --- Thinking signature: never fabricated ---
+
+func TestBuildAnthropicResponse_OmitsEmptySignature(t *testing.T) {
+	body := []byte(`{
+		"output":{"message":{"role":"assistant","content":[
+			{"reasoningContent":{"reasoningText":{"text":"let me think"}}},
+			{"text":"hi"}
+		]}},
+		"stopReason":"end_turn",
+		"usage":{"inputTokens":10,"outputTokens":5}
+	}`)
+	out, _, err := buildAnthropicResponseFromConverse(body, "claude")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	content, _ := out["content"].([]any)
+	if len(content) == 0 {
+		t.Fatal("empty content")
+	}
+	first, _ := content[0].(map[string]any)
+	if first["type"] != "thinking" {
+		t.Fatalf("first block should be thinking, got %v", first)
+	}
+	if _, has := first["signature"]; has {
+		t.Errorf("signature should be omitted when Bedrock sends none; got %v", first["signature"])
+	}
+}
+
+func TestBuildAnthropicResponse_PreservesSignature(t *testing.T) {
+	body := []byte(`{
+		"output":{"message":{"role":"assistant","content":[
+			{"reasoningContent":{"reasoningText":{"text":"t","signature":"abc123"}}},
+			{"text":"hi"}
+		]}},
+		"stopReason":"end_turn",
+		"usage":{"inputTokens":10,"outputTokens":5}
+	}`)
+	out, _, _ := buildAnthropicResponseFromConverse(body, "claude")
+	content, _ := out["content"].([]any)
+	first, _ := content[0].(map[string]any)
+	if first["signature"] != "abc123" {
+		t.Errorf("signature: got %v want abc123", first["signature"])
+	}
+}
+
+// --- Cache metrics propagation ---
+
+func TestBuildAnthropicResponse_CacheMetrics(t *testing.T) {
+	body := []byte(`{
+		"output":{"message":{"role":"assistant","content":[{"text":"hi"}]}},
+		"stopReason":"end_turn",
+		"usage":{"inputTokens":10,"outputTokens":5,"cacheReadInputTokens":120,"cacheWriteInputTokens":40}
+	}`)
+	out, usage, _ := buildAnthropicResponseFromConverse(body, "claude")
+	u, _ := out["usage"].(map[string]any)
+	if u["cache_read_input_tokens"] != 120 {
+		t.Errorf("cache_read: got %v want 120", u["cache_read_input_tokens"])
+	}
+	if u["cache_creation_input_tokens"] != 40 {
+		t.Errorf("cache_creation: got %v want 40", u["cache_creation_input_tokens"])
+	}
+	if usage.CacheReadInput != 120 || usage.CacheWriteInput != 40 {
+		t.Errorf("converseUsage cache fields: %+v", usage)
+	}
+}
+
+// --- Guardrails ---
+
+func TestApplyGuardrails_Noop(t *testing.T) {
+	req := map[string]any{}
+	applyGuardrails(req, &config.ModelConfig{})
+	if _, has := req["guardrailConfig"]; has {
+		t.Error("guardrailConfig should not be set when GuardrailID empty")
+	}
+}
+
+func TestApplyGuardrails_FullConfig(t *testing.T) {
+	req := map[string]any{}
+	applyGuardrails(req, &config.ModelConfig{
+		GuardrailID:      "gid-1",
+		GuardrailVersion: "DRAFT",
+		GuardrailTrace:   "enabled",
+	})
+	cfg, ok := req["guardrailConfig"].(map[string]any)
+	if !ok {
+		t.Fatalf("guardrailConfig missing or wrong shape: %#v", req)
+	}
+	if cfg["guardrailIdentifier"] != "gid-1" {
+		t.Errorf("identifier: %v", cfg["guardrailIdentifier"])
+	}
+	if cfg["guardrailVersion"] != "DRAFT" {
+		t.Errorf("version: %v", cfg["guardrailVersion"])
+	}
+	if cfg["trace"] != "enabled" {
+		t.Errorf("trace: %v", cfg["trace"])
 	}
 }

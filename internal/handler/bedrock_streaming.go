@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"go-llm-proxy/internal/api"
+	"go-llm-proxy/internal/awsauth"
 	"go-llm-proxy/internal/awsstream"
 )
 
@@ -29,7 +30,7 @@ const maxBedrockStreamBytes = api.MaxResponseBodySize
 // This bridge is the streaming counterpart to buildAnthropicResponseFromConverse.
 // The two share no state; deltas are translated event-by-event based on the
 // minimal block-index → block-type map maintained inline.
-func streamBedrockToAnthropicSSE(w http.ResponseWriter, body io.Reader, modelName string) (responseBytes int64, usage *converseUsage) {
+func streamBedrockToAnthropicSSE(w http.ResponseWriter, body io.Reader, modelName, requestID string) (responseBytes int64, usage *converseUsage) {
 	flusher, _ := w.(http.Flusher)
 
 	// Per-frame emit helper, identical pattern to messages_streaming.go.
@@ -81,7 +82,7 @@ func streamBedrockToAnthropicSSE(w http.ResponseWriter, body io.Reader, modelNam
 	for {
 		if responseBytes > maxBedrockStreamBytes {
 			slog.Error("bedrock stream exceeded size limit",
-				"model", modelName, "bytes", responseBytes)
+				"model", modelName, "bytes", responseBytes, "request_id", requestID)
 			emit("error", map[string]any{
 				"error": map[string]any{
 					"type":    "api_error",
@@ -95,7 +96,8 @@ func streamBedrockToAnthropicSSE(w http.ResponseWriter, body io.Reader, modelNam
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			slog.Warn("bedrock stream decode error", "model", modelName, "error", err)
+			slog.Warn("bedrock stream decode error",
+				"model", modelName, "error", err, "request_id", requestID)
 			// Emit an SSE error event so clients see something rather than
 			// a silent truncation, then break.
 			emit("error", map[string]any{
@@ -108,21 +110,25 @@ func streamBedrockToAnthropicSSE(w http.ResponseWriter, body io.Reader, modelNam
 		}
 
 		// Only process event frames; surface exceptions as SSE errors.
+		// The upstream :exception-type header (ThrottlingException, etc.) is
+		// NEVER forwarded to the client — we map to a fixed client vocabulary
+		// and log the real type server-side only.
 		switch msg.MessageType() {
 		case "exception", "error":
-			var payload map[string]any
-			json.Unmarshal(msg.Payload, &payload)
-			errType := msg.HeaderString(":exception-type")
-			if errType == "" {
-				errType = "api_error"
-			}
+			upstreamType := msg.HeaderString(":exception-type")
+			clientErrType, clientMsg := classifyStreamException(shapeAnthropic, upstreamType)
 			emit("error", map[string]any{
 				"error": map[string]any{
-					"type":    errType,
-					"message": fmt.Sprintf("bedrock %s", errType),
+					"type":    clientErrType,
+					"message": clientMsg,
 				},
 			})
-			slog.Error("bedrock stream exception", "type", errType, "payload", payload)
+			slog.Error("bedrock stream exception",
+				"model", modelName, "category", clientErrType, "request_id", requestID)
+			slog.Debug("bedrock stream exception detail",
+				"model", modelName, "upstream_type", upstreamType,
+				"scrubbed_payload", awsauth.ScrubAWSErrorBody(msg.Payload),
+				"request_id", requestID)
 			continue
 		case "event", "":
 			// fall through
@@ -259,17 +265,26 @@ func streamBedrockToAnthropicSSE(w http.ResponseWriter, body io.Reader, modelNam
 			if json.Unmarshal(msg.Payload, &p) == nil && p.StopReason != "" {
 				stopReason = mapConverseStopReason(p.StopReason)
 			}
-			// Defer message_delta until we see metadata so usage is included.
+			// message_delta is emitted once after the loop exits, so the final
+			// stop_reason AND usage (from metadata) are both available
+			// regardless of which of messageStop/metadata arrives first.
 
 		case "metadata":
 			var p struct {
 				Usage struct {
-					InputTokens  int `json:"inputTokens"`
-					OutputTokens int `json:"outputTokens"`
+					InputTokens           int `json:"inputTokens"`
+					OutputTokens          int `json:"outputTokens"`
+					CacheReadInputTokens  int `json:"cacheReadInputTokens"`
+					CacheWriteInputTokens int `json:"cacheWriteInputTokens"`
 				} `json:"usage"`
 			}
 			if json.Unmarshal(msg.Payload, &p) == nil {
-				usage = &converseUsage{Input: p.Usage.InputTokens, Output: p.Usage.OutputTokens}
+				usage = &converseUsage{
+					Input:           p.Usage.InputTokens,
+					Output:          p.Usage.OutputTokens,
+					CacheReadInput:  p.Usage.CacheReadInputTokens,
+					CacheWriteInput: p.Usage.CacheWriteInputTokens,
+				}
 			}
 		}
 	}
@@ -293,17 +308,18 @@ func streamBedrockToAnthropicSSE(w http.ResponseWriter, body io.Reader, modelNam
 		return responseBytes, usage
 	}
 
-	in, out := 0, 0
+	in, out, cacheRead, cacheWrite := 0, 0, 0, 0
 	if usage != nil {
 		in, out = usage.Input, usage.Output
+		cacheRead, cacheWrite = usage.CacheReadInput, usage.CacheWriteInput
 	}
 	emit("message_delta", map[string]any{
 		"delta": map[string]any{"stop_reason": stopReason, "stop_sequence": nil},
 		"usage": map[string]any{
 			"input_tokens":                in,
 			"output_tokens":               out,
-			"cache_creation_input_tokens": 0,
-			"cache_read_input_tokens":     0,
+			"cache_creation_input_tokens": cacheWrite,
+			"cache_read_input_tokens":     cacheRead,
 		},
 	})
 	emit("message_stop", map[string]any{})

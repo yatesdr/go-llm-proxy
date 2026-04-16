@@ -122,7 +122,7 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// messages_mode is not a meaningful knob for Bedrock — it's always
 	// Converse. Implementation lives in messages_bedrock.go.
 	if model.Type == config.BackendBedrock {
-		h.handleBedrock(ctx, w, body, req, model, keyName, keyHash, startTime)
+		h.handleBedrock(ctx, w, body, req, model, keyName, keyHash, r.Header.Get("X-Request-ID"), startTime)
 		return
 	}
 

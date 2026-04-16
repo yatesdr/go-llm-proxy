@@ -226,7 +226,10 @@ func chatContentToText(raw json.RawMessage) string {
 }
 
 // translateChatUserContent converts an OAI user message content (string or
-// array of parts) into Converse content blocks.
+// array of parts) into Converse content blocks. OAI clients that wrap
+// Anthropic-flavored prompt-cache hints (Cursor, Continue, etc.) attach
+// `cache_control` to individual parts; those are rendered as Bedrock
+// cachePoint siblings so the cache semantics survive the translation.
 func translateChatUserContent(raw json.RawMessage) []map[string]any {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil
@@ -246,24 +249,28 @@ func translateChatUserContent(raw json.RawMessage) []map[string]any {
 	for _, p := range parts {
 		var t string
 		json.Unmarshal(p["type"], &t)
+		var emitted map[string]any
 		switch t {
 		case "text", "input_text":
 			var text string
 			if json.Unmarshal(p["text"], &text) == nil && text != "" {
-				out = append(out, map[string]any{"text": text})
+				emitted = map[string]any{"text": text}
 			}
 		case "image_url":
-			if img := translateChatImageURLToConverse(p); img != nil {
-				out = append(out, img)
-			}
+			emitted = translateChatImageURLToConverse(p)
 		case "input_image":
 			// Newer OAI shape (Responses-style) sometimes mirrored in Chat;
 			// support it for forward compat.
-			if img := translateChatImageURLToConverse(p); img != nil {
-				out = append(out, img)
-			}
+			emitted = translateChatImageURLToConverse(p)
 		default:
 			slog.Debug("skipping unsupported chat user content part", "type", t)
+		}
+		if emitted == nil {
+			continue
+		}
+		out = append(out, emitted)
+		if hasAnthropicCachePoint(p) {
+			out = append(out, converseCachePoint())
 		}
 	}
 	return out
@@ -567,7 +574,20 @@ func buildChatResponseFromConverse(body []byte, modelName string) (*api.ChatResp
 			TotalTokens:      resp.Usage.InputTokens + resp.Usage.OutputTokens,
 		},
 	}
-	return out, &converseUsage{Input: resp.Usage.InputTokens, Output: resp.Usage.OutputTokens}, nil
+	// OpenAI extension: surface cached-token counts under prompt_tokens_details
+	// when Bedrock reported them. Omitted entirely when zero to avoid cluttering
+	// responses from cache-uncapable models.
+	if resp.Usage.CacheReadInputTokens > 0 {
+		out.Usage.PromptTokensDetails = &api.PromptTokensDetails{
+			CachedTokens: resp.Usage.CacheReadInputTokens,
+		}
+	}
+	return out, &converseUsage{
+		Input:           resp.Usage.InputTokens,
+		Output:          resp.Usage.OutputTokens,
+		CacheReadInput:  resp.Usage.CacheReadInputTokens,
+		CacheWriteInput: resp.Usage.CacheWriteInputTokens,
+	}, nil
 }
 
 // mapConverseStopReasonToChat maps Bedrock Converse stopReason values to OAI

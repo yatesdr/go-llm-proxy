@@ -84,6 +84,13 @@ type ModelConfig struct {
 	AWSAccessKey    string `yaml:"aws_access_key"`    // IAM access key ID (AKIA...)
 	AWSSecretKey    string `yaml:"aws_secret_key"`    // IAM secret access key
 	AWSSessionToken string `yaml:"aws_session_token"` // optional STS session token
+
+	// Optional Bedrock guardrail configuration. Applied to every request to
+	// this model; per-request override is not supported by design. Trace
+	// accepts "enabled", "disabled", or "enabled_full" per Bedrock API.
+	GuardrailID      string `yaml:"guardrail_id,omitempty"`
+	GuardrailVersion string `yaml:"guardrail_version,omitempty"`
+	GuardrailTrace   string `yaml:"guardrail_trace,omitempty"`
 }
 
 type KeyConfig struct {
@@ -113,6 +120,7 @@ type AppKeyConfig struct {
 // ConfigStore provides thread-safe access to the current config.
 type ConfigStore struct {
 	mu       sync.RWMutex
+	writeMu  sync.Mutex // serializes in-process writes to the config file
 	config   *Config
 	path     string
 	onReload func(*Config) // called after each successful reload (optional)
@@ -326,6 +334,13 @@ func validateConfig(cfg *Config) error {
 			if m.APIKey == "" && (m.AWSAccessKey == "" || m.AWSSecretKey == "") {
 				return fmt.Errorf("model %q (bedrock) requires either api_key (Bedrock API key) or aws_access_key + aws_secret_key (set in config or environment)", m.Name)
 			}
+			// Soft check: cross-region inference profile IDs are prefixed with
+			// a region scope (us., eu., apac., us-gov.). When the prefix and
+			// the configured region obviously disagree, warn at startup —
+			// the request would otherwise fail opaquely at the first call.
+			// Not a hard error: AWS periodically adds new scope prefixes and
+			// we don't want to gate startup on our allowlist keeping up.
+			warnIfCrossRegionProfileMismatch(m.Name, m.Model, m.Region)
 		default:
 			return fmt.Errorf("model %q has unknown type %q (must be %q, %q, or %q)", m.Name, m.Type, BackendOpenAI, BackendAnthropic, BackendBedrock)
 		}
@@ -514,4 +529,43 @@ func (m *ModelConfig) ApplySamplingDefaults(chatReq map[string]any) {
 	if len(applied) > 0 {
 		slog.Debug("applied sampling defaults", "model", m.Name, "params", applied)
 	}
+}
+
+// warnIfCrossRegionProfileMismatch emits a startup warning when a Bedrock
+// cross-region inference profile ID carries a region-scope prefix that
+// obviously disagrees with the configured region.
+//
+// Example: model "eu.anthropic.claude-3-5-sonnet-20241022-v2:0" with region
+// "us-east-1" will fail at first request because the EU profile is only
+// served from EU regions. Catching this at startup turns an opaque 400 into
+// an actionable warning.
+//
+// Deliberately NOT a hard error: AWS adds new scope prefixes periodically
+// (apac., us-gov., future mc-...) and a strict allowlist would make
+// upgrades painful.
+func warnIfCrossRegionProfileMismatch(modelName, modelID, region string) {
+	// Known region-scope prefixes as of 2026-04. Extend as new ones appear.
+	scopes := map[string]string{
+		"us.":     "us-",
+		"eu.":     "eu-",
+		"apac.":   "ap-",
+		"us-gov.": "us-gov-",
+	}
+	for prefix, regionStub := range scopes {
+		if !stringHasPrefix(modelID, prefix) {
+			continue
+		}
+		if !stringHasPrefix(region, regionStub) {
+			slog.Warn("bedrock inference profile region prefix may not match configured region",
+				"model", modelName, "model_id", modelID, "region", region,
+				"expected_region_prefix", regionStub)
+		}
+		return
+	}
+}
+
+// stringHasPrefix is a tiny inlineable helper — pulled out so the warning
+// function above stays readable without pulling in strings just for HasPrefix.
+func stringHasPrefix(s, prefix string) bool {
+	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
 }

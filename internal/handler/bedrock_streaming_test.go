@@ -107,7 +107,7 @@ func TestStreamBedrockToAnthropicSSE_TextOnly(t *testing.T) {
 	})
 
 	w := httptest.NewRecorder()
-	bytes, usage := streamBedrockToAnthropicSSE(w, strings.NewReader(string(stream)), "claude-bedrock")
+	bytes, usage := streamBedrockToAnthropicSSE(w, strings.NewReader(string(stream)), "claude-bedrock", "")
 	if bytes == 0 {
 		t.Fatalf("no bytes written")
 	}
@@ -173,7 +173,7 @@ func TestStreamBedrockToAnthropicSSE_ToolUse(t *testing.T) {
 	})
 
 	w := httptest.NewRecorder()
-	streamBedrockToAnthropicSSE(w, strings.NewReader(string(stream)), "claude-bedrock")
+	streamBedrockToAnthropicSSE(w, strings.NewReader(string(stream)), "claude-bedrock", "")
 	events := parseSSE(t, w.Body.String())
 
 	// Find the tool_use block_start.
@@ -233,7 +233,7 @@ func TestStreamBedrockToAnthropicSSE_Reasoning(t *testing.T) {
 	})
 
 	w := httptest.NewRecorder()
-	streamBedrockToAnthropicSSE(w, strings.NewReader(string(stream)), "claude")
+	streamBedrockToAnthropicSSE(w, strings.NewReader(string(stream)), "claude", "")
 	events := parseSSE(t, w.Body.String())
 
 	// Find the thinking block_start (the first content_block_start after the message_start/ping).
@@ -284,7 +284,7 @@ func TestStreamBedrockToAnthropicSSE_DefensiveBlockClose(t *testing.T) {
 	})
 
 	w := httptest.NewRecorder()
-	streamBedrockToAnthropicSSE(w, strings.NewReader(string(stream)), "claude")
+	streamBedrockToAnthropicSSE(w, strings.NewReader(string(stream)), "claude", "")
 	events := parseSSE(t, w.Body.String())
 
 	// Count starts vs stops.
@@ -304,7 +304,7 @@ func TestStreamBedrockToAnthropicSSE_DefensiveBlockClose(t *testing.T) {
 
 func TestStreamBedrockToAnthropicSSE_NoEventsErrorPath(t *testing.T) {
 	w := httptest.NewRecorder()
-	streamBedrockToAnthropicSSE(w, strings.NewReader(""), "claude")
+	streamBedrockToAnthropicSSE(w, strings.NewReader(""), "claude", "")
 	body := w.Body.String()
 	if !strings.Contains(body, "event: error") {
 		t.Errorf("expected SSE error event for empty stream, got: %q", body)
@@ -321,4 +321,58 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func TestStreamBedrockToAnthropicSSE_ExceptionTypeNotLeakedToClient(t *testing.T) {
+	// Bedrock sends an event-stream exception frame carrying :exception-type.
+	// The stream bridge must map to our fixed vocabulary and must NOT echo
+	// the upstream type name to the client.
+	var buf bytes.Buffer
+	buf.Write(buildEventFrame(t, map[string]string{
+		":message-type":   "exception",
+		":exception-type": "throttlingException",
+	}, []byte(`{"message":"Rate exceeded for arn:aws:bedrock:us-east-2:123456789012:model/claude"}`)))
+
+	w := httptest.NewRecorder()
+	streamBedrockToAnthropicSSE(w, bytes.NewReader(buf.Bytes()), "claude", "req-123")
+	body := w.Body.String()
+
+	forbidden := []string{"throttlingException", "arn:aws", "123456789012"}
+	for _, f := range forbidden {
+		if strings.Contains(body, f) {
+			t.Errorf("SSE payload leaks %q: %s", f, body)
+		}
+	}
+	if !strings.Contains(body, "overloaded_error") {
+		t.Errorf("expected overloaded_error category in SSE payload, got: %s", body)
+	}
+}
+
+func TestStreamBedrockToAnthropicSSE_CacheMetrics(t *testing.T) {
+	stream := buildBedrockStream(t, []struct{ Event, Payload string }{
+		{"messageStart", `{"role":"assistant"}`},
+		{"contentBlockDelta", `{"delta":{"text":"hi"},"contentBlockIndex":0}`},
+		{"messageStop", `{"stopReason":"end_turn"}`},
+		{"metadata", `{"usage":{"inputTokens":10,"outputTokens":2,"cacheReadInputTokens":7,"cacheWriteInputTokens":3}}`},
+	})
+	w := httptest.NewRecorder()
+	streamBedrockToAnthropicSSE(w, strings.NewReader(string(stream)), "claude", "")
+	events := parseSSE(t, w.Body.String())
+
+	var md bedrockSSEEvent
+	for _, e := range events {
+		if e.Name == "message_delta" {
+			md = e
+		}
+	}
+	u, _ := md.Data["usage"].(map[string]any)
+	if u == nil {
+		t.Fatalf("no usage in message_delta: %v", md)
+	}
+	if u["cache_read_input_tokens"].(float64) != 7 {
+		t.Errorf("cache_read_input_tokens: %v", u["cache_read_input_tokens"])
+	}
+	if u["cache_creation_input_tokens"].(float64) != 3 {
+		t.Errorf("cache_creation_input_tokens: %v", u["cache_creation_input_tokens"])
+	}
 }

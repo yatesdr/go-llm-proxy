@@ -26,9 +26,11 @@ import (
 func buildConverseRequestFromAnthropic(req messagesRequest) (map[string]any, error) {
 	out := map[string]any{}
 
-	// System: Anthropic accepts string or array; Converse wants [{text: "..."}].
-	if sys := translateAnthropicSystem(req.System); sys != "" {
-		out["system"] = []map[string]any{{"text": sys}}
+	// System: preserve per-block cache_control breakpoints by building a
+	// Converse content array (text + cachePoint siblings) rather than
+	// flattening to a single string.
+	if sys := translateAnthropicSystemToConverse(req.System); len(sys) > 0 {
+		out["system"] = sys
 	}
 
 	messages, err := translateAnthropicMessagesToConverse(req.Messages)
@@ -119,23 +121,20 @@ func translateAnthropicContentToConverse(content json.RawMessage, role string) [
 		var blockType string
 		json.Unmarshal(b["type"], &blockType)
 
+		var emitted map[string]any
 		switch blockType {
 		case "text":
 			var text string
 			json.Unmarshal(b["text"], &text)
 			if text != "" {
-				out = append(out, map[string]any{"text": text})
+				emitted = map[string]any{"text": text}
 			}
 
 		case "image":
-			if img := translateImageBlockToConverse(b); img != nil {
-				out = append(out, img)
-			}
+			emitted = translateImageBlockToConverse(b)
 
 		case "document":
-			if doc := translateDocumentBlockToConverse(b); doc != nil {
-				out = append(out, doc)
-			}
+			emitted = translateDocumentBlockToConverse(b)
 
 		case "tool_use":
 			var id, name string
@@ -145,13 +144,13 @@ func translateAnthropicContentToConverse(content json.RawMessage, role string) [
 			if len(input) == 0 {
 				input = json.RawMessage("{}")
 			}
-			out = append(out, map[string]any{
+			emitted = map[string]any{
 				"toolUse": map[string]any{
 					"toolUseId": id,
 					"name":      name,
 					"input":     input,
 				},
-			})
+			}
 
 		case "tool_result":
 			var id string
@@ -159,14 +158,15 @@ func translateAnthropicContentToConverse(content json.RawMessage, role string) [
 			json.Unmarshal(b["tool_use_id"], &id)
 			json.Unmarshal(b["is_error"], &isError)
 			toolResultContent := translateToolResultContentToConverse(b["content"])
-			tr := map[string]any{
+			status := "success"
+			if isError {
+				status = "error"
+			}
+			emitted = map[string]any{"toolResult": map[string]any{
 				"toolUseId": id,
 				"content":   toolResultContent,
-			}
-			if isError {
-				tr["status"] = "error"
-			}
-			out = append(out, map[string]any{"toolResult": tr})
+				"status":    status,
+			}}
 
 		case "thinking", "redacted_thinking":
 			// Drop client-supplied thinking from prior turns; Bedrock will
@@ -176,6 +176,74 @@ func translateAnthropicContentToConverse(content json.RawMessage, role string) [
 		default:
 			slog.Debug("skipping unsupported anthropic block type for converse",
 				"type", blockType, "role", role)
+		}
+
+		if emitted == nil {
+			continue
+		}
+		out = append(out, emitted)
+		if hasAnthropicCachePoint(b) {
+			out = append(out, converseCachePoint())
+		}
+	}
+	return out
+}
+
+// hasAnthropicCachePoint reports whether the Anthropic block carries a
+// cache_control directive. Bedrock Converse represents cache breakpoints
+// as a sibling {"cachePoint": ...} block appended AFTER the block being
+// cached, so callers emit the content block first, then this cachePoint.
+func hasAnthropicCachePoint(block map[string]json.RawMessage) bool {
+	cc, ok := block["cache_control"]
+	if !ok {
+		return false
+	}
+	s := strings.TrimSpace(string(cc))
+	return s != "" && s != "null"
+}
+
+// converseCachePoint returns the Bedrock cachePoint sibling block. Bedrock
+// supports a single cache type today ("default"); the type field is always
+// emitted because Converse requires it.
+func converseCachePoint() map[string]any {
+	return map[string]any{"cachePoint": map[string]any{"type": "default"}}
+}
+
+// translateAnthropicSystemToConverse builds a Converse system content array
+// from the Anthropic system field. The Converse shape is identical to a
+// message content array ([{text}, {cachePoint}, {text}, ...]), so cache
+// breakpoints on system blocks are preserved here — unlike the Chat
+// Completions path which flattens system to a single string.
+func translateAnthropicSystemToConverse(system json.RawMessage) []map[string]any {
+	if len(system) == 0 || string(system) == "null" {
+		return nil
+	}
+	var s string
+	if json.Unmarshal(system, &s) == nil {
+		if s == "" {
+			return nil
+		}
+		return []map[string]any{{"text": s}}
+	}
+	var blocks []map[string]json.RawMessage
+	if json.Unmarshal(system, &blocks) != nil {
+		return nil
+	}
+	var out []map[string]any
+	for _, b := range blocks {
+		var blockType string
+		json.Unmarshal(b["type"], &blockType)
+		if blockType != "" && blockType != "text" {
+			continue
+		}
+		var text string
+		json.Unmarshal(b["text"], &text)
+		if text == "" {
+			continue
+		}
+		out = append(out, map[string]any{"text": text})
+		if hasAnthropicCachePoint(b) {
+			out = append(out, converseCachePoint())
 		}
 	}
 	return out
@@ -302,6 +370,10 @@ func translateToolResultContentToConverse(raw json.RawMessage) []map[string]any 
 // are handled by the proxy pipeline, not the backend.
 func translateAnthropicToolsToConverse(tools []json.RawMessage, toolChoice json.RawMessage) map[string]any {
 	var converseTools []map[string]any
+	// Anthropic allows cache_control on individual tools; a cachePoint in
+	// Converse's tools array caches every tool up to (and including) the
+	// preceding toolSpec. We emit the cachePoint immediately after the
+	// annotated tool, matching the Anthropic semantics.
 	for _, raw := range tools {
 		var tool struct {
 			Name        string          `json:"name"`
@@ -323,6 +395,18 @@ func translateAnthropicToolsToConverse(tools []json.RawMessage, toolChoice json.
 			spec["inputSchema"] = map[string]any{"json": json.RawMessage(tool.InputSchema)}
 		}
 		converseTools = append(converseTools, map[string]any{"toolSpec": spec})
+
+		// Re-decode to detect cache_control without mutating the core decode
+		// above (keeps the happy path clean).
+		var cacheProbe struct {
+			CacheControl json.RawMessage `json:"cache_control"`
+		}
+		if json.Unmarshal(raw, &cacheProbe) == nil {
+			s := strings.TrimSpace(string(cacheProbe.CacheControl))
+			if s != "" && s != "null" {
+				converseTools = append(converseTools, converseCachePoint())
+			}
+		}
 	}
 	if len(converseTools) == 0 {
 		return nil
@@ -411,6 +495,27 @@ func applyConverseSamplingDefaults(req map[string]any, model *config.ModelConfig
 	}
 }
 
+// applyGuardrails attaches a guardrailConfig block to the Converse request
+// when the model is configured with a guardrail. A missing GuardrailID is a
+// no-op so this can be called unconditionally from the dispatch handlers.
+//
+// Per-request overrides are intentionally not supported: guardrails are an
+// operator-level safety control, and exposing them to callers would let a
+// caller weaken the policy for their own requests.
+func applyGuardrails(req map[string]any, model *config.ModelConfig) {
+	if model == nil || model.GuardrailID == "" {
+		return
+	}
+	cfg := map[string]any{"guardrailIdentifier": model.GuardrailID}
+	if model.GuardrailVersion != "" {
+		cfg["guardrailVersion"] = model.GuardrailVersion
+	}
+	if model.GuardrailTrace != "" {
+		cfg["trace"] = model.GuardrailTrace
+	}
+	req["guardrailConfig"] = cfg
+}
+
 // --- Response: Bedrock Converse -> Anthropic Messages ---
 
 // converseResponse is a minimal decoder for the non-streaming Converse
@@ -425,9 +530,11 @@ type converseResponse struct {
 	} `json:"output"`
 	StopReason string `json:"stopReason"`
 	Usage      struct {
-		InputTokens  int `json:"inputTokens"`
-		OutputTokens int `json:"outputTokens"`
-		TotalTokens  int `json:"totalTokens"`
+		InputTokens           int `json:"inputTokens"`
+		OutputTokens          int `json:"outputTokens"`
+		TotalTokens           int `json:"totalTokens"`
+		CacheReadInputTokens  int `json:"cacheReadInputTokens"`
+		CacheWriteInputTokens int `json:"cacheWriteInputTokens"`
 	} `json:"usage"`
 	Metrics struct {
 		LatencyMs int64 `json:"latencyMs"`
@@ -454,8 +561,8 @@ func buildAnthropicResponseFromConverse(body []byte, modelName string) (map[stri
 	usage := map[string]any{
 		"input_tokens":                resp.Usage.InputTokens,
 		"output_tokens":               resp.Usage.OutputTokens,
-		"cache_creation_input_tokens": 0,
-		"cache_read_input_tokens":     0,
+		"cache_creation_input_tokens": resp.Usage.CacheWriteInputTokens,
+		"cache_read_input_tokens":     resp.Usage.CacheReadInputTokens,
 	}
 
 	out := map[string]any{
@@ -468,12 +575,23 @@ func buildAnthropicResponseFromConverse(body []byte, modelName string) (map[stri
 		"stop_sequence": nil,
 		"usage":         usage,
 	}
-	return out, &converseUsage{Input: resp.Usage.InputTokens, Output: resp.Usage.OutputTokens}, nil
+	return out, &converseUsage{
+		Input:           resp.Usage.InputTokens,
+		Output:          resp.Usage.OutputTokens,
+		CacheReadInput:  resp.Usage.CacheReadInputTokens,
+		CacheWriteInput: resp.Usage.CacheWriteInputTokens,
+	}, nil
 }
 
+// converseUsage carries per-request token counts extracted from either a
+// non-streaming Converse response or the streaming metadata event. Cache
+// fields are zero when Bedrock did not report them (most models today);
+// they appear on responses from cache-capable models (Claude family).
 type converseUsage struct {
-	Input  int
-	Output int
+	Input           int
+	Output          int
+	CacheReadInput  int
+	CacheWriteInput int
 }
 
 func translateConverseContentToAnthropic(blocks []map[string]json.RawMessage) []any {
@@ -518,17 +636,19 @@ func translateConverseContentToAnthropic(blocks []map[string]json.RawMessage) []
 			if rc.ReasoningText.Text == "" {
 				continue
 			}
-			sig := rc.ReasoningText.Signature
-			if sig == "" {
-				sig = api.RandomID("")
-			}
 			// Insert thinking block before any text/tool_use blocks already
-			// emitted, matching Anthropic's convention.
-			out = append([]any{map[string]any{
-				"type":      "thinking",
-				"thinking":  rc.ReasoningText.Text,
-				"signature": sig,
-			}}, out...)
+			// emitted, matching Anthropic's convention. The signature field
+			// is optional on the Anthropic wire format: if Bedrock didn't
+			// provide one, we omit it rather than fabricate a value that
+			// would fail any downstream signature validation.
+			thinking := map[string]any{
+				"type":     "thinking",
+				"thinking": rc.ReasoningText.Text,
+			}
+			if rc.ReasoningText.Signature != "" {
+				thinking["signature"] = rc.ReasoningText.Signature
+			}
+			out = append([]any{thinking}, out...)
 		}
 	}
 	return out

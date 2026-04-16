@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"go-llm-proxy/internal/api"
-	"go-llm-proxy/internal/awsauth"
 	"go-llm-proxy/internal/config"
 	"go-llm-proxy/internal/httputil"
 )
@@ -19,19 +18,26 @@ import (
 // Bedrock Converse / ConverseStream. It is the OAI counterpart to
 // MessagesHandler.handleBedrock — same upstream protocol, different
 // client-facing shape.
+//
+// Known limitation (shared with handleBedrock): mid-stream credential
+// refresh is not supported. If SigV4 temporary credentials expire while
+// a stream is in flight, the connection will surface as a client-visible
+// disconnect/reconnect.
 func (p *ProxyHandler) handleBedrockChat(
 	ctx context.Context, w http.ResponseWriter,
 	body []byte, modelName string, model *config.ModelConfig,
-	keyName, keyHash string, startTime time.Time,
+	keyName, keyHash, requestID string, startTime time.Time,
 ) {
 	converseReq, parsedReq, err := buildConverseRequestFromChat(body)
 	if err != nil {
-		slog.Error("bedrock chat translation failed", "model", modelName, "error", err)
+		slog.Error("bedrock chat translation failed",
+			"model", modelName, "error", err, "request_id", requestID)
 		httputil.WriteError(w, http.StatusBadRequest, "invalid chat completions request")
 		return
 	}
 
 	applyConverseSamplingDefaults(converseReq, model)
+	applyGuardrails(converseReq, model)
 
 	includeUsage := false
 	if len(parsedReq.StreamOptions) > 0 {
@@ -50,13 +56,17 @@ func (p *ProxyHandler) handleBedrockChat(
 
 	upReq, err := prepareBedrockRequest(ctx, model, converseBody, parsedReq.Stream, time.Now())
 	if err != nil {
-		slog.Error("bedrock request build failed", "model", modelName, "error", err)
+		slog.Error("bedrock request build failed",
+			"model", modelName, "error", err, "request_id", requestID)
 		httputil.WriteError(w, http.StatusInternalServerError, "invalid backend configuration")
 		return
 	}
+	if requestID != "" {
+		upReq.Header.Set("X-Request-ID", requestID)
+	}
 
 	slog.Info("proxying chat completions request (bedrock)",
-		"model", modelName, "key", keyName, "stream", parsedReq.Stream)
+		"model", modelName, "key", keyName, "stream", parsedReq.Stream, "request_id", requestID)
 
 	resp, err := p.client.Do(upReq)
 	if err != nil {
@@ -64,7 +74,8 @@ func (p *ProxyHandler) handleBedrockChat(
 			httputil.WriteError(w, http.StatusGatewayTimeout, "upstream request timed out")
 			return
 		}
-		slog.Error("bedrock upstream request failed", "error", err, "model", modelName)
+		slog.Error("bedrock upstream request failed",
+			"error", err, "model", modelName, "request_id", requestID)
 		httputil.WriteError(w, http.StatusBadGateway, "upstream request failed")
 		return
 	}
@@ -72,15 +83,16 @@ func (p *ProxyHandler) handleBedrockChat(
 
 	if resp.StatusCode >= 400 {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, api.MaxResponseBodySize))
+		clientStatus, errType, publicMsg, upstreamType, scrubbed := classifyBedrockError(resp.StatusCode, errBody)
+
 		slog.Error("bedrock returned error",
-			"model", modelName, "status", resp.StatusCode,
-			"body", awsauth.ScrubAWSErrorBody(errBody))
-		errMsg := fmt.Sprintf("bedrock returned HTTP %d", resp.StatusCode)
-		if parsedReq.Stream {
-			emitChatSSEError(w, errMsg)
-		} else {
-			httputil.WriteError(w, resp.StatusCode, errMsg)
-		}
+			"model", modelName, "upstream_status", resp.StatusCode,
+			"client_status", clientStatus, "category", errType, "request_id", requestID)
+		slog.Debug("bedrock error detail",
+			"model", modelName, "upstream_type", upstreamType,
+			"scrubbed_body", scrubbed, "request_id", requestID)
+
+		renderBedrockError(w, shapeOAI, parsedReq.Stream, clientStatus, errType, publicMsg)
 		logUsage(p.usage, usageLogInput{
 			startTime: startTime, statusCode: resp.StatusCode,
 			keyName: keyName, keyHash: keyHash,
@@ -96,7 +108,7 @@ func (p *ProxyHandler) handleBedrockChat(
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 		w.WriteHeader(http.StatusOK)
-		respBytes, usageData := streamBedrockToChatSSE(w, resp.Body, modelName, includeUsage)
+		respBytes, usageData := streamBedrockToChatSSE(w, resp.Body, modelName, includeUsage, requestID)
 		logUsageConverse(p.usage, usageLogInput{
 			startTime: startTime, statusCode: resp.StatusCode,
 			keyName: keyName, keyHash: keyHash,
@@ -114,7 +126,8 @@ func (p *ProxyHandler) handleBedrockChat(
 
 	chatResp, usageData, err := buildChatResponseFromConverse(respBody, modelName)
 	if err != nil {
-		slog.Error("bedrock response decode failed", "model", modelName, "error", err)
+		slog.Error("bedrock response decode failed",
+			"model", modelName, "error", err, "request_id", requestID)
 		httputil.WriteError(w, http.StatusBadGateway, "invalid upstream response")
 		return
 	}

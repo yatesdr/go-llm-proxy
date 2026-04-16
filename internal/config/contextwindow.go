@@ -236,16 +236,16 @@ func lookupBedrockContextWindow(modelID string) int {
 var bedrockContextWindows = map[string]int{
 	// Anthropic Claude family — 200k unless noted. Claude 3 Opus is older
 	// but still 200k.
-	"anthropic.claude-3-5-sonnet":   200000,
-	"anthropic.claude-3-5-haiku":    200000,
-	"anthropic.claude-3-7-sonnet":   200000,
-	"anthropic.claude-sonnet-4":     200000,
-	"anthropic.claude-opus-4":       200000,
-	"anthropic.claude-3-opus":       200000,
-	"anthropic.claude-3-sonnet":     200000,
-	"anthropic.claude-3-haiku":      200000,
-	"anthropic.claude-v2":           100000,
-	"anthropic.claude-instant":      100000,
+	"anthropic.claude-3-5-sonnet": 200000,
+	"anthropic.claude-3-5-haiku":  200000,
+	"anthropic.claude-3-7-sonnet": 200000,
+	"anthropic.claude-sonnet-4":   200000,
+	"anthropic.claude-opus-4":     200000,
+	"anthropic.claude-3-opus":     200000,
+	"anthropic.claude-3-sonnet":   200000,
+	"anthropic.claude-3-haiku":    200000,
+	"anthropic.claude-v2":         100000,
+	"anthropic.claude-instant":    100000,
 
 	// Amazon Nova family.
 	"amazon.nova-pro":   300000,
@@ -253,24 +253,24 @@ var bedrockContextWindows = map[string]int{
 	"amazon.nova-micro": 128000,
 
 	// Amazon Titan text models.
-	"amazon.titan-text-premier":  32000,
-	"amazon.titan-text-express":  8000,
-	"amazon.titan-text-lite":     4000,
+	"amazon.titan-text-premier": 32000,
+	"amazon.titan-text-express": 8000,
+	"amazon.titan-text-lite":    4000,
 
 	// Meta Llama family.
-	"meta.llama3-70b":  8000,
-	"meta.llama3-8b":   8000,
-	"meta.llama3-1":    128000,
-	"meta.llama3-2":    128000,
-	"meta.llama3-3":    128000,
-	"meta.llama4":      10000000,
+	"meta.llama3-70b": 8000,
+	"meta.llama3-8b":  8000,
+	"meta.llama3-1":   128000,
+	"meta.llama3-2":   128000,
+	"meta.llama3-3":   128000,
+	"meta.llama4":     10000000,
 
 	// Mistral family.
-	"mistral.mistral-7b":        32000,
-	"mistral.mistral-large":     128000,
-	"mistral.mistral-small":     32000,
-	"mistral.mixtral-8x7b":      32000,
-	"mistral.pixtral-large":     128000,
+	"mistral.mistral-7b":    32000,
+	"mistral.mistral-large": 128000,
+	"mistral.mistral-small": 32000,
+	"mistral.mixtral-8x7b":  32000,
+	"mistral.pixtral-large": 128000,
 
 	// Cohere Command family.
 	"cohere.command-r-plus": 128000,
@@ -283,8 +283,8 @@ var bedrockContextWindows = map[string]int{
 	"zai.glm-4.5":       128000,
 
 	// DeepSeek family.
-	"deepseek.r1":  128000,
-	"deepseek.v3":  128000,
+	"deepseek.r1": 128000,
+	"deepseek.v3": 128000,
 }
 
 // detectAnthropic queries GET /v1/models/{model_id} on an Anthropic backend

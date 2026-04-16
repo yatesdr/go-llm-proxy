@@ -1,12 +1,9 @@
 package handler
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/json"
 	"html"
 	"log/slog"
-	"net"
 	"net/http"
 	"strconv"
 
@@ -80,7 +77,7 @@ func (h *UsageDashboardHandler) HandleLogout(w http.ResponseWriter, r *http.Requ
 		Path:     "/usage",
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
-		Secure:   h.isTLS(r),
+		Secure:   requestIsTLS(r, h.rl),
 		MaxAge:   -1,
 	})
 	http.Redirect(w, r, "/usage", http.StatusSeeOther)
@@ -124,33 +121,9 @@ func (h *UsageDashboardHandler) setCookie(w http.ResponseWriter, r *http.Request
 		Path:     "/usage",
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
-		Secure:   h.isTLS(r),
+		Secure:   requestIsTLS(r, h.rl),
 		MaxAge:   int(dashboardSessionTTL.Seconds()),
 	})
-}
-
-// isTLS reports whether the request arrived over TLS. We trust r.TLS
-// directly, and X-Forwarded-Proto only when the request came from a
-// configured trusted proxy — otherwise any client could spoof the header
-// to trick us into setting Secure (or, worse, not setting it).
-func (h *UsageDashboardHandler) isTLS(r *http.Request) bool {
-	if r.TLS != nil {
-		return true
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	if h.rl.IsTrustedProxy(host) && r.Header.Get("X-Forwarded-Proto") == "https" {
-		return true
-	}
-	return false
-}
-
-func constantTimeEqual(a, b string) bool {
-	ah := sha256.Sum256([]byte(a))
-	bh := sha256.Sum256([]byte(b))
-	return hmac.Equal(ah[:], bh[:])
 }
 
 func (h *UsageDashboardHandler) renderLogin(w http.ResponseWriter, errMsg string) {

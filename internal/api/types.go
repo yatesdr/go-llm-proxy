@@ -52,9 +52,17 @@ type ChunkToolFn struct {
 }
 
 type ChunkUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens        int                  `json:"prompt_tokens"`
+	CompletionTokens    int                  `json:"completion_tokens"`
+	TotalTokens         int                  `json:"total_tokens"`
+	PromptTokensDetails *PromptTokensDetails `json:"prompt_tokens_details,omitempty"`
+}
+
+// PromptTokensDetails mirrors OpenAI's extension surfacing cache-hit and
+// other per-prompt-token breakdowns. Emitted by backends (notably Bedrock)
+// that return cached-token metrics; absent otherwise.
+type PromptTokensDetails struct {
+	CachedTokens int `json:"cached_tokens,omitempty"`
 }
 
 // Chat Completions non-streaming response types.

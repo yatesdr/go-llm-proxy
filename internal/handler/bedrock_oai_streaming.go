@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"go-llm-proxy/internal/api"
+	"go-llm-proxy/internal/awsauth"
 	"go-llm-proxy/internal/awsstream"
 )
 
@@ -20,7 +21,7 @@ import (
 //
 // includeUsage controls whether a final usage chunk is emitted before [DONE]
 // — clients pass `stream_options.include_usage=true` to opt in.
-func streamBedrockToChatSSE(w http.ResponseWriter, body io.Reader, modelName string, includeUsage bool) (responseBytes int64, usage *converseUsage) {
+func streamBedrockToChatSSE(w http.ResponseWriter, body io.Reader, modelName string, includeUsage bool, requestID string) (responseBytes int64, usage *converseUsage) {
 	flusher, _ := w.(http.Flusher)
 
 	chunkID := api.RandomID("chatcmpl-")
@@ -83,7 +84,7 @@ func streamBedrockToChatSSE(w http.ResponseWriter, body io.Reader, modelName str
 	for {
 		if responseBytes > maxBedrockStreamBytes {
 			slog.Error("bedrock stream exceeded size limit",
-				"model", modelName, "bytes", responseBytes)
+				"model", modelName, "bytes", responseBytes, "request_id", requestID)
 			emitError("upstream stream exceeded size limit")
 			break
 		}
@@ -92,18 +93,25 @@ func streamBedrockToChatSSE(w http.ResponseWriter, body io.Reader, modelName str
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			slog.Warn("bedrock stream decode error", "model", modelName, "error", err)
+			slog.Warn("bedrock stream decode error",
+				"model", modelName, "error", err, "request_id", requestID)
 			emitError("upstream stream decode error")
 			break
 		}
 
+		// Upstream :exception-type names (ThrottlingException etc.) are
+		// never forwarded to the client — see classifyStreamException.
 		switch msg.MessageType() {
 		case "exception", "error":
-			errType := msg.HeaderString(":exception-type")
-			if errType == "" {
-				errType = "api_error"
-			}
-			emitError(fmt.Sprintf("bedrock %s", errType))
+			upstreamType := msg.HeaderString(":exception-type")
+			_, clientMsg := classifyStreamException(shapeOAI, upstreamType)
+			emitError(clientMsg)
+			slog.Error("bedrock stream exception",
+				"model", modelName, "request_id", requestID)
+			slog.Debug("bedrock stream exception detail",
+				"model", modelName, "upstream_type", upstreamType,
+				"scrubbed_payload", awsauth.ScrubAWSErrorBody(msg.Payload),
+				"request_id", requestID)
 			continue
 		case "event", "":
 			// fall through
@@ -215,12 +223,19 @@ func streamBedrockToChatSSE(w http.ResponseWriter, body io.Reader, modelName str
 		case "metadata":
 			var p struct {
 				Usage struct {
-					InputTokens  int `json:"inputTokens"`
-					OutputTokens int `json:"outputTokens"`
+					InputTokens           int `json:"inputTokens"`
+					OutputTokens          int `json:"outputTokens"`
+					CacheReadInputTokens  int `json:"cacheReadInputTokens"`
+					CacheWriteInputTokens int `json:"cacheWriteInputTokens"`
 				} `json:"usage"`
 			}
 			if json.Unmarshal(msg.Payload, &p) == nil {
-				usage = &converseUsage{Input: p.Usage.InputTokens, Output: p.Usage.OutputTokens}
+				usage = &converseUsage{
+					Input:           p.Usage.InputTokens,
+					Output:          p.Usage.OutputTokens,
+					CacheReadInput:  p.Usage.CacheReadInputTokens,
+					CacheWriteInput: p.Usage.CacheWriteInputTokens,
+				}
 			}
 		}
 	}
@@ -240,11 +255,17 @@ func streamBedrockToChatSSE(w http.ResponseWriter, body io.Reader, modelName str
 
 	// Optional usage chunk: empty choices, usage populated.
 	if includeUsage && usage != nil {
-		emitChunk(nil, &api.ChunkUsage{
+		u := &api.ChunkUsage{
 			PromptTokens:     usage.Input,
 			CompletionTokens: usage.Output,
 			TotalTokens:      usage.Input + usage.Output,
-		})
+		}
+		if usage.CacheReadInput > 0 {
+			u.PromptTokensDetails = &api.PromptTokensDetails{
+				CachedTokens: usage.CacheReadInput,
+			}
+		}
+		emitChunk(nil, u)
 	}
 
 	emitDone()
