@@ -2,7 +2,6 @@ package handler
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 
 	"go-llm-proxy/internal/awsauth"
@@ -128,11 +127,3 @@ func classifyStreamException(shape apiShape, exceptionType string) (errType, pub
 	return "api_error", "upstream stream error"
 }
 
-// bedrockLogSummary builds a short, always-safe log line describing an
-// upstream failure. Use with slog.Error at the call site so INFO-level
-// operators see what category of error occurred without any upstream
-// identifiers.
-func bedrockLogSummary(model, endpoint string, status int, errType string) string {
-	return fmt.Sprintf("bedrock error model=%s endpoint=%s status=%d category=%s",
-		model, endpoint, status, errType)
-}

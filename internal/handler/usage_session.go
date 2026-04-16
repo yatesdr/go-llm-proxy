@@ -25,11 +25,6 @@ const (
 	dashboardSessionTokenSize = 32   // bytes of entropy → 64 hex chars
 )
 
-type dashboardSession struct {
-	token   string
-	expires time.Time
-}
-
 type sessionStore struct {
 	mu       sync.Mutex
 	sessions map[string]time.Time // token → expiry

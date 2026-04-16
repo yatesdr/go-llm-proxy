@@ -155,13 +155,6 @@ func indexOf(s, sub string) int {
 	return -1
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 func usersPageJS() string {
 	return `
 var state = {users: [], allModels: []};

@@ -172,5 +172,3 @@ func runPipelineWithKeepalives(ctx context.Context, w http.ResponseWriter, pl *p
 
 	return result, true, err
 }
-
-// logUsageRecord logs a usage record for both Messages and Responses handlers.

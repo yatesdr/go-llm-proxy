@@ -129,7 +129,7 @@ func translateUserMessage(content json.RawMessage) []map[string]any {
 			userParts = append(userParts, translateImageBlock(block))
 
 		case "document":
-			slog.Info("translating document block", "keys", blockKeys(block))
+			slog.Debug("translating document block", "keys", blockKeys(block))
 			userParts = append(userParts, translateDocumentBlock(block))
 
 		case "tool_result":
@@ -337,7 +337,7 @@ func translateDocumentBlock(block map[string]json.RawMessage) map[string]any {
 		return map[string]any{"type": "text", "text": "[document: could not parse source]"}
 	}
 
-	slog.Info("document block source", "source_type", source.Type,
+	slog.Debug("document block source", "source_type", source.Type,
 		"media_type", source.MediaType, "data_len", len(source.Data))
 
 	// Handle base64 PDFs.
