@@ -336,18 +336,6 @@ func buildImageReplacement(hash string, isToolRole bool, cache *boundedCache, jo
 	return "[Image could not be processed]"
 }
 
-// countImageURLParts counts image_url parts in a content array.
-func countImageURLParts(content []any) int {
-	n := 0
-	for _, part := range content {
-		p, ok := part.(map[string]any)
-		if ok && p["type"] == "image_url" {
-			n++
-		}
-	}
-	return n
-}
-
 // hashImageURL returns a hex-encoded SHA-256 hash of the image URL (or data URL).
 // This is used as the cache key for image descriptions.
 func hashImageURL(imageURL string) string {
