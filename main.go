@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -20,6 +21,13 @@ import (
 	"go-llm-proxy/internal/usage"
 )
 
+// Version is set at build time via -ldflags:
+//
+//	go build -ldflags "-X main.Version=v0.3.8" .
+//
+// When unset (dev builds), defaults to "dev".
+var Version = "dev"
+
 func main() {
 	configPath := flag.String("config", "config.yaml", "path to config file")
 	addUser := flag.Bool("adduser", false, "interactively add a new API key to the config")
@@ -31,7 +39,13 @@ func main() {
 	reportDays := flag.Int("report-days", 30, "number of days to include in reports")
 	usageDBPath := flag.String("usage-db", "", "path to SQLite usage database (overrides config)")
 	logDebug := flag.Bool("log-debug", false, "enable debug-level logging for translation troubleshooting")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("go-llm-proxy", Version)
+		return
+	}
 
 	if *addUser {
 		auth.RunAddUser(*configPath)

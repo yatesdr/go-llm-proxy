@@ -341,6 +341,14 @@ func validateConfig(cfg *Config) error {
 			// Not a hard error: AWS periodically adds new scope prefixes and
 			// we don't want to gate startup on our allowlist keeping up.
 			warnIfCrossRegionProfileMismatch(m.Name, m.Model, m.Region)
+			if m.MessagesMode != "" && m.MessagesMode != "auto" {
+				slog.Warn("messages_mode has no effect on bedrock backends (always translates to Converse)",
+					"model", m.Name, "messages_mode", m.MessagesMode)
+			}
+			if m.ResponsesMode != "" && m.ResponsesMode != "auto" {
+				slog.Warn("responses_mode has no effect on bedrock backends (Responses API is not supported)",
+					"model", m.Name, "responses_mode", m.ResponsesMode)
+			}
 		default:
 			return fmt.Errorf("model %q has unknown type %q (must be %q, %q, or %q)", m.Name, m.Type, BackendOpenAI, BackendAnthropic, BackendBedrock)
 		}

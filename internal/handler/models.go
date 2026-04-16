@@ -29,10 +29,11 @@ func (h *ModelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	key := auth.KeyFromContext(r.Context())
 
 	type modelObj struct {
-		ID      string `json:"id"`
-		Object  string `json:"object"`
-		Created int64  `json:"created"`
-		OwnedBy string `json:"owned_by"`
+		ID            string `json:"id"`
+		Object        string `json:"object"`
+		Created       int64  `json:"created"`
+		OwnedBy       string `json:"owned_by"`
+		ContextWindow int    `json:"context_window,omitempty"`
 	}
 
 	models := make([]modelObj, 0, len(cfg.Models))
@@ -41,10 +42,11 @@ func (h *ModelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		models = append(models, modelObj{
-			ID:      m.Name,
-			Object:  "model",
-			Created: 0,
-			OwnedBy: "organization",
+			ID:            m.Name,
+			Object:        "model",
+			Created:       0,
+			OwnedBy:       "organization",
+			ContextWindow: m.ContextWindow,
 		})
 	}
 
