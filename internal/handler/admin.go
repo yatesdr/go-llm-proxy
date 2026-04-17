@@ -248,7 +248,7 @@ func (h *AdminHandler) renderShell(w http.ResponseWriter, activeTab, title, body
 <div class="header">
   <div class="header-inner">
     <h1>Admin</h1>
-    <nav class="admin-nav">`+tab("users", "Users", "/admin/users")+tab("models", "Models", "/admin/models")+`</nav>
+    <nav class="admin-nav">`+tab("users", "Users", "/admin/users")+tab("models", "Models", "/admin/models")+tab("processors", "Processors", "/admin/processors")+`</nav>
     <form method="POST" action="/admin/logout" style="margin-left:auto">
       <button class="btn-logout" type="submit">Sign out</button>
     </form>
@@ -348,7 +348,8 @@ func adminCSS() string {
 .pill-add{display:inline-block;padding:2px 8px;font-size:.78rem;border:1px dashed #94a3b8;color:#475569;background:transparent;border-radius:12px;cursor:pointer;margin-left:4px}
 .pill-add:hover{border-color:var(--blue);color:var(--blue)}
 .model-input{padding:2px 6px;font-size:.8rem;border:1px solid var(--border);border-radius:10px;width:140px;margin-left:4px;font-family:inherit}
-.row-actions{display:flex;gap:6px;justify-content:flex-end}
+.row-actions{text-align:right;white-space:nowrap}
+.row-actions .action-group{display:inline-flex;gap:6px;align-items:center;vertical-align:middle}
 .flash-bar{padding:10px 14px;border-radius:6px;margin-bottom:14px;font-size:.9rem;font-weight:500;display:none}
 .flash-success{background:var(--green-bg);color:var(--green)}
 .flash-error{background:#fef2f2;color:#b91c1c}
@@ -372,6 +373,9 @@ func adminCSS() string {
 .modal-close:hover{color:var(--text)}
 .section{margin-bottom:18px}
 .section h3{font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid var(--border)}
+.section.section-required h3{color:var(--blue)}
+.section-divider{border:none;border-top:2px dashed var(--border);margin:22px 0 18px;position:relative}
+.section-divider::before{content:"Optional";position:absolute;top:-10px;left:50%;transform:translateX(-50%);background:var(--surface);color:var(--muted);font-size:.68rem;font-weight:700;letter-spacing:.1em;padding:0 12px;text-transform:uppercase}
 .field-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .field-grid .field-full{grid-column:1/-1}
 .field label{display:flex;align-items:center;gap:5px}

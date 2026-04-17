@@ -22,17 +22,15 @@ func DetectContextWindows(cs *ConfigStore) {
 
 	for i := range cfg.Models {
 		m := &cfg.Models[i]
-		if m.ContextWindow > 0 {
-			// Already set in config — skip detection.
-			slog.Info("context window configured",
-				"model", m.Name, "context_window", m.ContextWindow)
-			continue
-		}
-		go detectOne(client, cs, m.Name, m.Backend, m.Model, m.APIKey, m.Type)
+		go detectOne(client, cs, m.Name, m.Backend, m.Model, m.APIKey, m.Type, m.ContextWindow)
 	}
 }
 
-func detectOne(client *http.Client, cs *ConfigStore, name, backend, modelID, apiKey, backendType string) {
+// detectOne runs backend detection for a single model. Detection wins when it
+// returns a positive value (the live backend is more authoritative than a
+// hand-edited config). The configured value is the fallback: if detection
+// errors or returns 0, whatever was in config.yaml is left in place.
+func detectOne(client *http.Client, cs *ConfigStore, name, backend, modelID, apiKey, backendType string, configured int) {
 	var ctxWindow int
 	var err error
 
@@ -41,30 +39,34 @@ func detectOne(client *http.Client, cs *ConfigStore, name, backend, modelID, api
 		ctxWindow, err = detectAnthropic(client, backend, modelID, apiKey)
 	case BackendBedrock:
 		// Bedrock has no API endpoint that returns model context window;
-		// the control plane (GetFoundationModel / GetInferenceProfile)
-		// reports modality and region info but not max tokens. Fall back
-		// to a lookup table of well-known model-ID prefixes. If the model
-		// isn't in the table, return 0 quietly — the backend will reject
-		// over-limit requests, and operators can set context_window
-		// explicitly in config.
+		// GetFoundationModel reports modality/region but not max tokens,
+		// and Mantle's OpenAI-compatible /v1/models omits it too. Fall
+		// back to a lookup table of well-known model-ID prefixes. On a
+		// miss we leave detection empty and let the configured value
+		// stand.
 		ctxWindow = lookupBedrockContextWindow(modelID)
-		if ctxWindow == 0 {
-			slog.Debug("bedrock model has no known context window; set context_window in config",
-				"model", name, "bedrock_model_id", modelID)
-			return
-		}
 	default:
 		ctxWindow, err = detectOpenAI(client, backend, modelID, apiKey)
 	}
 
 	if err != nil {
-		slog.Warn("failed to detect context window",
-			"model", name, "backend", backend, "error", err)
+		if configured > 0 {
+			slog.Info("context window detection failed; keeping configured value",
+				"model", name, "configured", configured, "error", err)
+		} else {
+			slog.Warn("failed to detect context window",
+				"model", name, "backend", backend, "error", err)
+		}
 		return
 	}
 	if ctxWindow <= 0 {
-		slog.Warn("backend did not report context window",
-			"model", name, "backend", backend)
+		if configured > 0 {
+			slog.Info("context window not reported by backend; keeping configured value",
+				"model", name, "configured", configured)
+		} else {
+			slog.Debug("backend did not report context window; set context_window in config",
+				"model", name, "backend", backend)
+		}
 		return
 	}
 
@@ -79,8 +81,17 @@ func detectOne(client *http.Client, cs *ConfigStore, name, backend, modelID, api
 	}
 	cs.mu.Unlock()
 
-	slog.Info("detected context window",
-		"model", name, "context_window", ctxWindow)
+	switch {
+	case configured > 0 && configured != ctxWindow:
+		slog.Info("detected context window overrides configured value",
+			"model", name, "configured", configured, "detected", ctxWindow)
+	case configured > 0:
+		slog.Info("detected context window matches configured value",
+			"model", name, "context_window", ctxWindow)
+	default:
+		slog.Info("detected context window",
+			"model", name, "context_window", ctxWindow)
+	}
 }
 
 // detectOpenAI queries GET /models on an OpenAI-compatible backend and
@@ -222,12 +233,19 @@ func lookupBedrockContextWindow(modelID string) int {
 			break
 		}
 	}
+	// Longest-prefix-match: map iteration order is random in Go, so iterating
+	// until the first hit can pick "cohere.command" (4000) over the longer
+	// "cohere.command-r-plus" (128000) for the same model ID. Walk every
+	// entry and keep the longest match.
+	var bestPrefix string
+	var best int
 	for prefix, ctx := range bedrockContextWindows {
-		if strings.HasPrefix(trimmed, prefix) {
-			return ctx
+		if strings.HasPrefix(trimmed, prefix) && len(prefix) > len(bestPrefix) {
+			bestPrefix = prefix
+			best = ctx
 		}
 	}
-	return 0
+	return best
 }
 
 // Keyed by Bedrock model-ID prefix (longest match wins — but we iterate

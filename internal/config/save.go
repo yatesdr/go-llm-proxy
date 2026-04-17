@@ -488,6 +488,9 @@ func modelReferrers(cfg *Config, name string) []string {
 	if cfg.Processors.Vision == name {
 		refs = append(refs, "processors.vision")
 	}
+	if cfg.Processors.Audio == name {
+		refs = append(refs, "processors.audio")
+	}
 	if cfg.Processors.OCR == name {
 		refs = append(refs, "processors.ocr")
 	}
@@ -536,10 +539,55 @@ func stripModelReferences(root *yaml.Node, modelName string) {
 		if v := findMappingValue(procs, "vision"); v != nil && v.Value == modelName {
 			deleteMappingValue(procs, "vision")
 		}
+		if v := findMappingValue(procs, "audio"); v != nil && v.Value == modelName {
+			deleteMappingValue(procs, "audio")
+		}
 		if v := findMappingValue(procs, "ocr"); v != nil && v.Value == modelName {
 			deleteMappingValue(procs, "ocr")
 		}
 	}
+}
+
+// UpdateProcessors replaces the global processors block. Empty strings clear
+// the corresponding field; "none" is preserved for OCR which uses it as a
+// sentinel for "disable per-model fallback to vision."
+func (cs *ConfigStore) UpdateProcessors(p ProcessorsConfig) error {
+	cur := cs.Get()
+	names := make(map[string]bool, len(cur.Models))
+	for _, m := range cur.Models {
+		names[m.Name] = true
+	}
+	if p.Vision != "" && !names[p.Vision] {
+		return fmt.Errorf("vision processor references unknown model %q", p.Vision)
+	}
+	if p.Audio != "" && p.Audio != "none" && !names[p.Audio] {
+		return fmt.Errorf("audio processor references unknown model %q", p.Audio)
+	}
+	if p.OCR != "" && p.OCR != "none" && !names[p.OCR] {
+		return fmt.Errorf("ocr processor references unknown model %q", p.OCR)
+	}
+	return cs.mutateYAML(func(root *yaml.Node) error {
+		procs := findMappingValue(root, "processors")
+		if procs == nil {
+			procs = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+			setMappingValue(root, "processors", procs)
+		}
+		if procs.Kind != yaml.MappingNode {
+			return fmt.Errorf("processors section is not a mapping")
+		}
+		writeField := func(key, val string) {
+			if val == "" {
+				deleteMappingValue(procs, key)
+			} else {
+				setMappingValue(procs, key, stringNode(val))
+			}
+		}
+		writeField("vision", p.Vision)
+		writeField("audio", p.Audio)
+		writeField("ocr", p.OCR)
+		writeField("web_search_key", p.WebSearchKey)
+		return nil
+	})
 }
 
 // modelConfigNode renders a ModelConfig as a mapping node, omitting zero-valued
@@ -574,6 +622,9 @@ func modelConfigNode(m ModelConfig) *yaml.Node {
 	}
 	if m.SupportsVision {
 		add("supports_vision", boolNode(true))
+	}
+	if m.SupportsAudio {
+		add("supports_audio", boolNode(true))
 	}
 	if m.ForcePipeline {
 		add("force_pipeline", boolNode(true))

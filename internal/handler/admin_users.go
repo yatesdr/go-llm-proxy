@@ -17,7 +17,7 @@ func (h *AdminHandler) UsersPage(w http.ResponseWriter, r *http.Request) {
 <div class="card">
   <div class="table-wrap">
     <table class="data-table">
-      <thead><tr><th>Name</th><th>Key</th><th>Allowed Models</th><th style="width:120px;text-align:right">Actions</th></tr></thead>
+      <thead><tr><th style="width:220px">Name</th><th style="width:140px">Key</th><th>Allowed Models</th><th style="width:110px;text-align:right">Actions</th></tr></thead>
       <tbody id="usersBody"><tr><td colspan="4" style="text-align:center;color:var(--muted)">Loading…</td></tr></tbody>
     </table>
   </div>
@@ -199,12 +199,12 @@ function renderUserRow(u){
   }
   pills += '<button class="pill-add" onclick="showAddModel(\''+u.key_hash+'\', this)">+ add model…</button>';
   return '<tr data-hash="'+u.key_hash+'">' +
-    '<td><button class="btn-link" onclick="renameUser(\''+u.key_hash+'\', \''+escAttr(u.name)+'\')" title="Rename">'+esc(u.name)+'</button></td>' +
+    '<td class="cell-name" title="'+esc(u.name)+'"><button class="btn-link" onclick="renameUser(\''+u.key_hash+'\', \''+escAttr(u.name)+'\')" title="Rename">'+esc(u.name)+'</button></td>' +
     '<td><code>'+esc(u.masked)+'</code></td>' +
-    '<td>'+pills+'</td>' +
-    '<td class="row-actions">'+
+    '<td class="cell-pills"><div class="pills-scroll">'+pills+'</div></td>' +
+    '<td class="row-actions"><div class="action-group">'+
       '<button class="btn btn-danger btn-sm" onclick="deleteUser(\''+u.key_hash+'\', \''+escAttr(u.name)+'\')">Delete</button>'+
-    '</td></tr>';
+    '</div></td></tr>';
 }
 
 function addUserPrompt(){
@@ -219,7 +219,7 @@ function addUserPrompt(){
       '<strong>New API key for <code>'+esc(j.name)+'</code>:</strong><br>' +
       '<code id="newKeyVal">'+esc(j.key)+'</code>' +
       '<div class="persist-actions">' +
-      '<button class="btn btn-primary btn-sm" type="button" onclick="copyToClipboard(document.getElementById(\\'newKeyVal\\').textContent).then(function(){flash(\\'Copied to clipboard\\',\\'success\\');})">Copy</button>' +
+      '<button class="btn btn-primary btn-sm" type="button" onclick="copyToClipboard(document.getElementById(\'newKeyVal\').textContent).then(function(){flash(\'Copied to clipboard\',\'success\');})">Copy</button>' +
       '<button class="btn btn-secondary btn-sm" type="button" onclick="dismissPersistent()">Dismiss</button>' +
       '<span style="color:var(--muted);font-size:.82rem;align-self:center">This key is shown only once.</span>' +
       '</div>'

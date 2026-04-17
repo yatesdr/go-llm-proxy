@@ -184,6 +184,9 @@ func main() {
 		mux.Handle("GET /admin/models", admin.RequirePage(admin.ModelsPage))
 		mux.Handle("GET /admin/models/data", admin.RequireAPI(admin.ModelsData))
 		mux.Handle("POST /admin/models/mutate", admin.RequireAPI(admin.ModelsMutate))
+		mux.Handle("GET /admin/processors", admin.RequirePage(admin.ProcessorsPage))
+		mux.Handle("GET /admin/processors/data", admin.RequireAPI(admin.ProcessorsData))
+		mux.Handle("POST /admin/processors/mutate", admin.RequireAPI(admin.ProcessorsMutate))
 		slog.Info("admin page enabled at /admin")
 	}
 	mux.Handle("GET /v1/models", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, models)))

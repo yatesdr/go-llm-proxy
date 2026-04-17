@@ -15,8 +15,9 @@ import (
 
 type ProcessorsConfig struct {
 	Vision       string `yaml:"vision"`         // model name for vision processing (empty = disabled)
+	Audio        string `yaml:"audio"`          // model name for audio transcription (empty = disabled; pipeline integration pending)
 	OCR          string `yaml:"ocr"`            // model name for OCR/text extraction from PDF page images (falls back to vision)
-	WebSearchKey string `yaml:"web_search_key"` // Tavily API key (empty = web search disabled)
+	WebSearchKey string `yaml:"web_search_key"` // web search API key — Tavily or Brave (empty = web search disabled)
 }
 
 type Config struct {
@@ -71,6 +72,7 @@ type ModelConfig struct {
 	MessagesMode   string            `yaml:"messages_mode"`   // "auto" (default), "native", or "translate"
 	ContextWindow  int               `yaml:"context_window"`  // max context tokens (0 = auto-detect from backend)
 	SupportsVision bool              `yaml:"supports_vision"` // model handles images natively
+	SupportsAudio  bool              `yaml:"supports_audio"`  // model handles audio (transcription or audio input)
 	ForcePipeline  bool              `yaml:"force_pipeline"`  // run pipeline even on native backends
 	Processors     *ProcessorsConfig `yaml:"processors"`      // per-model processor overrides (nil = use global)
 	Defaults       *SamplingDefaults `yaml:"defaults"`        // default sampling parameters (nil = use backend defaults)
@@ -393,6 +395,13 @@ func validateConfig(cfg *Config) error {
 		}
 	}
 
+	// Validate global audio processor references a defined model.
+	if v := cfg.Processors.Audio; v != "" && v != "none" {
+		if !names[v] {
+			return fmt.Errorf("global processors.audio references unknown model %q", v)
+		}
+	}
+
 	// Validate per-model processor overrides reference defined models.
 	for _, m := range cfg.Models {
 		if m.Processors != nil && m.Processors.Vision != "" && m.Processors.Vision != "none" {
@@ -421,6 +430,16 @@ func validateConfig(cfg *Config) error {
 	for i := range cfg.Models {
 		if visionModels[cfg.Models[i].Name] && !cfg.Models[i].SupportsVision {
 			cfg.Models[i].SupportsVision = true
+		}
+	}
+
+	// Auto-infer SupportsAudio: any model referenced as the global audio
+	// processor obviously handles audio — don't require it to be set twice.
+	if cfg.Processors.Audio != "" && cfg.Processors.Audio != "none" {
+		for i := range cfg.Models {
+			if cfg.Models[i].Name == cfg.Processors.Audio && !cfg.Models[i].SupportsAudio {
+				cfg.Models[i].SupportsAudio = true
+			}
 		}
 	}
 

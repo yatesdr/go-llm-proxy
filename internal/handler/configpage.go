@@ -19,8 +19,10 @@ type modelInfo struct {
 	ID             string `json:"id"`
 	Local          bool   `json:"local"`
 	Protocol       string `json:"protocol"`        // "openai" or "anthropic"
+	Type           string `json:"type"`            // backend type: "openai", "anthropic", "bedrock"
 	ContextWindow  int    `json:"context_window"`  // max tokens (0 = unknown)
 	SupportsVision bool   `json:"supports_vision"` // model handles images natively
+	SupportsAudio  bool   `json:"supports_audio"`  // model handles audio (transcription or audio input)
 }
 
 var privateRanges = []struct{ start, end net.IP }{
@@ -79,7 +81,15 @@ func modelInfoFromConfig(cfg *config.Config) []modelInfo {
 		if m.Type == config.BackendAnthropic {
 			proto = "anthropic"
 		}
-		out = append(out, modelInfo{ID: m.Name, Local: local, Protocol: proto, ContextWindow: m.ContextWindow, SupportsVision: m.SupportsVision})
+		out = append(out, modelInfo{
+			ID:             m.Name,
+			Local:          local,
+			Protocol:       proto,
+			Type:           m.Type,
+			ContextWindow:  m.ContextWindow,
+			SupportsVision: m.SupportsVision,
+			SupportsAudio:  m.SupportsAudio,
+		})
 	}
 	return out
 }
@@ -218,6 +228,7 @@ select:focus,input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 
 .badge-proto-oai{background:#f0fdf4;color:#166534}
 .badge-proto-ant{background:var(--indigo-bg);color:var(--indigo)}
 .badge-vision{background:#dbeafe;color:#1e40af}
+.badge-audio{background:#ede9fe;color:#5b21b6}
 
 /* ---- Checkboxes ---- */
 .checkbox-group{margin-top:6px}
@@ -492,12 +503,18 @@ var PROXY_URL = PROXY_ORIGIN + "/v1";
     var row = document.createElement("tr");
     var badges = "";
     if (m.supports_vision) badges += ' <span class="badge badge-vision">vision</span>';
+    if (m.supports_audio) badges += ' <span class="badge badge-audio">audio</span>';
     var healthStatus = HEALTH[m.id] || { online: true, error: '' };
     var statusClass = healthStatus.online ? 'online' : 'offline';
     var statusText = healthStatus.online ? 'Online' : 'Offline';
-    var safety = m.local
-      ? '<span class="badge badge-safe">Safe for data</span>'
-      : '<span class="badge badge-warn">Warning &mdash; 3rd party</span>';
+    var safety;
+    if (m.local) {
+      safety = '<span class="badge badge-safe" title="Runs on your own infrastructure. No third party sees your data.">Local &mdash; Safe for data</span>';
+    } else if (m.type === 'bedrock') {
+      safety = '<span class="badge badge-safe" title="Hosted by AWS Bedrock. Model provider has no access to your data. AWS does not log or train on prompts. Data stays in the configured region.">Bedrock &mdash; Safe for data</span>';
+    } else {
+      safety = '<span class="badge badge-warn" title="Sent directly to the model provider. Subject to their terms of service.">3rd Party &mdash; Warning</span>';
+    }
     var statusBadge = '<span class="badge badge-' + statusClass + '">' + statusText + '</span>';
     if (!healthStatus.online && healthStatus.error) {
       statusBadge += ' <span class="badge badge-error" title="' + esc(healthStatus.error) + '">Error</span>';
@@ -659,9 +676,14 @@ function buildCheckboxGroup(containerId, selectIds){
     var label=document.createElement("label");
     var cb=document.createElement("input"); cb.type="checkbox"; cb.value=m.id; cb.checked=true;
     label.appendChild(cb);
-    var safety = m.local
-      ? ' <span class="badge badge-safe" style="margin-left:4px">Safe</span>'
-      : ' <span class="badge badge-warn" style="margin-left:4px">3rd party</span>';
+    var safety;
+    if (m.local) {
+      safety = ' <span class="badge badge-safe" style="margin-left:4px">Local</span>';
+    } else if (m.type === 'bedrock') {
+      safety = ' <span class="badge badge-safe" style="margin-left:4px">Bedrock</span>';
+    } else {
+      safety = ' <span class="badge badge-warn" style="margin-left:4px">3rd party</span>';
+    }
     var proto = m.protocol==="anthropic"
       ? ' <span class="badge badge-proto-ant" style="margin-left:4px">Anthropic</span>' : '';
     var span=document.createElement("span");
@@ -1289,7 +1311,9 @@ function genOpenCode(apiKey, tavily){
       macos: unixSteps,
       linux: unixSteps,
       windows: ol([
-        'Save <code>opencode.json</code> to your project root, or globally to:<br><code>%APPDATA%\\opencode\\opencode.json</code>',
+        'Save <code>opencode.json</code> to your project root, or globally. The correct location depends on which OpenCode you run:',
+        '<b>TUI (terminal):</b> <code>%APPDATA%\\opencode\\opencode.json</code>',
+        '<b>GUI (desktop app):</b> <code>%USERPROFILE%\\.config\\opencode\\opencode.json</code>',
         'Launch OpenCode from your project directory.'
       ])
     }
