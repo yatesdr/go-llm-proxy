@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- **Scanned-PDF extraction broken via Anthropic Messages.** `processPDFs` picked exactly one fallback model (OCR if configured, else vision) and called it once. Since paddleOCR-style OCR backends reject raw `data:application/pdf` input (they hallucinate fallback text rather than erroring), every scanned PDF silently failed. Replaced with a three-stage cascade: (1) native text extraction, (2) rasterize PDF to PNG pages → send each page to dedicated OCR model, (3) vision fallback with raw PDF. Rasterization uses `pdftoppm` (poppler-utils) or `gs` (Ghostscript) if available; if neither is installed, stage 2 is skipped and the vision model handles scanned PDFs directly. Added `poppler-utils` to the Docker image.
+- **Tool-role image OCR failure was terminal.** Parallel fix in `processImages`: tool-role images (Codex `view_image` output, screenshots) now cascade OCR → vision. User-role natural photos keep the existing vision-only path — dedicated OCR models hallucinate on photographs and this is explicitly documented in the code.
+- **Failure cache poisoning.** PDF extraction failures were written to `pdfCache.Store` (permanent). Added `boundedCache.StoreWithTTL` and moved all cascade failure placeholders to a 5-minute TTL so transient upstream hiccups no longer permanently block a document.
+- **Cross-API PDF ingestion inconsistency.** Chat Completions and Responses API clients submitting PDFs as `image_url` with `data:application/pdf;base64,...` were silently routed through the vision pipeline (which can't extract text reliably). Added `NormalizePDFDataURLs` which runs before image and PDF processing, converting any PDF data URL into the pipeline-internal `pdf_data` shape that Anthropic's `document` block already produced. Also updated the Responses translator (`responses_translate.go`) to emit `pdf_data` directly for `input_image` parts whose URL is a PDF data URL, so Codex-style clients route correctly from the entry point.
+- **Vision response parser ignored `reasoning_content`.** `describeImage` read only `message.content`; reasoning-model vision backends (e.g., Qwen3-VL variants that thought before answering) would emit an empty `content` with the actual description in `reasoning_content`, especially when `finish_reason=length` truncated the response mid-thinking. The proxy treated that as a failed vision call and the cascade collapsed. Now falls back to `reasoning_content` when `content` is empty, with a debug log line recording which field was used. Found during live testing against Qwen3-27B-VL — scanned-PDF cascade was hitting the vision model successfully, the model was producing correct page transcriptions, and the proxy was discarding them because they arrived in the wrong response field.
+
+### Changed
+
+- **Pipeline output uses XML-like tags** so target models don't conflate pipeline-injected content with user-authored text. `[Image description: ...]` → `<image_description>...</image_description>`; `[Page text: ...]` → `<page_text>...</page_text>`; `[PDF: foo.pdf]\n\n...` → `<pdf_content filename="foo.pdf" source="text|ocr|vision">\n...\n</pdf_content>`. Failure strings (`[Image could not be processed]`, `[PDF content could not be extracted]`) are unchanged. **Breaking for any downstream consumer that parsed the old bracket format** — this is an internal injection pipeline so no public schema is involved, but operators with custom logging/parsing on these strings should update.
+
+### Verified
+
+- Full unit test suite (`go test -race ./...`) green across all packages.
+- New cascade tests cover: OCR success + vision not called; OCR empty → vision rescues; OCR error → vision rescues; both fail → TTL-cached placeholder; single-processor configuration does not duplicate calls; user-role images never hit OCR.
+- Cross-API normalization tested for Anthropic Messages (`document`), Chat Completions (`image_url` with PDF data URL), and Responses API (`input_image` with PDF data URL).
+
 ## v0.3.8
 
 ### Security

@@ -266,6 +266,7 @@ func (h *AdminHandler) renderShell(w http.ResponseWriter, activeTab, title, body
 func adminClientJS() string {
 	return `
 function esc(s){var d=document.createElement("div");d.textContent=s==null?"":String(s);return d.innerHTML;}
+function escAttr(s){ return String(s).replace(/'/g, "\\'"); }
 function flash(msg, kind){
   var bar = document.getElementById("flashBar");
   if(!bar){
@@ -333,6 +334,8 @@ func adminCSS() string {
 .admin-tab.active{background:var(--blue);color:#fff}
 .toolbar{display:flex;align-items:center;gap:10px;margin-bottom:14px}
 .toolbar h2{margin:0;flex:1}
+.btn-link{background:transparent;border:none;color:var(--blue);cursor:pointer;padding:0;font-size:inherit;font-weight:600;font-family:inherit;text-decoration:none}
+.btn-link:hover{text-decoration:underline}
 .btn-secondary{background:var(--surface);color:var(--text);border:1px solid var(--border)}
 .btn-secondary:hover{background:#f1f5f9}
 .btn-danger{background:#dc2626;color:#fff}

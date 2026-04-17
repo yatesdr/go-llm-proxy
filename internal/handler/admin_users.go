@@ -207,8 +207,6 @@ function renderUserRow(u){
     '</td></tr>';
 }
 
-function escAttr(s){ return String(s).replace(/'/g, "\\'"); }
-
 function addUserPrompt(){
   var name = prompt("Name for the new user / key:");
   if(!name) return;

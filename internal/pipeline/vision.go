@@ -38,6 +38,11 @@ const maxImagesPerRequest = 10
 // maxConcurrentVision limits how many concurrent vision model calls are made.
 const maxConcurrentVision = 5
 
+// imageFailureTTL is how long a failed image extraction is cached. Short
+// enough to allow retry after transient upstream issues, long enough to
+// prevent re-running the full cascade on every turn for the same image.
+const imageFailureTTL = 5 * time.Minute
+
 // Vision prompts — the describe prompt is for general images; the OCR prompt is
 // for PDF page images where text extraction is more useful than visual description.
 // The short OCR prompt is for dedicated OCR models (e.g., PaddleOCR-VL) that
@@ -82,9 +87,16 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 	type imageJob struct {
 		url       string
 		cacheKey  string // hash + ":v" or ":o"
+		failKey   string // hash + ":fail" — TTL'd sentinel used to short-circuit retries
 		prompt    string
 		maxTokens int
 		model     *config.ModelConfig
+		// Fallback stage: used by the tool-role OCR→vision cascade. When the
+		// primary model fails or returns empty, retry with fallbackModel
+		// using fallbackPrompt. Zero-valued when no cascade is needed (user-role
+		// images, or deployments with only one processor configured).
+		fallbackModel  *config.ModelConfig
+		fallbackPrompt string
 	}
 	var jobs []imageJob
 	seenKeys := map[string]bool{}
@@ -132,24 +144,42 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 			hash := hashImageURL(url)
 
 			if isToolRole {
-				// Tool-role images (PDF pages, screenshots): OCR only.
+				// Tool-role images (PDF pages, screenshots): OCR → vision cascade.
 				ocrKey := hash + ":o"
+				failKey := hash + ":fail"
 				if _, ok := imageCache.Load(ocrKey); ok {
+					continue
+				}
+				if _, ok := imageCache.Load(failKey); ok {
+					// Recent failure still cached — skip until TTL expires.
 					continue
 				}
 				if seenKeys[ocrKey] {
 					continue
 				}
 				seenKeys[ocrKey] = true
-				ocrMdl := visionModel
-				ocrPrompt := visionPromptOCR
+
+				// Primary: dedicated OCR model if configured; else vision w/
+				// OCR-style prompt (matches pre-cascade behavior).
+				primary := visionModel
+				primaryPrompt := visionPromptOCR
 				if ocrModel != nil {
-					ocrMdl = ocrModel
-					ocrPrompt = ocrModelPrompt
+					primary = ocrModel
+					primaryPrompt = ocrModelPrompt
+				}
+				// Fallback: vision model, but only if it's a different instance
+				// than the primary. Avoids double-calling the same backend when
+				// the operator configured only one processor.
+				var fallbackMdl *config.ModelConfig
+				fallbackPrompt := ""
+				if visionModel != nil && primary != nil && visionModel.Name != primary.Name {
+					fallbackMdl = visionModel
+					fallbackPrompt = visionPromptOCR
 				}
 				jobs = append(jobs, imageJob{
-					url: url, cacheKey: ocrKey,
-					prompt: ocrPrompt, maxTokens: 2000, model: ocrMdl,
+					url: url, cacheKey: ocrKey, failKey: failKey,
+					prompt: primaryPrompt, maxTokens: 2000, model: primary,
+					fallbackModel: fallbackMdl, fallbackPrompt: fallbackPrompt,
 				})
 			} else {
 				// User-role images: vision description only.
@@ -186,16 +216,38 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 				sem <- struct{}{}
 				defer func() { <-sem }()
 				desc, err := p.describeImage(ctx, j.model, j.url, j.prompt, j.maxTokens)
+				// Cascade: if the primary attempt failed or came back empty,
+				// and a fallback is configured, retry with the fallback.
+				if (err != nil || strings.TrimSpace(desc) == "") && j.fallbackModel != nil {
+					slog.Warn("image pipeline stage failed, trying fallback",
+						"stage", "primary",
+						"primary_model", j.model.Name,
+						"fallback_model", j.fallbackModel.Name,
+						"error", err)
+					desc, err = p.describeImage(ctx, j.fallbackModel, j.url, j.fallbackPrompt, j.maxTokens)
+					if err == nil && strings.TrimSpace(desc) != "" {
+						slog.Info("image pipeline fallback succeeded",
+							"fallback_model", j.fallbackModel.Name)
+					}
+				}
 				results[idx] = jobResult{desc: desc, err: err}
 			}(i, job)
 		}
 		wg.Wait()
 
-		// Cache successful results.
+		// Cache successful results permanently; failures short-TTL.
 		for i, r := range results {
-			if r.err != nil {
-				slog.Warn("failed to process image",
-					"model", jobs[i].model.Name, "cache_key", jobs[i].cacheKey, "error", r.err)
+			if r.err != nil || strings.TrimSpace(r.desc) == "" {
+				if r.err != nil {
+					slog.Warn("failed to process image",
+						"model", jobs[i].model.Name, "cache_key", jobs[i].cacheKey, "error", r.err)
+				}
+				// Cache the failure briefly to prevent a cascade re-run on
+				// every subsequent turn while the underlying upstream is
+				// misbehaving. Only applies when a failKey was set (tool-role).
+				if jobs[i].failKey != "" {
+					imageCache.StoreWithTTL(jobs[i].failKey, "1", imageFailureTTL)
+				}
 			} else {
 				imageCache.Store(jobs[i].cacheKey, r.desc)
 			}
@@ -309,6 +361,10 @@ func normalizeContentParts(msgMap map[string]any) []any {
 //
 // For tool-role images (PDF pages, screenshots): OCR text only.
 // For user-role images: vision description only.
+//
+// Output uses XML-like tags so target models clearly distinguish pipeline-
+// injected content from user-authored text. Failures use plain bracketed
+// strings — they're empty/informational, wrapping them in tags adds no value.
 func buildImageReplacement(hash string, isToolRole bool, cache *boundedCache, jobDescs map[string]string) string {
 	// Helper to look up a result from cache or fresh job results.
 	lookup := func(cacheKey string) (string, bool) {
@@ -324,14 +380,14 @@ func buildImageReplacement(hash string, isToolRole bool, cache *boundedCache, jo
 	if isToolRole {
 		// Tool-role: OCR only.
 		if ocrText, ok := lookup(hash + ":o"); ok {
-			return fmt.Sprintf("[Page text: %s]", ocrText)
+			return fmt.Sprintf("<page_text>%s</page_text>", ocrText)
 		}
 		return "[Image could not be processed]"
 	}
 
 	// User-role: vision description only.
 	if visionDesc, ok := lookup(hash + ":v"); ok {
-		return fmt.Sprintf("[Image description: %s]", visionDesc)
+		return fmt.Sprintf("<image_description>%s</image_description>", visionDesc)
 	}
 	return "[Image could not be processed]"
 }
@@ -499,22 +555,45 @@ func (p *Pipeline) describeImage(ctx context.Context, visionModel *config.ModelC
 	var chatResp struct {
 		Choices []struct {
 			Message struct {
-				Content string `json:"content"`
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
 			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(respBody, &chatResp); err != nil {
 		return "", fmt.Errorf("parse vision response: %w", err)
 	}
-	if len(chatResp.Choices) == 0 || chatResp.Choices[0].Message.Content == "" {
+	if len(chatResp.Choices) == 0 {
 		return "", fmt.Errorf("vision model returned empty response")
 	}
 
-	desc := chatResp.Choices[0].Message.Content
+	// Prefer the final content. Fall back to reasoning_content when the
+	// backend is a reasoning model (e.g., Qwen3-VL variants) that put the
+	// actual description into its thinking channel — commonly happens when
+	// finish_reason=length truncates the response mid-reasoning before the
+	// model emits a final answer. The reasoning text is still useful
+	// extraction output from the model's perspective; surfacing it prevents
+	// the cascade from failing unnecessarily.
+	msg := chatResp.Choices[0].Message
+	desc := msg.Content
+	source := "content"
+	if strings.TrimSpace(desc) == "" && strings.TrimSpace(msg.ReasoningContent) != "" {
+		desc = msg.ReasoningContent
+		source = "reasoning_content"
+		slog.Debug("vision model emitted only reasoning_content; using it as description",
+			"vision_model", visionModel.Name,
+			"finish_reason", chatResp.Choices[0].FinishReason)
+	}
+	if strings.TrimSpace(desc) == "" {
+		return "", fmt.Errorf("vision model returned empty response")
+	}
+
 	slog.Debug("image described by vision model",
 		"vision_model", visionModel.Name,
 		"duration", time.Since(start),
-		"description_len", len(desc))
+		"description_len", len(desc),
+		"source", source)
 
 	return desc, nil
 }

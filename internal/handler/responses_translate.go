@@ -214,6 +214,19 @@ func translateContentForChat(content json.RawMessage, role string) any {
 		case "input_image":
 			var url string
 			json.Unmarshal(p["image_url"], &url)
+			// PDF masquerading as an image: Codex and other Responses-API
+			// clients sometimes submit PDFs via input_image with a
+			// data:application/pdf URL. Route those to the PDF pipeline
+			// instead of the image pipeline so they get the full OCR→vision
+			// cascade.
+			if data, ok := pipeline.DecodePDFDataURL(url); ok {
+				part := map[string]any{
+					"type": "pdf_data",
+					"data": data,
+				}
+				translated = append(translated, part)
+				break
+			}
 			part := map[string]any{
 				"type":      "image_url",
 				"image_url": map[string]any{"url": url},

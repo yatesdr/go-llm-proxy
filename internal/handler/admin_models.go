@@ -78,6 +78,15 @@ func (h *AdminHandler) ModelsData(w http.ResponseWriter, r *http.Request) {
 		} else {
 			entry["defaults"] = nil
 		}
+		if m.Processors != nil {
+			entry["processors"] = map[string]any{
+				"vision":         m.Processors.Vision,
+				"ocr":            m.Processors.OCR,
+				"web_search_key": m.Processors.WebSearchKey,
+			}
+		} else {
+			entry["processors"] = nil
+		}
 		if healthMap != nil {
 			if hs, ok := healthMap[m.Name]; ok {
 				entry["health"] = map[string]any{
@@ -465,6 +474,24 @@ func modelModalHTML() string {
           </div>
         </div>
 
+        <div class="section"><h3>Per-model processors (optional)</h3>
+          <div class="field-grid">
+            <div class="field">
+              <label>Vision model <span class="tip" tabindex="0" data-tip="Override the global vision processor. Enter the name of a vision-capable model, or 'none' to disable.">?</span></label>
+              <input type="text" name="proc_vision" list="allModelsList" placeholder="global default">
+            </div>
+            <div class="field">
+              <label>OCR model <span class="tip" tabindex="0" data-tip="Override the global OCR/PDF processor. Falls back to vision model if omitted.">?</span></label>
+              <input type="text" name="proc_ocr" list="allModelsList" placeholder="global default">
+            </div>
+            <div class="field field-full">
+              <label>Web search key <span class="tip" tabindex="0" data-tip="Override the global Tavily web search key for this model. Empty = use global.">?</span></label>
+              <input type="text" name="proc_web_search_key" placeholder="global default">
+            </div>
+          </div>
+        </div>
+        <datalist id="allModelsList"></datalist>
+
         <div id="modelFormErr" class="inline-err" style="display:none"></div>
       </div>
       <div class="modal-footer">
@@ -491,6 +518,19 @@ function loadModels(){
       var o = document.createElement("option");
       o.value = mstate.regions[i];
       dl.appendChild(o);
+    }
+    // Populate allModelsList datalist for processor dropdowns.
+    var mdl = document.getElementById("allModelsList");
+    if(mdl){
+      mdl.innerHTML = "";
+      for(var i=0;i<mstate.models.length;i++){
+        var o = document.createElement("option");
+        o.value = mstate.models[i].name;
+        mdl.appendChild(o);
+      }
+      var nopt = document.createElement("option");
+      nopt.value = "none";
+      mdl.appendChild(nopt);
     }
     renderModels();
   }).catch(function(e){ flash("Load failed: "+e.message, "error"); });
@@ -563,6 +603,12 @@ function openModelModal(name){
     form.elements["guardrail_id"].value = m.guardrail_id || "";
     form.elements["guardrail_version"].value = m.guardrail_version || "";
     form.elements["guardrail_trace"].value = m.guardrail_trace || "";
+    // Per-model processors
+    if(m.processors){
+      form.elements["proc_vision"].value = m.processors.vision || "";
+      form.elements["proc_ocr"].value = m.processors.ocr || "";
+      form.elements["proc_web_search_key"].value = m.processors.web_search_key || "";
+    }
     document.getElementById("apiKeyMask").textContent = m.has_api_key ? m.api_key_masked : "(not set)";
     document.getElementById("awsSecretMask").textContent = m.has_aws_secret ? m.aws_secret_mask : "(not set)";
     document.getElementById("awsSessionMask").textContent = m.has_aws_session ? "(set)" : "(not set)";
@@ -682,6 +728,13 @@ function collectForm(){
     if(d.stop.length) anyDefault = true;
   }
   if(anyDefault) body.defaults = d;
+  // Per-model processors
+  var pv = form.elements["proc_vision"].value.trim();
+  var po = form.elements["proc_ocr"].value.trim();
+  var pw = form.elements["proc_web_search_key"].value.trim();
+  if(pv || po || pw){
+    body.processors = {vision: pv, ocr: po, web_search_key: pw};
+  }
   return body;
 }
 

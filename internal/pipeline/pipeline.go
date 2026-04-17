@@ -134,6 +134,12 @@ func (p *Pipeline) ProcessRequest(ctx context.Context, chatReq map[string]any,
 		ocrModel = config.FindModel(cfg, ocrModelName)
 	}
 
+	// Normalize PDF data URLs disguised as image_url into pdf_data parts.
+	// Runs before both image and PDF processors so that Chat Completions and
+	// Responses API clients (which have no structured PDF input) converge on
+	// the same internal shape as Anthropic's document blocks.
+	NormalizePDFDataURLs(chatReq)
+
 	// Vision: route images to processor if target can't handle them natively.
 	// Skip if the vision model IS the target (avoid pointless round-trip).
 	if visionModel != nil && visionModel.Name != targetModel.Name && (!targetModel.SupportsVision || targetModel.ForcePipeline) {

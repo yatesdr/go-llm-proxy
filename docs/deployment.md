@@ -13,6 +13,16 @@ Production deployment details for go-llm-proxy.
 7. Disable config generator after setup, or protect with nginx auth
 8. Set up systemd for automatic restart (see below)
 
+## Optional system dependencies
+
+For scanned-PDF OCR via rasterization (recommended when using a dedicated OCR model like paddleOCR-VL):
+
+```bash
+sudo apt install poppler-utils   # provides pdftoppm for PDF→PNG conversion
+```
+
+Without this, scanned PDFs fall back to the vision model with raw PDF input — functional but slower. See [pipeline.md](pipeline.md) for details.
+
 ## Binary run
 
 ```bash

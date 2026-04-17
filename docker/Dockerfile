@@ -16,7 +16,8 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
 FROM alpine:3.21
 
 RUN addgroup -S app && adduser -S -G app app \
-    && apk add --no-cache ca-certificates
+    && apk add --no-cache ca-certificates \
+       poppler-utils
 
 WORKDIR /app
 

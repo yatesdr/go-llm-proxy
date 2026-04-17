@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -245,6 +246,58 @@ func TestProcessImages_NoImages(t *testing.T) {
 	}
 }
 
+func TestDescribeImage_FallsBackToReasoningContent(t *testing.T) {
+	// Regression: reasoning-model vision backends (e.g., Qwen3-VL variants)
+	// sometimes return content="" with the actual description in
+	// reasoning_content, especially when finish_reason=length truncates
+	// mid-thinking. The pipeline must surface reasoning_content instead
+	// of treating the response as empty.
+	ResetImageCache()
+	defer ResetImageCache()
+
+	visionServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{
+				map[string]any{
+					"finish_reason": "length",
+					"message": map[string]any{
+						"content":           "",
+						"reasoning_content": "A blue diagram showing a centerline mark and calibration axes",
+					},
+				},
+			},
+		})
+	}))
+	defer visionServer.Close()
+
+	visionModel := &config.ModelConfig{Name: "vision", Backend: visionServer.URL, Model: "v"}
+	p := &Pipeline{client: http.DefaultClient}
+	chatReq := map[string]any{
+		"messages": []any{
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{
+						"type":      "image_url",
+						"image_url": map[string]any{"url": "data:image/png;base64,abc"},
+					},
+				},
+			},
+		},
+	}
+	result, err := p.processImages(context.Background(), chatReq, visionModel, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := result["messages"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text, "centerline mark") {
+		t.Fatalf("expected reasoning_content to be used as description, got: %s", text)
+	}
+	if !strings.HasPrefix(text, "<image_description>") {
+		t.Fatalf("expected XML-tag framing even for reasoning_content fallback, got: %s", text)
+	}
+}
+
 func TestProcessImages_ReplacesImageWithDescription(t *testing.T) {
 	ResetImageCache()
 	// Set up a mock vision model backend.
@@ -306,7 +359,7 @@ func TestProcessImages_ReplacesImageWithDescription(t *testing.T) {
 		t.Fatalf("expected text type, got %v", second["type"])
 	}
 	text := second["text"].(string)
-	if text != "[Image description: A screenshot showing a terminal with Go code]" {
+	if text != "<image_description>A screenshot showing a terminal with Go code</image_description>" {
 		t.Fatalf("unexpected description: %s", text)
 	}
 }
@@ -363,7 +416,7 @@ func TestProcessImages_CacheHit(t *testing.T) {
 	}
 	msgs := result["messages"].([]any)
 	text := msgs[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
-	if text != "[Image description: A German Shepherd dog sitting on grass]" {
+	if text != "<image_description>A German Shepherd dog sitting on grass</image_description>" {
 		t.Fatalf("unexpected description: %s", text)
 	}
 
@@ -377,7 +430,7 @@ func TestProcessImages_CacheHit(t *testing.T) {
 	}
 	msgs = result["messages"].([]any)
 	text = msgs[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
-	if text != "[Image description: A German Shepherd dog sitting on grass]" {
+	if text != "<image_description>A German Shepherd dog sitting on grass</image_description>" {
 		t.Fatalf("unexpected cached description: %s", text)
 	}
 }
@@ -471,8 +524,8 @@ func TestProcessImages_ConcurrentAndOCRMode(t *testing.T) {
 
 	// Verify labeling uses "Page text" not "Image description".
 	text := content[0].(map[string]any)["text"].(string)
-	if !strings.Contains(text, "[Page text:") {
-		t.Fatalf("expected [Page text: ...] label, got: %s", text)
+	if !strings.Contains(text, "<page_text>") {
+		t.Fatalf("expected <page_text> tag, got: %s", text)
 	}
 
 	// Verify concurrency happened (at least 2 concurrent with 5 images).
@@ -522,6 +575,245 @@ func TestProcessImages_VisionModelFailure(t *testing.T) {
 	text := content[0].(map[string]any)["text"].(string)
 	if text != "[Image could not be processed]" {
 		t.Fatalf("expected fallback text, got: %s", text)
+	}
+}
+
+// --- Tool-role image cascade (OCR → vision) tests ---
+
+// mockImageServer returns a handler that counts hits and produces either a
+// text response, empty content, or an HTTP 500.
+func mockImageServer(t *testing.T, behavior string, text string, hits *int) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits != nil {
+			*hits++
+		}
+		switch behavior {
+		case "err":
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"simulated"}`))
+		case "empty":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []any{
+					map[string]any{"message": map[string]any{"content": ""}},
+				},
+			})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []any{
+					map[string]any{"message": map[string]any{"content": text}},
+				},
+			})
+		}
+	}))
+}
+
+func toolRoleReq() map[string]any {
+	return map[string]any{
+		"messages": []any{
+			map[string]any{
+				"role": "tool",
+				"content": []any{
+					map[string]any{
+						"type":      "image_url",
+						"image_url": map[string]any{"url": "data:image/png;base64,toolpage"},
+					},
+				},
+			},
+		},
+	}
+}
+
+func TestImageCascade_ToolRole_OCRSuccess_VisionNotCalled(t *testing.T) {
+	ResetImageCache()
+	defer ResetImageCache()
+
+	ocrHits, visionHits := 0, 0
+	ocrSrv := mockImageServer(t, "ok", "OCR page content", &ocrHits)
+	defer ocrSrv.Close()
+	visionSrv := mockImageServer(t, "ok", "vision describe", &visionHits)
+	defer visionSrv.Close()
+
+	ocrModel := &config.ModelConfig{Name: "ocr-model", Backend: ocrSrv.URL, Model: "ocr"}
+	visionModel := &config.ModelConfig{Name: "vision-model", Backend: visionSrv.URL, Model: "vision"}
+
+	p := &Pipeline{client: http.DefaultClient}
+	result, err := p.processImages(context.Background(), toolRoleReq(), visionModel, ocrModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ocrHits != 1 {
+		t.Fatalf("expected OCR called once, got %d", ocrHits)
+	}
+	if visionHits != 0 {
+		t.Fatalf("expected vision NOT called on OCR success, got %d", visionHits)
+	}
+	content := result["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	text := content[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text, "OCR page content") {
+		t.Fatalf("expected OCR content, got: %s", text)
+	}
+}
+
+func TestImageCascade_ToolRole_OCREmpty_VisionFallback(t *testing.T) {
+	ResetImageCache()
+	defer ResetImageCache()
+
+	ocrHits, visionHits := 0, 0
+	ocrSrv := mockImageServer(t, "empty", "", &ocrHits)
+	defer ocrSrv.Close()
+	visionSrv := mockImageServer(t, "ok", "vision saved it", &visionHits)
+	defer visionSrv.Close()
+
+	ocrModel := &config.ModelConfig{Name: "ocr-model", Backend: ocrSrv.URL, Model: "ocr"}
+	visionModel := &config.ModelConfig{Name: "vision-model", Backend: visionSrv.URL, Model: "vision"}
+
+	p := &Pipeline{client: http.DefaultClient}
+	result, err := p.processImages(context.Background(), toolRoleReq(), visionModel, ocrModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ocrHits != 1 || visionHits != 1 {
+		t.Fatalf("expected 1 OCR + 1 vision, got ocr=%d vision=%d", ocrHits, visionHits)
+	}
+	content := result["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	text := content[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text, "vision saved") {
+		t.Fatalf("expected vision fallback result, got: %s", text)
+	}
+}
+
+func TestImageCascade_ToolRole_OCRError_VisionFallback(t *testing.T) {
+	ResetImageCache()
+	defer ResetImageCache()
+
+	ocrHits, visionHits := 0, 0
+	ocrSrv := mockImageServer(t, "err", "", &ocrHits)
+	defer ocrSrv.Close()
+	visionSrv := mockImageServer(t, "ok", "vision rescued", &visionHits)
+	defer visionSrv.Close()
+
+	ocrModel := &config.ModelConfig{Name: "ocr-model", Backend: ocrSrv.URL, Model: "ocr"}
+	visionModel := &config.ModelConfig{Name: "vision-model", Backend: visionSrv.URL, Model: "vision"}
+
+	p := &Pipeline{client: http.DefaultClient}
+	result, err := p.processImages(context.Background(), toolRoleReq(), visionModel, ocrModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ocrHits != 1 || visionHits != 1 {
+		t.Fatalf("expected cascade (1+1), got ocr=%d vision=%d", ocrHits, visionHits)
+	}
+	content := result["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	text := content[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text, "vision rescued") {
+		t.Fatalf("expected vision fallback after OCR error, got: %s", text)
+	}
+}
+
+func TestImageCascade_ToolRole_BothFail_TTLShortCircuits(t *testing.T) {
+	ResetImageCache()
+	defer ResetImageCache()
+
+	ocrHits, visionHits := 0, 0
+	ocrSrv := mockImageServer(t, "err", "", &ocrHits)
+	defer ocrSrv.Close()
+	visionSrv := mockImageServer(t, "err", "", &visionHits)
+	defer visionSrv.Close()
+
+	ocrModel := &config.ModelConfig{Name: "ocr-model", Backend: ocrSrv.URL, Model: "ocr"}
+	visionModel := &config.ModelConfig{Name: "vision-model", Backend: visionSrv.URL, Model: "vision"}
+
+	p := &Pipeline{client: http.DefaultClient}
+	// First call: both stages should be attempted.
+	result, err := p.processImages(context.Background(), toolRoleReq(), visionModel, ocrModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ocrHits != 1 || visionHits != 1 {
+		t.Fatalf("expected cascade tried both (1+1), got ocr=%d vision=%d", ocrHits, visionHits)
+	}
+	content := result["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	text := content[0].(map[string]any)["text"].(string)
+	if text != "[Image could not be processed]" {
+		t.Fatalf("expected failure placeholder, got: %s", text)
+	}
+
+	// Second call within TTL: neither upstream should be re-invoked.
+	_, err = p.processImages(context.Background(), toolRoleReq(), visionModel, ocrModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ocrHits != 1 || visionHits != 1 {
+		t.Fatalf("expected TTL short-circuit (still 1+1), got ocr=%d vision=%d",
+			ocrHits, visionHits)
+	}
+}
+
+func TestImageCascade_ToolRole_OnlyVision_NoDuplicateCall(t *testing.T) {
+	ResetImageCache()
+	defer ResetImageCache()
+
+	// Only vision is configured; OCR resolves to the same model.
+	hits := 0
+	srv := mockImageServer(t, "err", "", &hits)
+	defer srv.Close()
+	visionModel := &config.ModelConfig{Name: "vision-model", Backend: srv.URL, Model: "vision"}
+
+	p := &Pipeline{client: http.DefaultClient}
+	_, err := p.processImages(context.Background(), toolRoleReq(), visionModel, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Cascade should not fire a fallback to the same model — exactly one call.
+	if hits != 1 {
+		t.Fatalf("expected exactly 1 call (no duplicate), got %d", hits)
+	}
+}
+
+func TestImageCascade_UserRole_OCRNotCalled(t *testing.T) {
+	// Regression gate: user-role images should still only go to vision,
+	// never to OCR (per the existing design note in vision.go).
+	ResetImageCache()
+	defer ResetImageCache()
+
+	ocrHits, visionHits := 0, 0
+	ocrSrv := mockImageServer(t, "ok", "should-not-appear", &ocrHits)
+	defer ocrSrv.Close()
+	visionSrv := mockImageServer(t, "ok", "user image described", &visionHits)
+	defer visionSrv.Close()
+
+	ocrModel := &config.ModelConfig{Name: "ocr-model", Backend: ocrSrv.URL, Model: "ocr"}
+	visionModel := &config.ModelConfig{Name: "vision-model", Backend: visionSrv.URL, Model: "vision"}
+
+	req := map[string]any{
+		"messages": []any{
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{
+						"type":      "image_url",
+						"image_url": map[string]any{"url": "data:image/png;base64,userphoto"},
+					},
+				},
+			},
+		},
+	}
+	p := &Pipeline{client: http.DefaultClient}
+	result, err := p.processImages(context.Background(), req, visionModel, ocrModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ocrHits != 0 {
+		t.Fatalf("user-role images must not hit OCR, got %d calls", ocrHits)
+	}
+	if visionHits != 1 {
+		t.Fatalf("expected exactly 1 vision call for user image, got %d", visionHits)
+	}
+	content := result["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	text := content[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text, "user image described") {
+		t.Fatalf("expected vision description, got: %s", text)
 	}
 }
 
@@ -1163,6 +1455,419 @@ func TestProcessPDFs_VisionFallbackFailure(t *testing.T) {
 	contentStr := fmt.Sprintf("%v", userMsg["content"])
 	if !strings.Contains(contentStr, "PDF") && !strings.Contains(contentStr, "could not") {
 		t.Fatalf("expected graceful degradation message, got: %s", contentStr)
+	}
+}
+
+// --- Cross-API PDF normalization tests (M4) ---
+
+func TestDecodePDFDataURL_Valid(t *testing.T) {
+	data, ok := DecodePDFDataURL("data:application/pdf;base64,JVBERi0xLjQK")
+	if !ok {
+		t.Fatal("expected valid PDF data URL to be recognized")
+	}
+	if data != "JVBERi0xLjQK" {
+		t.Fatalf("expected base64 payload, got %q", data)
+	}
+}
+
+func TestDecodePDFDataURL_NotPDF(t *testing.T) {
+	if _, ok := DecodePDFDataURL("data:image/png;base64,iVBORw0K"); ok {
+		t.Fatal("expected PNG data URL to be rejected")
+	}
+	if _, ok := DecodePDFDataURL("https://example.com/foo.pdf"); ok {
+		t.Fatal("expected http URL to be rejected")
+	}
+	if _, ok := DecodePDFDataURL(""); ok {
+		t.Fatal("expected empty URL to be rejected")
+	}
+}
+
+func TestDecodePDFDataURL_MissingBase64(t *testing.T) {
+	// No ;base64 marker in header.
+	if _, ok := DecodePDFDataURL("data:application/pdf,JVBERi0xLjQK"); ok {
+		t.Fatal("expected URL without ;base64 to be rejected")
+	}
+}
+
+func TestDecodePDFDataURL_EmptyPayload(t *testing.T) {
+	if _, ok := DecodePDFDataURL("data:application/pdf;base64,"); ok {
+		t.Fatal("expected empty payload to be rejected")
+	}
+}
+
+func TestNormalizePDFDataURLs_ConvertsImageURLToPDFData(t *testing.T) {
+	b64 := base64.StdEncoding.EncodeToString([]byte("%PDF-1.4 fake"))
+	req := map[string]any{
+		"messages": []any{
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{"type": "text", "text": "what's in this?"},
+					map[string]any{
+						"type":      "image_url",
+						"image_url": map[string]any{"url": "data:application/pdf;base64," + b64},
+					},
+				},
+			},
+		},
+	}
+	NormalizePDFDataURLs(req)
+	content := req["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if len(content) != 2 {
+		t.Fatalf("expected 2 parts, got %d", len(content))
+	}
+	// Text part should be unchanged.
+	if content[0].(map[string]any)["type"] != "text" {
+		t.Fatalf("text part clobbered: %v", content[0])
+	}
+	// Image part should now be pdf_data.
+	pdfPart := content[1].(map[string]any)
+	if pdfPart["type"] != "pdf_data" {
+		t.Fatalf("expected pdf_data, got %v", pdfPart["type"])
+	}
+	if pdfPart["data"] != b64 {
+		t.Fatalf("expected base64 payload preserved, got %v", pdfPart["data"])
+	}
+}
+
+func TestNormalizePDFDataURLs_LeavesImagesAlone(t *testing.T) {
+	req := map[string]any{
+		"messages": []any{
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{
+						"type":      "image_url",
+						"image_url": map[string]any{"url": "data:image/png;base64,iVBORw0K"},
+					},
+					map[string]any{
+						"type":      "image_url",
+						"image_url": map[string]any{"url": "https://example.com/photo.jpg"},
+					},
+				},
+			},
+		},
+	}
+	NormalizePDFDataURLs(req)
+	content := req["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	for i, part := range content {
+		if part.(map[string]any)["type"] != "image_url" {
+			t.Fatalf("part %d: expected image_url to be preserved, got %v", i, part)
+		}
+	}
+}
+
+func TestNormalizePDFDataURLs_NoContent_NoOp(t *testing.T) {
+	// String content — shouldn't blow up.
+	req := map[string]any{
+		"messages": []any{
+			map[string]any{"role": "user", "content": "hello"},
+		},
+	}
+	NormalizePDFDataURLs(req)
+	if req["messages"].([]any)[0].(map[string]any)["content"] != "hello" {
+		t.Fatal("string content should be untouched")
+	}
+}
+
+func TestNormalizePDFDataURLs_Idempotent(t *testing.T) {
+	b64 := base64.StdEncoding.EncodeToString([]byte("%PDF-1.4 fake"))
+	req := map[string]any{
+		"messages": []any{
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{"type": "pdf_data", "data": b64, "filename": "x.pdf"},
+				},
+			},
+		},
+	}
+	NormalizePDFDataURLs(req)
+	NormalizePDFDataURLs(req)
+	content := req["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if content[0].(map[string]any)["type"] != "pdf_data" {
+		t.Fatal("pdf_data part should remain pdf_data after repeated calls")
+	}
+	if content[0].(map[string]any)["filename"] != "x.pdf" {
+		t.Fatal("filename should be preserved")
+	}
+}
+
+// --- PDF cascade tests (OCR → vision) ---
+
+// scannedPDFStub is a PDF without extractable text, used to force Stage 2+.
+const scannedPDFStub = "%PDF-1.0\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R>>endobj\nxref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n190\n%%EOF"
+
+// mockProcessorServer returns a handler that counts hits and responds with
+// the given behavior: "ok" = 200 with text, "empty" = 200 with empty content,
+// "err" = 500 error.
+func mockProcessorServer(t *testing.T, behavior string, text string, hits *int) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits != nil {
+			*hits++
+		}
+		switch behavior {
+		case "err":
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"simulated"}`))
+		case "empty":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "r1", "model": "x",
+				"choices": []map[string]any{{
+					"index": 0, "finish_reason": "stop",
+					"message": map[string]any{"role": "assistant", "content": ""},
+				}},
+			})
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "r1", "model": "x",
+				"choices": []map[string]any{{
+					"index": 0, "finish_reason": "stop",
+					"message": map[string]any{"role": "assistant", "content": text},
+				}},
+			})
+		}
+	}))
+}
+
+func runCascade(t *testing.T, cfg *config.Config, pdfBase64 string) (map[string]any, error) {
+	t.Helper()
+	cs := config.NewTestConfigStore(cfg)
+	p := NewPipeline(cs, http.DefaultClient)
+	model := &cfg.Models[0]
+	req := map[string]any{
+		"model": "target",
+		"messages": []any{
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{"type": "pdf_data", "data": pdfBase64, "filename": "test.pdf"},
+				},
+			},
+		},
+	}
+	return p.ProcessRequest(context.Background(), req, model)
+}
+
+func TestPDFCascade_OCRSuccess_VisionNotCalled(t *testing.T) {
+	ResetPDFCache()
+	defer ResetPDFCache()
+
+	ocrHits, visionHits := 0, 0
+	ocrSrv := mockProcessorServer(t, "ok", "OCR extracted text here", &ocrHits)
+	defer ocrSrv.Close()
+	visionSrv := mockProcessorServer(t, "ok", "vision described", &visionHits)
+	defer visionSrv.Close()
+
+	cfg := &config.Config{
+		Processors: config.ProcessorsConfig{OCR: "ocr-model", Vision: "vision-model"},
+		Models: []config.ModelConfig{
+			{Name: "target", Backend: "http://localhost/v1", Timeout: 30},
+			{Name: "ocr-model", Backend: ocrSrv.URL + "/v1", Timeout: 30},
+			{Name: "vision-model", Backend: visionSrv.URL + "/v1", Timeout: 30},
+		},
+	}
+	b64 := base64.StdEncoding.EncodeToString([]byte(scannedPDFStub))
+	result, err := runCascade(t, cfg, b64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ocrHits != 1 {
+		t.Fatalf("expected OCR to be called once, got %d", ocrHits)
+	}
+	if visionHits != 0 {
+		t.Fatalf("expected vision NOT to be called, got %d", visionHits)
+	}
+	msgs := result["messages"].([]any)
+	content := fmt.Sprintf("%v", msgs[0].(map[string]any)["content"])
+	if !strings.Contains(content, "OCR extracted text") {
+		t.Fatalf("expected OCR result in content, got: %s", content)
+	}
+	if !strings.Contains(content, `source="ocr"`) {
+		t.Fatalf("expected source=\"ocr\" in content, got: %s", content)
+	}
+}
+
+func TestPDFCascade_OCREmpty_VisionFallback(t *testing.T) {
+	ResetPDFCache()
+	defer ResetPDFCache()
+
+	ocrHits, visionHits := 0, 0
+	ocrSrv := mockProcessorServer(t, "empty", "", &ocrHits)
+	defer ocrSrv.Close()
+	visionSrv := mockProcessorServer(t, "ok", "vision saved the day", &visionHits)
+	defer visionSrv.Close()
+
+	cfg := &config.Config{
+		Processors: config.ProcessorsConfig{OCR: "ocr-model", Vision: "vision-model"},
+		Models: []config.ModelConfig{
+			{Name: "target", Backend: "http://localhost/v1", Timeout: 30},
+			{Name: "ocr-model", Backend: ocrSrv.URL + "/v1", Timeout: 30},
+			{Name: "vision-model", Backend: visionSrv.URL + "/v1", Timeout: 30},
+		},
+	}
+	b64 := base64.StdEncoding.EncodeToString([]byte(scannedPDFStub))
+	result, err := runCascade(t, cfg, b64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ocrHits != 1 || visionHits != 1 {
+		t.Fatalf("expected 1 OCR + 1 vision, got ocr=%d vision=%d", ocrHits, visionHits)
+	}
+	content := fmt.Sprintf("%v", result["messages"].([]any)[0].(map[string]any)["content"])
+	if !strings.Contains(content, "vision saved") {
+		t.Fatalf("expected vision result, got: %s", content)
+	}
+	if !strings.Contains(content, `source="vision"`) {
+		t.Fatalf("expected source=\"vision\", got: %s", content)
+	}
+}
+
+func TestPDFCascade_OCRErrors_VisionFallback(t *testing.T) {
+	ResetPDFCache()
+	defer ResetPDFCache()
+
+	ocrHits, visionHits := 0, 0
+	ocrSrv := mockProcessorServer(t, "err", "", &ocrHits)
+	defer ocrSrv.Close()
+	visionSrv := mockProcessorServer(t, "ok", "vision rescued", &visionHits)
+	defer visionSrv.Close()
+
+	cfg := &config.Config{
+		Processors: config.ProcessorsConfig{OCR: "ocr-model", Vision: "vision-model"},
+		Models: []config.ModelConfig{
+			{Name: "target", Backend: "http://localhost/v1", Timeout: 30},
+			{Name: "ocr-model", Backend: ocrSrv.URL + "/v1", Timeout: 30},
+			{Name: "vision-model", Backend: visionSrv.URL + "/v1", Timeout: 30},
+		},
+	}
+	b64 := base64.StdEncoding.EncodeToString([]byte(scannedPDFStub))
+	result, err := runCascade(t, cfg, b64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ocrHits != 1 || visionHits != 1 {
+		t.Fatalf("expected 1 OCR + 1 vision, got ocr=%d vision=%d", ocrHits, visionHits)
+	}
+	content := fmt.Sprintf("%v", result["messages"].([]any)[0].(map[string]any)["content"])
+	if !strings.Contains(content, "vision rescued") {
+		t.Fatalf("expected vision result after OCR error, got: %s", content)
+	}
+}
+
+func TestPDFCascade_BothFail_TTLCached(t *testing.T) {
+	ResetPDFCache()
+	defer ResetPDFCache()
+
+	ocrHits, visionHits := 0, 0
+	ocrSrv := mockProcessorServer(t, "err", "", &ocrHits)
+	defer ocrSrv.Close()
+	visionSrv := mockProcessorServer(t, "err", "", &visionHits)
+	defer visionSrv.Close()
+
+	cfg := &config.Config{
+		Processors: config.ProcessorsConfig{OCR: "ocr-model", Vision: "vision-model"},
+		Models: []config.ModelConfig{
+			{Name: "target", Backend: "http://localhost/v1", Timeout: 30},
+			{Name: "ocr-model", Backend: ocrSrv.URL + "/v1", Timeout: 30},
+			{Name: "vision-model", Backend: visionSrv.URL + "/v1", Timeout: 30},
+		},
+	}
+	b64 := base64.StdEncoding.EncodeToString([]byte(scannedPDFStub))
+	result, err := runCascade(t, cfg, b64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ocrHits != 1 || visionHits != 1 {
+		t.Fatalf("expected 1 OCR + 1 vision on first call, got ocr=%d vision=%d", ocrHits, visionHits)
+	}
+	content := fmt.Sprintf("%v", result["messages"].([]any)[0].(map[string]any)["content"])
+	if !strings.Contains(content, "could not be extracted") {
+		t.Fatalf("expected failure message, got: %s", content)
+	}
+
+	// Second call with same PDF: should hit the TTL-cached failure without
+	// re-invoking either upstream.
+	_, err = runCascade(t, cfg, b64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ocrHits != 1 || visionHits != 1 {
+		t.Fatalf("expected TTL cache hit (no new upstream calls), got ocr=%d vision=%d",
+			ocrHits, visionHits)
+	}
+
+	// Verify the cache entry has a non-zero expiresAt (TTL).
+	key := fmt.Sprintf("%x", sha256.Sum256([]byte(b64)))
+	pdfCache.mu.RLock()
+	entry, ok := pdfCache.items[key]
+	pdfCache.mu.RUnlock()
+	if !ok {
+		t.Fatal("expected failure to be cached")
+	}
+	if entry.expiresAt.IsZero() {
+		t.Fatal("expected failure cache entry to have TTL (non-zero expiresAt)")
+	}
+}
+
+func TestPDFCascade_OnlyVisionConfigured_NoDuplicateCall(t *testing.T) {
+	ResetPDFCache()
+	defer ResetPDFCache()
+
+	// Only vision is configured; OCR falls back to the same model via
+	// resolveOCRProcessor. Cascade must not double-call.
+	hits := 0
+	srv := mockProcessorServer(t, "ok", "single call result", &hits)
+	defer srv.Close()
+
+	cfg := &config.Config{
+		Processors: config.ProcessorsConfig{Vision: "vision-model"},
+		Models: []config.ModelConfig{
+			{Name: "target", Backend: "http://localhost/v1", Timeout: 30},
+			{Name: "vision-model", Backend: srv.URL + "/v1", Timeout: 30},
+		},
+	}
+	b64 := base64.StdEncoding.EncodeToString([]byte(scannedPDFStub))
+	_, err := runCascade(t, cfg, b64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hits != 1 {
+		t.Fatalf("expected exactly 1 upstream call (no dedupe miss), got %d", hits)
+	}
+}
+
+func TestPDFCascade_OnlyVisionConfigured_FailureNotDoubled(t *testing.T) {
+	ResetPDFCache()
+	defer ResetPDFCache()
+
+	// Vision fails; because OCR and vision resolve to the same model, we
+	// should stop after one failed call, not try the same backend twice.
+	hits := 0
+	srv := mockProcessorServer(t, "err", "", &hits)
+	defer srv.Close()
+
+	cfg := &config.Config{
+		Processors: config.ProcessorsConfig{Vision: "vision-model"},
+		Models: []config.ModelConfig{
+			{Name: "target", Backend: "http://localhost/v1", Timeout: 30},
+			{Name: "vision-model", Backend: srv.URL + "/v1", Timeout: 30},
+		},
+	}
+	b64 := base64.StdEncoding.EncodeToString([]byte(scannedPDFStub))
+	result, err := runCascade(t, cfg, b64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hits != 1 {
+		t.Fatalf("expected exactly 1 upstream call, got %d", hits)
+	}
+	content := fmt.Sprintf("%v", result["messages"].([]any)[0].(map[string]any)["content"])
+	if !strings.Contains(content, "could not be extracted") {
+		t.Fatalf("expected failure placeholder, got: %s", content)
 	}
 }
 

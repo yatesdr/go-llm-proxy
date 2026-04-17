@@ -14,7 +14,7 @@ You need data security and self-host models or have upstream secure vendors (Azu
 - **Model multiplexing** — Aggregate local GPU servers, cloud APIs, and third-party providers behind one endpoint. Clients see one model list.
 - **API key management** — Issue proxy keys with per-key model restrictions. Backend credentials stay on the server.
 - **Vision pipeline** — Images sent to text-only models are described by a vision-capable model and replaced with text. Transparent to the client.
-- **PDF processing** — Text extraction for native PDFs. OCR via dedicated model for scanned documents. Results cached across turns.
+- **PDF processing** — Text extraction for native PDFs. Scanned documents go through an OCR → vision cascade (dedicated OCR model first, vision model as automatic fallback). Works identically for Claude Code, Codex, Chat Completions, and any client that can submit a PDF as a data URL. Results cached across turns; failures use a 5-minute TTL so transient upstream issues don't permanently block a document.
 - **Web search** — When coding assistants request web search, the proxy executes it via Tavily or Brave Search (auto-detected from key prefix) and injects the results. No client-side MCP setup needed.
 - **MCP endpoint** — `/mcp/sse` exposes web search for OpenCode, Qwen Code, and any MCP-compatible agent.
 - **Qdrant proxy** — `/qdrant/*` proxies to a Qdrant vector database with separate app key auth and automatic multi-tenant isolation.
@@ -93,7 +93,7 @@ Optional. Handles content that local backends don't support natively:
 ```yaml
 processors:
   vision: Qwen3-VL-8B        # vision model for image descriptions
-  ocr: paddleOCR              # fast model for PDF page text extraction (optional, falls back to vision)
+  ocr: paddleOCR              # fast model for PDF page text extraction (optional; vision is tried automatically if OCR fails)
   web_search_key: tvly-...    # Tavily or Brave Search key (auto-detected from prefix)
 ```
 

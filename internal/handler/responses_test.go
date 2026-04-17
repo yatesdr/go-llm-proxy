@@ -275,6 +275,42 @@ func TestTranslateInput_ViewImageOutput(t *testing.T) {
 	}
 }
 
+func TestTranslateInput_PDFDataURLInInputImage(t *testing.T) {
+	// Responses API clients sometimes send PDFs as input_image with a
+	// data:application/pdf data URL. The translator should detect this
+	// and emit a pdf_data part so the PDF pipeline (not the image pipeline)
+	// handles it.
+	input := json.RawMessage(`[
+		{"role": "user", "content": [
+			{"type": "input_text", "text": "Summarize this PDF"},
+			{"type": "input_image", "image_url": "data:application/pdf;base64,JVBERi0xLjQK"}
+		]}
+	]`)
+	msgs, err := translateInput(input, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	content, ok := msgs[0]["content"].([]map[string]any)
+	if !ok {
+		t.Fatalf("expected content to be []map[string]any, got %T", msgs[0]["content"])
+	}
+	if len(content) != 2 {
+		t.Fatalf("expected 2 parts (text + pdf_data), got %d", len(content))
+	}
+	if content[0]["type"] != "text" {
+		t.Fatalf("expected text part first, got %v", content[0])
+	}
+	if content[1]["type"] != "pdf_data" {
+		t.Fatalf("expected pdf_data part (not image_url), got %v", content[1]["type"])
+	}
+	if content[1]["data"] != "JVBERi0xLjQK" {
+		t.Fatalf("expected PDF base64 payload preserved, got %v", content[1]["data"])
+	}
+}
+
 func TestTranslateInput_StructuredOutputWithSuccess(t *testing.T) {
 	// Codex view_image may also send output as {"content":[...],"success":true}.
 	input := json.RawMessage(`[
