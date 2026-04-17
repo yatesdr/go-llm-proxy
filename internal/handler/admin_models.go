@@ -81,9 +81,10 @@ func (h *AdminHandler) ModelsData(w http.ResponseWriter, r *http.Request) {
 		}
 		if m.Processors != nil {
 			entry["processors"] = map[string]any{
-				"vision":         m.Processors.Vision,
-				"ocr":            m.Processors.OCR,
-				"web_search_key": m.Processors.WebSearchKey,
+				"vision":                  m.Processors.Vision,
+				"ocr":                     m.Processors.OCR,
+				"has_web_search_key":      m.Processors.WebSearchKey != "",
+				"web_search_key_mask":     config.MaskSecret(m.Processors.WebSearchKey),
 			}
 		} else {
 			entry["processors"] = nil
@@ -215,9 +216,9 @@ type samplingInputDTO struct {
 }
 
 type processorsInputDTO struct {
-	Vision       string `json:"vision"`
-	OCR          string `json:"ocr"`
-	WebSearchKey string `json:"web_search_key"`
+	Vision       string  `json:"vision"`
+	OCR          string  `json:"ocr"`
+	WebSearchKey *string `json:"web_search_key"` // nil = keep existing; empty = clear; non-empty = replace
 }
 
 // toConfig translates the DTO into a ModelConfig suitable for passing to
@@ -266,10 +267,18 @@ func (d *modelInputDTO) toConfig(cfg *config.Config, originalName string) (confi
 		}
 	}
 	if d.Processors != nil {
+		// Per-model web_search_key uses the same pointer-style preserve-or-replace
+		// semantics as api_key: nil = keep existing, empty string = clear.
+		var webKey string
+		if d.Processors.WebSearchKey != nil {
+			webKey = *d.Processors.WebSearchKey
+		} else if existing != nil && existing.Processors != nil {
+			webKey = existing.Processors.WebSearchKey
+		}
 		mc.Processors = &config.ProcessorsConfig{
 			Vision:       d.Processors.Vision,
 			OCR:          d.Processors.OCR,
-			WebSearchKey: d.Processors.WebSearchKey,
+			WebSearchKey: webKey,
 		}
 	}
 	return mc, nil
@@ -491,8 +500,13 @@ func modelModalHTML() string {
               <input type="text" name="proc_ocr" list="allModelsList" placeholder="global default">
             </div>
             <div class="field field-full">
-              <label>Web search key <span class="tip" tabindex="0" data-tip="Default: global default (Tavily or Brave key from top-level config). Override to use a different search key for this model, e.g. for isolated billing.">?</span></label>
-              <input type="text" name="proc_web_search_key" placeholder="global default">
+              <label>Web search key <span class="tip" tabindex="0" data-tip="Default: global default (Tavily or Brave key from top-level config). Override to use a different search key for this model, e.g. for isolated billing. Rotate to replace; Clear to wipe and fall back to global.">?</span></label>
+              <div class="secret-row">
+                <span class="mono" id="procWebSearchKeyMask">—</span>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="rotateSecret('proc_web_search_key', this)">Rotate</button>
+                <button type="button" class="btn btn-danger btn-sm" onclick="clearSecret('proc_web_search_key')">Clear</button>
+              </div>
+              <input type="password" name="proc_web_search_key" id="proc_web_search_key_input" style="display:none;margin-top:6px" placeholder="enter new key — leave blank to keep existing">
             </div>
           </div>
         </div>
@@ -616,8 +630,13 @@ function openModelModal(name){
     if(m.processors){
       form.elements["proc_vision"].value = m.processors.vision || "";
       form.elements["proc_ocr"].value = m.processors.ocr || "";
-      form.elements["proc_web_search_key"].value = m.processors.web_search_key || "";
+      document.getElementById("procWebSearchKeyMask").textContent =
+        m.processors.has_web_search_key ? m.processors.web_search_key_mask : "(not set)";
+    } else {
+      document.getElementById("procWebSearchKeyMask").textContent = "(not set)";
     }
+    document.getElementById("proc_web_search_key_input").style.display = "none";
+    document.getElementById("proc_web_search_key_input").value = "";
     document.getElementById("apiKeyMask").textContent = m.has_api_key ? m.api_key_masked : "(not set)";
     document.getElementById("awsSecretMask").textContent = m.has_aws_secret ? m.aws_secret_mask : "(not set)";
     document.getElementById("awsSessionMask").textContent = m.has_aws_session ? "(set)" : "(not set)";
@@ -636,6 +655,7 @@ function openModelModal(name){
     document.getElementById("apiKeyMask").textContent = "(not set)";
     document.getElementById("awsSecretMask").textContent = "(not set)";
     document.getElementById("awsSessionMask").textContent = "(not set)";
+    document.getElementById("procWebSearchKeyMask").textContent = "(not set)";
   }
   onTypeChange();
   document.getElementById("modelFormErr").style.display = "none";
@@ -680,7 +700,12 @@ function rotateSecret(field, btn){
 
 function clearSecret(field){
   mstate.secretOverrides[field] = "clear";
-  var mask = {api_key:"apiKeyMask", aws_secret_key:"awsSecretMask", aws_session_token:"awsSessionMask"}[field];
+  var mask = {
+    api_key:"apiKeyMask",
+    aws_secret_key:"awsSecretMask",
+    aws_session_token:"awsSessionMask",
+    proc_web_search_key:"procWebSearchKeyMask"
+  }[field];
   if(mask) document.getElementById(mask).textContent = "(will be cleared on save)";
   var inp = document.getElementById(field + "_input");
   if(inp){ inp.style.display="none"; inp.value=""; }
@@ -743,12 +768,15 @@ function collectForm(){
     if(d.stop.length) anyDefault = true;
   }
   if(anyDefault) body.defaults = d;
-  // Per-model processors
+  // Per-model processors. Web search key uses the shared secretField
+  // helper so it inherits the blank-rotate-is-no-op safety and is never
+  // sent plaintext on a no-change save.
   var pv = form.elements["proc_vision"].value.trim();
   var po = form.elements["proc_ocr"].value.trim();
-  var pw = form.elements["proc_web_search_key"].value.trim();
-  if(pv || po || pw){
-    body.processors = {vision: pv, ocr: po, web_search_key: pw};
+  var pwSecret = secretField("proc_web_search_key"); // null = keep, "" = clear, "value" = set
+  if(pv || po || pwSecret !== null){
+    body.processors = {vision: pv, ocr: po};
+    if(pwSecret !== null) body.processors.web_search_key = pwSecret;
   }
   return body;
 }

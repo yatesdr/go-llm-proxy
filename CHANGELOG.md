@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.3.9
+
+### Security
+
+- **Per-model `processors.web_search_key` was returned in plaintext** by `/admin/models/data` and rendered into a plain-text HTML input on every edit-modal open. All other model secrets (`api_key`, `aws_secret_key`, `aws_session_token`) were masked, but the per-model web search key was missed — an admin opening the Models page would ship the literal key value to the browser over the admin session. Fixed by switching to the same Rotate/Clear UX used by the other secrets: `/admin/models/data` now returns `has_web_search_key` + `web_search_key_mask` (via `MaskSecret`) rather than the raw value, the DTO field is pointer-typed (`*string`) so omitted means "preserve existing" and empty means "clear", and `processorsInputDTO.toConfig` copies the previous value from `existing.Processors.WebSearchKey` when the client omits the field. Form UI uses the shared `secretField` helper, so blank-rotate-with-Save is a no-op (can't accidentally wipe the stored key).
+
 ## v0.3.8
 
 ### Added
