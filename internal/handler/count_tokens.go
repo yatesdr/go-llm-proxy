@@ -112,9 +112,7 @@ func (h *CountTokensHandler) proxyNative(ctx context.Context, w http.ResponseWri
 	}
 
 	copyHeaders(upReq.Header, r.Header, config.BackendAnthropic)
-	if model.APIKey != "" {
-		upReq.Header.Set("X-Api-Key", model.APIKey)
-	}
+	applyBackendAuthHeaders(upReq, model)
 
 	resp, err := h.client.Do(upReq)
 	if err != nil {

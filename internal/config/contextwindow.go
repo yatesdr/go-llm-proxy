@@ -22,7 +22,7 @@ func DetectContextWindows(cs *ConfigStore) {
 
 	for i := range cfg.Models {
 		m := &cfg.Models[i]
-		go detectOne(client, cs, m.Name, m.Backend, m.Model, m.APIKey, m.Type, m.ContextWindow)
+		go detectOne(client, cs, m.Name, *m, m.ContextWindow)
 	}
 }
 
@@ -30,13 +30,13 @@ func DetectContextWindows(cs *ConfigStore) {
 // returns a positive value (the live backend is more authoritative than a
 // hand-edited config). The configured value is the fallback: if detection
 // errors or returns 0, whatever was in config.yaml is left in place.
-func detectOne(client *http.Client, cs *ConfigStore, name, backend, modelID, apiKey, backendType string, configured int) {
+func detectOne(client *http.Client, cs *ConfigStore, name string, model ModelConfig, configured int) {
 	var ctxWindow int
 	var err error
 
-	switch backendType {
+	switch model.Type {
 	case BackendAnthropic:
-		ctxWindow, err = detectAnthropic(client, backend, modelID, apiKey)
+		ctxWindow, err = detectAnthropic(client, model)
 	case BackendBedrock:
 		// Bedrock has no API endpoint that returns model context window;
 		// GetFoundationModel reports modality/region but not max tokens,
@@ -44,9 +44,9 @@ func detectOne(client *http.Client, cs *ConfigStore, name, backend, modelID, api
 		// back to a lookup table of well-known model-ID prefixes. On a
 		// miss we leave detection empty and let the configured value
 		// stand.
-		ctxWindow = lookupBedrockContextWindow(modelID)
+		ctxWindow = lookupBedrockContextWindow(model.Model)
 	default:
-		ctxWindow, err = detectOpenAI(client, backend, modelID, apiKey)
+		ctxWindow, err = detectOpenAI(client, model)
 	}
 
 	if err != nil {
@@ -55,7 +55,7 @@ func detectOne(client *http.Client, cs *ConfigStore, name, backend, modelID, api
 				"model", name, "configured", configured, "error", err)
 		} else {
 			slog.Warn("failed to detect context window",
-				"model", name, "backend", backend, "error", err)
+				"model", name, "backend", model.Backend, "error", err)
 		}
 		return
 	}
@@ -65,7 +65,7 @@ func detectOne(client *http.Client, cs *ConfigStore, name, backend, modelID, api
 				"model", name, "configured", configured)
 		} else {
 			slog.Debug("backend did not report context window; set context_window in config",
-				"model", name, "backend", backend)
+				"model", name, "backend", model.Backend)
 		}
 		return
 	}
@@ -96,12 +96,12 @@ func detectOne(client *http.Client, cs *ConfigStore, name, backend, modelID, api
 
 // detectOpenAI queries GET /models on an OpenAI-compatible backend and
 // extracts max_model_len from the matching model entry.
-func detectOpenAI(client *http.Client, backend, modelID, apiKey string) (int, error) {
-	base := strings.TrimRight(backend, "/")
+func detectOpenAI(client *http.Client, model ModelConfig) (int, error) {
+	base := strings.TrimRight(model.Backend, "/")
 
 	// Try llama.cpp /props endpoint first — it reports actual runtime n_ctx
 	// (respects --ctx-size), unlike /models which reports n_ctx_train.
-	if ctxWindow := detectLlamaCppProps(client, base, apiKey); ctxWindow > 0 {
+	if ctxWindow := detectLlamaCppProps(client, model, base); ctxWindow > 0 {
 		return ctxWindow, nil
 	}
 
@@ -112,9 +112,7 @@ func detectOpenAI(client *http.Client, backend, modelID, apiKey string) (int, er
 	if err != nil {
 		return 0, err
 	}
-	if apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-	}
+	ApplyUpstreamAuthHeaders(req, model)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -146,7 +144,7 @@ func detectOpenAI(client *http.Client, backend, modelID, apiKey string) (int, er
 	}
 
 	for _, m := range result.Data {
-		if m.ID == modelID {
+		if m.ID == model.Model {
 			if m.MaxModelLen > 0 {
 				return m.MaxModelLen, nil
 			}
@@ -166,12 +164,12 @@ func detectOpenAI(client *http.Client, backend, modelID, apiKey string) (int, er
 		}
 	}
 
-	return 0, fmt.Errorf("model %q not found or no context window reported", modelID)
+	return 0, fmt.Errorf("model %q not found or no context window reported", model.Model)
 }
 
 // detectLlamaCppProps queries the llama.cpp /props endpoint to get the actual
 // runtime context size (n_ctx) which respects --ctx-size configuration.
-func detectLlamaCppProps(client *http.Client, base, apiKey string) int {
+func detectLlamaCppProps(client *http.Client, model ModelConfig, base string) int {
 	// Strip /v1 suffix if present to get the server root.
 	propsBase := strings.TrimSuffix(base, "/v1")
 	propsURL := propsBase + "/props"
@@ -180,9 +178,7 @@ func detectLlamaCppProps(client *http.Client, base, apiKey string) int {
 	if err != nil {
 		return 0
 	}
-	if apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-	}
+	ApplyUpstreamAuthHeaders(req, model)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -307,17 +303,15 @@ var bedrockContextWindows = map[string]int{
 
 // detectAnthropic queries GET /v1/models/{model_id} on an Anthropic backend
 // and extracts max_input_tokens.
-func detectAnthropic(client *http.Client, backend, modelID, apiKey string) (int, error) {
-	base := strings.TrimRight(backend, "/")
-	modelURL := base + "/v1/models/" + modelID
+func detectAnthropic(client *http.Client, model ModelConfig) (int, error) {
+	base := strings.TrimRight(model.Backend, "/")
+	modelURL := base + "/v1/models/" + model.Model
 
 	req, err := http.NewRequest(http.MethodGet, modelURL, nil)
 	if err != nil {
 		return 0, err
 	}
-	if apiKey != "" {
-		req.Header.Set("X-Api-Key", apiKey)
-	}
+	ApplyUpstreamAuthHeaders(req, model)
 	req.Header.Set("Anthropic-Version", "2023-06-01")
 
 	resp, err := client.Do(req)

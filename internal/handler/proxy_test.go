@@ -197,6 +197,41 @@ func TestProxyHandler_OpenAIAuthHeader(t *testing.T) {
 	}
 }
 
+func TestProxyHandler_CustomRawAuthHeader(t *testing.T) {
+	var gotAuth, gotCustom string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotCustom = r.Header.Get("X-Litellm-Api-Key")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	cfg := &config.Config{
+		Models: []config.ModelConfig{{
+			Name:           "test-model",
+			Backend:        ts.URL + "/v1",
+			APIKey:         "backend-secret",
+			AuthHeaderName: "X-Litellm-Api-Key",
+			AuthScheme:     config.AuthSchemeRaw,
+			Model:          "test-model",
+			Timeout:        10,
+		}},
+	}
+	proxy := NewProxyHandler(config.NewTestConfigStore(cfg), nil, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test-model","messages":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	proxy.ServeHTTP(w, req)
+
+	if gotAuth != "" {
+		t.Fatalf("expected no Authorization header, got %q", gotAuth)
+	}
+	if gotCustom != "backend-secret" {
+		t.Fatalf("expected raw custom auth header, got %q", gotCustom)
+	}
+}
+
 // Anthropic Messages API tests moved to messages_test.go (MessagesHandler).
 
 func TestProxyHandler_OpenAIUpstreamPath(t *testing.T) {

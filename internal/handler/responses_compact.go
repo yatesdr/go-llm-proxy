@@ -128,9 +128,7 @@ func (h *ResponsesHandler) HandleCompact(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	upReq.Header.Set("Content-Type", "application/json")
-	if model.APIKey != "" {
-		upReq.Header.Set("Authorization", "Bearer "+model.APIKey)
-	}
+	applyBackendAuthHeaders(upReq, model)
 
 	resp, err := h.client.Do(upReq)
 	if err != nil {

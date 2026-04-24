@@ -452,6 +452,58 @@ func TestResponsesHandler_NonStreaming(t *testing.T) {
 	}
 }
 
+func TestResponsesHandler_CustomRawAuthHeader(t *testing.T) {
+	var gotAuth, gotCustom string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotCustom = r.Header.Get("X-Litellm-Api-Key")
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":      "chatcmpl-123",
+			"model":   "test-model",
+			"created": 1234567890,
+			"choices": []map[string]any{{
+				"index":         0,
+				"finish_reason": "stop",
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": "Hello back!",
+				},
+			}},
+		})
+	}))
+	defer ts.Close()
+
+	cfg := &config.Config{
+		Models: []config.ModelConfig{{
+			Name:           "test-model",
+			Backend:        ts.URL + "/v1",
+			APIKey:         "backend-secret",
+			AuthHeaderName: "X-Litellm-Api-Key",
+			AuthScheme:     config.AuthSchemeRaw,
+			Model:          "test-model",
+			Timeout:        10,
+			ResponsesMode:  "translate",
+		}},
+	}
+	handler := NewResponsesHandler(config.NewTestConfigStore(cfg), nil, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"test-model","input":"Hello!","stream":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if gotAuth != "" {
+		t.Fatalf("expected no Authorization header, got %q", gotAuth)
+	}
+	if gotCustom != "backend-secret" {
+		t.Fatalf("expected raw custom auth header, got %q", gotCustom)
+	}
+}
+
 func TestResponsesHandler_Streaming(t *testing.T) {
 	handler, ts := newTestResponsesHandler(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

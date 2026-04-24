@@ -206,14 +206,7 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	copyHeaders(upReq.Header, r.Header, model.Type)
-
-	if model.APIKey != "" {
-		if model.Type == config.BackendAnthropic {
-			upReq.Header.Set("X-Api-Key", model.APIKey)
-		} else {
-			upReq.Header.Set("Authorization", "Bearer "+model.APIKey)
-		}
-	}
+	applyBackendAuthHeaders(upReq, model)
 
 	keyName := ""
 	keyHash := ""
@@ -632,9 +625,7 @@ func (p *ProxyHandler) reStreamFromBackend(ctx context.Context, w http.ResponseW
 	}
 	upReq.Header.Set("Content-Type", "application/json")
 	upReq.Header.Set("Accept", "text/event-stream")
-	if model.APIKey != "" {
-		upReq.Header.Set("Authorization", "Bearer "+model.APIKey)
-	}
+	applyBackendAuthHeaders(upReq, model)
 
 	resp, err := p.client.Do(upReq)
 	if err != nil {

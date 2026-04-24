@@ -19,7 +19,7 @@ func TestDetectOpenAI(t *testing.T) {
 	defer ts.Close()
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	ctx, err := detectOpenAI(client, ts.URL+"/v1", "test-model", "")
+	ctx, err := detectOpenAI(client, ModelConfig{Backend: ts.URL + "/v1", Model: "test-model"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestDetectOpenAI_ModelNotFound(t *testing.T) {
 	defer ts.Close()
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	_, err := detectOpenAI(client, ts.URL+"/v1", "nonexistent", "")
+	_, err := detectOpenAI(client, ModelConfig{Backend: ts.URL + "/v1", Model: "nonexistent"})
 	if err == nil {
 		t.Fatal("expected error for model not found")
 	}
@@ -58,7 +58,7 @@ func TestDetectOpenAI_SingleModelFallback(t *testing.T) {
 	defer ts.Close()
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	ctx, err := detectOpenAI(client, ts.URL+"/v1", "friendly-name", "")
+	ctx, err := detectOpenAI(client, ModelConfig{Backend: ts.URL + "/v1", Model: "friendly-name"})
 	if err != nil {
 		t.Fatalf("expected single-model fallback, got error: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestDetectAnthropic(t *testing.T) {
 	defer ts.Close()
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	ctx, err := detectAnthropic(client, ts.URL, "claude-test", "test-key")
+	ctx, err := detectAnthropic(client, ModelConfig{Backend: ts.URL, Model: "claude-test", APIKey: "test-key", Type: BackendAnthropic})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

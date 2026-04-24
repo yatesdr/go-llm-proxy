@@ -836,9 +836,7 @@ func (h *ResponsesHandler) streamResponsesFromBackend(
 	}
 	upReq.Header.Set("Content-Type", "application/json")
 	upReq.Header.Set("Accept", "text/event-stream")
-	if model.APIKey != "" {
-		upReq.Header.Set("Authorization", "Bearer "+model.APIKey)
-	}
+	applyBackendAuthHeaders(upReq, model)
 
 	resp, err := h.client.Do(upReq)
 	if err != nil {

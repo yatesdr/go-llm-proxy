@@ -98,9 +98,7 @@ func (h *ResponsesHandler) tryNativePassthrough(ctx context.Context, w http.Resp
 	if v := r.Header.Get("X-Request-ID"); v != "" {
 		upReq.Header.Set("X-Request-ID", v)
 	}
-	if model.APIKey != "" {
-		upReq.Header.Set("Authorization", "Bearer "+model.APIKey)
-	}
+	applyBackendAuthHeaders(upReq, model)
 
 	resp, err := h.client.Do(upReq)
 	if err != nil {
@@ -348,9 +346,7 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if v := r.Header.Get("X-Request-ID"); v != "" {
 		upReq.Header.Set("X-Request-ID", v)
 	}
-	if model.APIKey != "" {
-		upReq.Header.Set("Authorization", "Bearer "+model.APIKey)
-	}
+	applyBackendAuthHeaders(upReq, model)
 
 	slog.Info("proxying responses request", "model", req.Model, "key", keyName)
 
