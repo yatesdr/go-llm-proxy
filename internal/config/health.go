@@ -262,13 +262,7 @@ func (hs *HealthStore) checkOne(ctx context.Context, client *http.Client, m *Mod
 		return
 	}
 
-	if m.APIKey != "" {
-		if m.Type == BackendAnthropic {
-			req.Header.Set("X-Api-Key", m.APIKey)
-		} else {
-			req.Header.Set("Authorization", "Bearer "+m.APIKey)
-		}
-	}
+	ApplyUpstreamAuthHeaders(req, *m)
 
 	resp, err := client.Do(req)
 	if err != nil {

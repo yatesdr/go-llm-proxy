@@ -203,9 +203,7 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if v := r.Header.Get("X-Request-ID"); v != "" {
 		upReq.Header.Set("X-Request-ID", v)
 	}
-	if model.APIKey != "" {
-		upReq.Header.Set("Authorization", "Bearer "+model.APIKey)
-	}
+	applyBackendAuthHeaders(upReq, model)
 
 	resp, err := h.client.Do(upReq)
 	if err != nil {
@@ -287,9 +285,7 @@ func (h *MessagesHandler) handleNativePassthrough(ctx context.Context, w http.Re
 		upReq.Header.Set("X-Request-ID", v)
 	}
 	// Anthropic auth and protocol headers.
-	if model.APIKey != "" {
-		upReq.Header.Set("X-Api-Key", model.APIKey)
-	}
+	applyBackendAuthHeaders(upReq, model)
 	for _, h := range []string{"Anthropic-Version", "Anthropic-Beta"} {
 		if v := r.Header.Get(h); v != "" {
 			upReq.Header.Set(h, v)

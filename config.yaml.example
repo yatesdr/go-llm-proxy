@@ -17,6 +17,8 @@ models:
   - name: my-model
     backend: http://192.168.1.10:8000/v1
     # api_key: backend-key           # if your backend requires auth
+    # auth_header_name: Authorization # optional override for where api_key is sent
+    # auth_scheme: bearer            # bearer | raw; defaults depend on header/backend type
     # model: actual-model-name       # if the backend expects a different model name
     # timeout: 300                   # request timeout in seconds (default: 300)
     # context_window: 131072         # set manually if auto-detect fails (default: auto)
@@ -40,6 +42,13 @@ models:
   # - name: gpt-4.1
   #   backend: https://api.openai.com/v1
   #   api_key: sk-your-openai-key
+
+  # OpenAI-compatible backend with raw custom auth header
+  # - name: custom-gateway
+  #   backend: https://example.com/openai/v1
+  #   api_key: your-key
+  #   auth_header_name: x-provider-api-key
+  #   auth_scheme: raw
 
   # Third-party API with model name rewriting
   # - name: glm-4.5
