@@ -41,6 +41,12 @@ models:
   #   backend: https://api.openai.com/v1
   #   api_key: sk-your-openai-key
 
+  # Tuning Engines governed OpenAI-compatible gateway
+  # - name: te-llama-3.3-70b
+  #   backend: https://api.tuningengines.com/v1
+  #   api_key: sk-te-your-tuning-engines-key
+  #   model: llama-3.3-70b-fp8
+
   # Third-party API with model name rewriting
   # - name: glm-4.5
   #   backend: https://api.z.ai/api/coding/paas/v4
