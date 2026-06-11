@@ -3,7 +3,7 @@ FROM golang:1.26.1-alpine AS builder
 WORKDIR /src
 
 ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+ARG TARGETARCH
 
 COPY go.mod go.sum ./
 RUN go mod download
