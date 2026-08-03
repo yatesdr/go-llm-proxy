@@ -50,6 +50,16 @@ keys:
     name: admin
 ```
 
+Tuning Engines can be used as an OpenAI-compatible governed upstream:
+
+```yaml
+models:
+  - name: te-llama-3.3-70b
+    backend: https://api.tuningengines.com/v1
+    api_key: sk-te-your-tuning-engines-key
+    model: llama-3.3-70b-fp8
+```
+
 See [config.yaml.example](config.yaml.example) for a fully annotated starter config with all options.
 
 ## Compatibility matrix
