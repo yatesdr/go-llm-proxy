@@ -59,12 +59,14 @@ func (h *AdminHandler) ModelsData(w http.ResponseWriter, r *http.Request) {
 			"timeout":           m.Timeout,
 			"context_window":    m.ContextWindow,
 			"supports_vision":   m.SupportsVision,
-			"supports_audio":   m.SupportsAudio,
+			"supports_audio":    m.SupportsAudio,
 			"force_pipeline":    m.ForcePipeline,
 			"responses_mode":    m.ResponsesMode,
 			"messages_mode":     m.MessagesMode,
 			"has_api_key":       m.APIKey != "",
 			"api_key_masked":    config.MaskSecret(m.APIKey),
+			"auth_header_name":  m.AuthHeaderName,
+			"auth_scheme":       m.AuthScheme,
 			"region":            m.Region,
 			"aws_access_key":    m.AWSAccessKey,
 			"has_aws_secret":    m.AWSSecretKey != "",
@@ -81,10 +83,10 @@ func (h *AdminHandler) ModelsData(w http.ResponseWriter, r *http.Request) {
 		}
 		if m.Processors != nil {
 			entry["processors"] = map[string]any{
-				"vision":                  m.Processors.Vision,
-				"ocr":                     m.Processors.OCR,
-				"has_web_search_key":      m.Processors.WebSearchKey != "",
-				"web_search_key_mask":     config.MaskSecret(m.Processors.WebSearchKey),
+				"vision":              m.Processors.Vision,
+				"ocr":                 m.Processors.OCR,
+				"has_web_search_key":  m.Processors.WebSearchKey != "",
+				"web_search_key_mask": config.MaskSecret(m.Processors.WebSearchKey),
 			}
 		} else {
 			entry["processors"] = nil
@@ -193,6 +195,8 @@ type modelInputDTO struct {
 	ResponsesMode    string              `json:"responses_mode"`
 	MessagesMode     string              `json:"messages_mode"`
 	APIKey           *string             `json:"api_key"`
+	AuthHeaderName   string              `json:"auth_header_name"`
+	AuthScheme       string              `json:"auth_scheme"`
 	Region           string              `json:"region"`
 	AWSAccessKey     string              `json:"aws_access_key"`
 	AWSSecretKey     *string             `json:"aws_secret_key"`
@@ -238,6 +242,8 @@ func (d *modelInputDTO) toConfig(cfg *config.Config, originalName string) (confi
 		ForcePipeline:    d.ForcePipeline,
 		ResponsesMode:    d.ResponsesMode,
 		MessagesMode:     d.MessagesMode,
+		AuthHeaderName:   d.AuthHeaderName,
+		AuthScheme:       d.AuthScheme,
 		Region:           d.Region,
 		AWSAccessKey:     d.AWSAccessKey,
 		GuardrailID:      d.GuardrailID,
@@ -360,13 +366,25 @@ func modelModalHTML() string {
               <input type="text" name="model" placeholder="same as name">
             </div>
             <div class="field field-full">
-              <label>API key <span class="tip" tabindex="0" data-tip="Bearer token sent to the backend. Default: empty (no auth). Required for cloud providers (OpenAI, Anthropic, Z.AI). For bedrock, optional: sets an AWS Bedrock API key; otherwise SigV4 uses the AWS credentials below.">?</span></label>
+              <label>API key <span class="tip" tabindex="0" data-tip="Upstream API key. Default: empty (no auth). By default OpenAI-compatible backends send it as Authorization: Bearer and Anthropic backends send it as x-api-key. Use the auth fields below to override that behavior. For bedrock, optional: sets an AWS Bedrock API key; otherwise SigV4 uses the AWS credentials below.">?</span></label>
               <div class="secret-row">
                 <span class="mono" id="apiKeyMask">—</span>
                 <button type="button" class="btn btn-secondary btn-sm" onclick="rotateSecret('api_key', this)">Rotate</button>
                 <button type="button" class="btn btn-danger btn-sm" onclick="clearSecret('api_key')">Clear</button>
               </div>
               <input type="password" name="api_key" id="api_key_input" style="display:none;margin-top:6px" placeholder="enter new key — leave blank to keep existing">
+            </div>
+            <div class="field">
+              <label>Auth header name <span class="tip" tabindex="0" data-tip="Default: Authorization for OpenAI-compatible backends, x-api-key for Anthropic backends. Override when an upstream expects the API key in a different header.">?</span></label>
+              <input type="text" name="auth_header_name" placeholder="default for backend type">
+            </div>
+            <div class="field">
+              <label>Auth scheme <span class="tip" tabindex="0" data-tip="Default: bearer for Authorization, raw for other auth headers. Use bearer for Authorization: Bearer &lt;key&gt; or raw to send the key value as-is in the configured header.">?</span></label>
+              <select name="auth_scheme">
+                <option value="">default</option>
+                <option value="bearer">bearer</option>
+                <option value="raw">raw</option>
+              </select>
             </div>
           </div>
         </div>
@@ -621,6 +639,8 @@ function openModelModal(name){
     form.elements["force_pipeline"].checked = !!m.force_pipeline;
     form.elements["responses_mode"].value = m.responses_mode || "";
     form.elements["messages_mode"].value = m.messages_mode || "";
+    form.elements["auth_header_name"].value = m.auth_header_name || "";
+    form.elements["auth_scheme"].value = m.auth_scheme || "";
     form.elements["region"].value = m.region || "";
     form.elements["aws_access_key"].value = m.aws_access_key || "";
     form.elements["guardrail_id"].value = m.guardrail_id || "";
@@ -725,6 +745,8 @@ function collectForm(){
     force_pipeline: form.elements["force_pipeline"].checked,
     responses_mode: form.elements["responses_mode"].value,
     messages_mode: form.elements["messages_mode"].value,
+    auth_header_name: form.elements["auth_header_name"].value.trim(),
+    auth_scheme: form.elements["auth_scheme"].value,
     region: form.elements["region"].value.trim(),
     aws_access_key: form.elements["aws_access_key"].value.trim(),
     guardrail_id: form.elements["guardrail_id"].value.trim(),

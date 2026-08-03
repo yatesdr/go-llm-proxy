@@ -532,9 +532,7 @@ func (p *Pipeline) describeImage(ctx context.Context, visionModel *config.ModelC
 		return "", fmt.Errorf("build vision request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if visionModel.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+visionModel.APIKey)
-	}
+	config.ApplyUpstreamAuthHeaders(req, *visionModel)
 
 	resp, err := p.client.Do(req)
 	if err != nil {

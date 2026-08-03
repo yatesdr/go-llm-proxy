@@ -602,6 +602,12 @@ func modelConfigNode(m ModelConfig) *yaml.Node {
 	if m.APIKey != "" {
 		add("api_key", stringNode(m.APIKey))
 	}
+	if m.AuthHeaderName != "" {
+		add("auth_header_name", stringNode(m.AuthHeaderName))
+	}
+	if m.AuthScheme != "" {
+		add("auth_scheme", stringNode(m.AuthScheme))
+	}
 	if m.Model != "" && m.Model != m.Name {
 		add("model", stringNode(m.Model))
 	}

@@ -44,6 +44,10 @@ var anthropicHeaders = []string{
 	"Anthropic-Beta",
 }
 
+func applyBackendAuthHeaders(req *http.Request, model *config.ModelConfig) {
+	config.ApplyUpstreamAuthHeaders(req, *model)
+}
+
 // copyResponseHeaders copies allowed upstream response headers to the client response.
 func copyResponseHeaders(w http.ResponseWriter, resp *http.Response) {
 	for k := range AllowedResponseHeaders {
@@ -95,9 +99,7 @@ func sendChatCompletionsRequest(ctx context.Context, client *http.Client, chatRe
 		return nil, fmt.Errorf("create upstream request: %w", err)
 	}
 	upReq.Header.Set("Content-Type", "application/json")
-	if model.APIKey != "" {
-		upReq.Header.Set("Authorization", "Bearer "+model.APIKey)
-	}
+	applyBackendAuthHeaders(upReq, model)
 
 	resp, err := client.Do(upReq)
 	if err != nil {

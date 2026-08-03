@@ -21,6 +21,8 @@ models:
   - name: MiniMax-M2.5
     backend: http://192.168.100.10:8000/v1
     api_key: your-backend-key
+    auth_header_name: Authorization # optional
+    auth_scheme: bearer             # optional
     model: internal-model-name    # optional
     timeout: 300                  # optional
     type: openai                  # optional
@@ -33,7 +35,9 @@ models:
 |---|---|---|---|
 | `name` | yes | — | Model name clients use in requests |
 | `backend` | yes | — | Upstream base URL (see [Backend URL routing](#backend-url-routing)) |
-| `api_key` | no | — | Token sent upstream (`Bearer` for OpenAI, `x-api-key` for Anthropic) |
+| `api_key` | no | — | Upstream API key value |
+| `auth_header_name` | no | backend-specific default | Header used when sending `api_key` upstream |
+| `auth_scheme` | no | backend-specific default | How `api_key` is encoded: `bearer` or `raw` |
 | `model` | no | same as `name` | Model name sent to the backend (for rewriting) |
 | `timeout` | no | `300` | Request timeout in seconds |
 | `type` | no | `"openai"` | Backend protocol: `"openai"`, `"anthropic"`, or `"bedrock"` (see [Bedrock backends](#bedrock-backends)) |
@@ -41,6 +45,41 @@ models:
 | `messages_mode` | no | `"auto"` | Messages API handling: `"auto"`, `"native"`, or `"translate"` (see [Messages mode](#messages-mode)) |
 | `context_window` | no | `0` | Max context tokens. `0` = auto-detect from backend at startup |
 | `defaults` | no | — | Default sampling parameters (see below) |
+
+### Upstream auth behavior
+
+By default, the proxy sends `api_key` using the backend's normal auth style:
+
+- OpenAI-compatible: `Authorization: Bearer <api_key>`
+- Anthropic: `x-api-key: <api_key>`
+- Bedrock API-key mode: `Authorization: Bearer <api_key>`
+
+Override that behavior per model with `auth_header_name` and `auth_scheme`.
+
+`auth_scheme` values:
+
+- `bearer`: sends `Header-Name: Bearer <api_key>`
+- `raw`: sends `Header-Name: <api_key>`
+
+Example: default bearer auth
+
+```yaml
+models:
+  - name: gpt-4.1
+    backend: https://api.openai.com/v1
+    api_key: sk-your-key
+```
+
+Example: raw custom header auth
+
+```yaml
+models:
+  - name: custom-gateway
+    backend: https://example.com/openai/v1
+    api_key: your-key
+    auth_header_name: x-provider-api-key
+    auth_scheme: raw
+```
 
 ### Per-model sampling defaults
 

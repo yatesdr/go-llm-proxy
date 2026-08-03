@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -39,6 +40,9 @@ const (
 	BackendAnthropic = "anthropic"
 	BackendBedrock   = "bedrock"
 
+	AuthSchemeBearer = "bearer"
+	AuthSchemeRaw    = "raw"
+
 	ResponsesModeAuto      = ""          // default: probe backend, cache result
 	ResponsesModeNative    = "native"    // always passthrough
 	ResponsesModeTranslate = "translate" // always translate to Chat Completions
@@ -63,19 +67,21 @@ type SamplingDefaults struct {
 
 type ModelConfig struct {
 	Name           string            `yaml:"name"`
-	Backend        string            `yaml:"backend"`         // upstream URL e.g. http://192.168.100.10:8000/v1
-	APIKey         string            `yaml:"api_key"`         // key to send to the backend (if required)
-	Model          string            `yaml:"model"`           // model name to send to the backend (if different from Name)
-	Timeout        int               `yaml:"timeout"`         // request timeout in seconds (default 300)
-	Type           string            `yaml:"type"`            // backend type: "" or "openai" (default), "anthropic"
-	ResponsesMode  string            `yaml:"responses_mode"`  // "auto" (default), "native", or "translate"
-	MessagesMode   string            `yaml:"messages_mode"`   // "auto" (default), "native", or "translate"
-	ContextWindow  int               `yaml:"context_window"`  // max context tokens (0 = auto-detect from backend)
-	SupportsVision bool              `yaml:"supports_vision"` // model handles images natively
-	SupportsAudio  bool              `yaml:"supports_audio"`  // model handles audio (transcription or audio input)
-	ForcePipeline  bool              `yaml:"force_pipeline"`  // run pipeline even on native backends
-	Processors     *ProcessorsConfig `yaml:"processors"`      // per-model processor overrides (nil = use global)
-	Defaults       *SamplingDefaults `yaml:"defaults"`        // default sampling parameters (nil = use backend defaults)
+	Backend        string            `yaml:"backend"`          // upstream URL e.g. http://192.168.100.10:8000/v1
+	APIKey         string            `yaml:"api_key"`          // key to send to the backend (if required)
+	AuthHeaderName string            `yaml:"auth_header_name"` // optional upstream auth header name override
+	AuthScheme     string            `yaml:"auth_scheme"`      // optional upstream auth scheme override: bearer or raw
+	Model          string            `yaml:"model"`            // model name to send to the backend (if different from Name)
+	Timeout        int               `yaml:"timeout"`          // request timeout in seconds (default 300)
+	Type           string            `yaml:"type"`             // backend type: "" or "openai" (default), "anthropic"
+	ResponsesMode  string            `yaml:"responses_mode"`   // "auto" (default), "native", or "translate"
+	MessagesMode   string            `yaml:"messages_mode"`    // "auto" (default), "native", or "translate"
+	ContextWindow  int               `yaml:"context_window"`   // max context tokens (0 = auto-detect from backend)
+	SupportsVision bool              `yaml:"supports_vision"`  // model handles images natively
+	SupportsAudio  bool              `yaml:"supports_audio"`   // model handles audio (transcription or audio input)
+	ForcePipeline  bool              `yaml:"force_pipeline"`   // run pipeline even on native backends
+	Processors     *ProcessorsConfig `yaml:"processors"`       // per-model processor overrides (nil = use global)
+	Defaults       *SamplingDefaults `yaml:"defaults"`         // default sampling parameters (nil = use backend defaults)
 
 	// AWS Bedrock fields (only used when type: "bedrock").
 	// If api_key is set, it is sent as a Bedrock API key bearer token and the
@@ -367,6 +373,18 @@ func validateConfig(cfg *Config) error {
 			return fmt.Errorf("model %q has unknown messages_mode %q (must be %q, %q, or omitted)", m.Name, m.MessagesMode, MessagesModeNative, MessagesModeTranslate)
 		}
 
+		if m.AuthHeaderName != "" {
+			if http.CanonicalHeaderKey(m.AuthHeaderName) == "" {
+				return fmt.Errorf("model %q has invalid auth_header_name", m.Name)
+			}
+		}
+
+		switch m.AuthScheme {
+		case "", AuthSchemeBearer, AuthSchemeRaw:
+		default:
+			return fmt.Errorf("model %q has unknown auth_scheme %q (must be %q, %q, or omitted)", m.Name, m.AuthScheme, AuthSchemeBearer, AuthSchemeRaw)
+		}
+
 		if d := m.Defaults; d != nil && d.ReasoningEffort != nil {
 			switch *d.ReasoningEffort {
 			case "low", "medium", "high":
@@ -492,6 +510,45 @@ func validateConfig(cfg *Config) error {
 	}
 
 	return nil
+}
+
+// UpstreamAuthConfig returns the effective upstream auth header name and scheme.
+func (m ModelConfig) UpstreamAuthConfig() (headerName, scheme string) {
+	headerName = m.AuthHeaderName
+	scheme = m.AuthScheme
+
+	if headerName == "" {
+		if m.Type == BackendAnthropic {
+			headerName = "X-Api-Key"
+		} else {
+			headerName = "Authorization"
+		}
+	}
+
+	if scheme == "" {
+		if headerName == "Authorization" {
+			scheme = AuthSchemeBearer
+		} else {
+			scheme = AuthSchemeRaw
+		}
+	}
+
+	return headerName, scheme
+}
+
+// ApplyUpstreamAuthHeaders writes the configured upstream auth header for a model.
+func ApplyUpstreamAuthHeaders(req *http.Request, m ModelConfig) {
+	if m.APIKey == "" {
+		return
+	}
+
+	headerName, scheme := m.UpstreamAuthConfig()
+	switch scheme {
+	case AuthSchemeRaw:
+		req.Header.Set(headerName, m.APIKey)
+	default:
+		req.Header.Set(headerName, "Bearer "+m.APIKey)
+	}
 }
 
 // ApplySamplingDefaults injects default sampling parameters into a Chat Completions

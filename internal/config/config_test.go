@@ -124,6 +124,47 @@ func TestValidateConfig_ValidAnthropicType(t *testing.T) {
 	}
 }
 
+func TestValidateConfig_ValidCustomAuthFields(t *testing.T) {
+	cfg := validConfig()
+	cfg.Models[0].AuthHeaderName = "X-Custom-Key"
+	cfg.Models[0].AuthScheme = AuthSchemeRaw
+	if err := validateConfig(cfg); err != nil {
+		t.Fatalf("expected no error for custom auth fields, got: %v", err)
+	}
+}
+
+func TestValidateConfig_InvalidAuthScheme(t *testing.T) {
+	cfg := validConfig()
+	cfg.Models[0].AuthScheme = "bogus"
+	err := validateConfig(cfg)
+	if err == nil || !strings.Contains(err.Error(), "unknown auth_scheme") {
+		t.Fatalf("expected unknown auth_scheme error, got: %v", err)
+	}
+}
+
+func TestModelConfig_UpstreamAuthConfigDefaults(t *testing.T) {
+	tests := []struct {
+		name       string
+		model      ModelConfig
+		wantHeader string
+		wantScheme string
+	}{
+		{name: "openai", model: ModelConfig{Type: BackendOpenAI}, wantHeader: "Authorization", wantScheme: AuthSchemeBearer},
+		{name: "default-openai", model: ModelConfig{}, wantHeader: "Authorization", wantScheme: AuthSchemeBearer},
+		{name: "anthropic", model: ModelConfig{Type: BackendAnthropic}, wantHeader: "X-Api-Key", wantScheme: AuthSchemeRaw},
+		{name: "custom-header-defaults-raw", model: ModelConfig{AuthHeaderName: "X-Litellm-Api-Key"}, wantHeader: "X-Litellm-Api-Key", wantScheme: AuthSchemeRaw},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotHeader, gotScheme := tt.model.UpstreamAuthConfig()
+			if gotHeader != tt.wantHeader || gotScheme != tt.wantScheme {
+				t.Fatalf("got (%q, %q), want (%q, %q)", gotHeader, gotScheme, tt.wantHeader, tt.wantScheme)
+			}
+		})
+	}
+}
+
 func TestValidateConfig_ValidOpenAIType(t *testing.T) {
 	cfg := validConfig()
 	cfg.Models[0].Type = BackendOpenAI

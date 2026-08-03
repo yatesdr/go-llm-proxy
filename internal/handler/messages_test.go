@@ -933,6 +933,48 @@ func TestMessagesHandler_NativePassthrough_AuthHeaders(t *testing.T) {
 	}
 }
 
+func TestMessagesHandler_NativePassthrough_CustomBearerAuthHeader(t *testing.T) {
+	var gotAPIKey, gotAuth string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAPIKey = r.Header.Get("X-Api-Key")
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, `{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`)
+	}))
+	defer ts.Close()
+
+	cfg := &config.Config{
+		Models: []config.ModelConfig{{
+			Name:           "test-model",
+			Backend:        ts.URL,
+			APIKey:         "backend-secret",
+			AuthHeaderName: "Authorization",
+			AuthScheme:     config.AuthSchemeBearer,
+			Model:          "test-model",
+			Timeout:        10,
+			Type:           config.BackendAnthropic,
+		}},
+	}
+	handler := NewMessagesHandler(config.NewTestConfigStore(cfg), nil, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"test-model","max_tokens":100,"messages":[{"role":"user","content":"Hello"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Anthropic-Version", "2023-06-01")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if gotAPIKey != "" {
+		t.Fatalf("expected no x-api-key header, got %q", gotAPIKey)
+	}
+	if gotAuth != "Bearer backend-secret" {
+		t.Fatalf("expected bearer authorization header, got %q", gotAuth)
+	}
+}
+
 func TestMessagesHandler_NativePassthrough_HeadersForwarded(t *testing.T) {
 	var gotVersion, gotBeta string
 	handler, ts := newTestMessagesHandler(t, config.BackendAnthropic, func(w http.ResponseWriter, r *http.Request) {
