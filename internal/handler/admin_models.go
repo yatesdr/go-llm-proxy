@@ -483,6 +483,7 @@ func modelModalHTML() string {
                 <option value="low">low</option>
                 <option value="medium">medium</option>
                 <option value="high">high</option>
+                <option value="max">max</option>
               </select>
             </div>
             <div class="field"><label>Stop sequences <span class="tip" tabindex="0" data-tip="Default: none. Comma-separated strings that end generation when produced by the model.">?</span></label><input type="text" name="stop" placeholder="e.g. ###, END"></div>

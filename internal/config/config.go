@@ -57,7 +57,7 @@ type SamplingDefaults struct {
 	MaxNewTokens     *int     `yaml:"max_new_tokens"`    // maximum tokens to generate (maps to max_tokens)
 	FrequencyPenalty *float64 `yaml:"frequency_penalty"` // penalizes repeated tokens by frequency (0.0–2.0)
 	PresencePenalty  *float64 `yaml:"presence_penalty"`  // penalizes tokens that have appeared at all (0.0–2.0)
-	ReasoningEffort  *string  `yaml:"reasoning_effort"`  // thinking budget: low, medium, or high
+	ReasoningEffort  *string  `yaml:"reasoning_effort"`  // thinking budget: low, medium, high, or max
 	Stop             []string `yaml:"stop"`              // strings that trigger end of generation
 }
 
@@ -369,9 +369,9 @@ func validateConfig(cfg *Config) error {
 
 		if d := m.Defaults; d != nil && d.ReasoningEffort != nil {
 			switch *d.ReasoningEffort {
-			case "low", "medium", "high":
+			case "low", "medium", "high", "max":
 			default:
-				return fmt.Errorf("model %q has unknown reasoning_effort %q (must be low, medium, or high)", m.Name, *d.ReasoningEffort)
+				return fmt.Errorf("model %q has unknown reasoning_effort %q (must be low, medium, high, or max)", m.Name, *d.ReasoningEffort)
 			}
 		}
 
