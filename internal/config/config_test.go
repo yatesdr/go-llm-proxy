@@ -373,6 +373,20 @@ func TestApplySamplingDefaults(t *testing.T) {
 	if req2["top_p"] != topP {
 		t.Errorf("expected top_p %v, got %v", topP, req2["top_p"])
 	}
+
+	// Anthropic max_tokens is translated to max_completion_tokens for
+	// OpenAI-compatible backends. Do not add a conflicting max_tokens default.
+	req3 := map[string]any{
+		"model":                 "test",
+		"max_completion_tokens": 750,
+	}
+	model.ApplySamplingDefaults(req3)
+	if req3["max_completion_tokens"] != 750 {
+		t.Errorf("max_completion_tokens should not be overwritten, got %v", req3["max_completion_tokens"])
+	}
+	if _, exists := req3["max_tokens"]; exists {
+		t.Errorf("max_tokens should not be added when max_completion_tokens exists, got %v", req3["max_tokens"])
+	}
 }
 
 func TestApplySamplingDefaults_NilDefaults(t *testing.T) {
