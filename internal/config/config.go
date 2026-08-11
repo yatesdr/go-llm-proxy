@@ -523,9 +523,14 @@ func (m *ModelConfig) ApplySamplingDefaults(chatReq map[string]any) {
 		}
 	}
 	if d.MaxNewTokens != nil {
+		// max_completion_tokens (Anthropic max_tokens translation) and
+		// max_tokens are mutually exclusive on some backends (Volcengine
+		// Ark rejects both present). Only apply default when neither set.
 		if _, exists := chatReq["max_tokens"]; !exists {
-			chatReq["max_tokens"] = *d.MaxNewTokens
-			applied = append(applied, fmt.Sprintf("max_tokens=%d", *d.MaxNewTokens))
+			if _, exists2 := chatReq["max_completion_tokens"]; !exists2 {
+				chatReq["max_tokens"] = *d.MaxNewTokens
+				applied = append(applied, fmt.Sprintf("max_tokens=%d", *d.MaxNewTokens))
+			}
 		}
 	}
 	if d.FrequencyPenalty != nil {
