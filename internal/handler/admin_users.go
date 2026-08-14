@@ -107,6 +107,44 @@ func (h *AdminHandler) UsersMutate(w http.ResponseWriter, r *http.Request) {
 		}
 		slog.Info("admin: api key renamed", "hash", req.KeyHash[:min(8, len(req.KeyHash))], "new_name", req.Name)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	case "reveal":
+		// Recovery path: return the full key for an existing entry. Keys are
+		// stored in plaintext in the config, so this grants no privilege the
+		// admin doesn't already hold — but each reveal is audit-logged.
+		if req.KeyHash == "" {
+			httputil.WriteError(w, http.StatusBadRequest, "key_hash is required")
+			return
+		}
+		fullKey := config.LookupKeyByHash(h.cs.Get(), req.KeyHash)
+		if fullKey == "" {
+			httputil.WriteError(w, http.StatusNotFound, "key not found")
+			return
+		}
+		slog.Info("admin: api key revealed", "hash", req.KeyHash[:min(8, len(req.KeyHash))])
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "key": fullKey})
+
+	case "rotate":
+		// Reissue path: replace the secret, keep name + model allowlist.
+		// The old key stops working immediately.
+		if req.KeyHash == "" {
+			httputil.WriteError(w, http.StatusBadRequest, "key_hash is required")
+			return
+		}
+		newKey, err := h.cs.RotateKey(req.KeyHash)
+		if err != nil {
+			writeMutateError(w, err)
+			return
+		}
+		slog.Info("admin: api key rotated",
+			"old_hash", req.KeyHash[:min(8, len(req.KeyHash))],
+			"new_hash", config.KeyHash(newKey)[:8])
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":       true,
+			"key":      newKey,
+			"key_hash": config.KeyHash(newKey),
+			"masked":   config.MaskKey(newKey),
+		})
+
 	case "delete":
 		if req.KeyHash == "" {
 			httputil.WriteError(w, http.StatusBadRequest, "key_hash is required")
@@ -157,7 +195,7 @@ func indexOf(s, sub string) int {
 
 func usersPageJS() string {
 	return `
-var state = {users: [], allModels: []};
+var state = {users: [], allModels: [], revealed: {}};
 
 function load(){
   apiGet("/admin/users/data").then(function(d){
@@ -198,13 +236,68 @@ function renderUserRow(u){
     }
   }
   pills += '<button class="pill-add" onclick="showAddModel(\''+u.key_hash+'\', this)">+ add model…</button>';
+  var revealed = state.revealed[u.key_hash];
+  var keyCell = revealed
+    ? '<code class="mono" style="word-break:break-all">'+esc(revealed)+'</code> ' +
+      '<button class="btn-link" onclick="hideKey(\''+u.key_hash+'\')" title="Hide key">hide</button>'
+    : '<code>'+esc(u.masked)+'</code> ' +
+      '<button class="btn-link" onclick="revealKey(\''+u.key_hash+'\')" title="Show the full key">reveal</button>';
   return '<tr data-hash="'+u.key_hash+'">' +
     '<td class="cell-name" title="'+esc(u.name)+'"><button class="btn-link" onclick="renameUser(\''+u.key_hash+'\', \''+escAttr(u.name)+'\')" title="Rename">'+esc(u.name)+'</button></td>' +
-    '<td><code>'+esc(u.masked)+'</code></td>' +
+    '<td>'+keyCell+'</td>' +
     '<td class="cell-pills"><div class="pills-scroll">'+pills+'</div></td>' +
     '<td class="row-actions"><div class="action-group">'+
+      '<button class="btn btn-secondary btn-sm" onclick="copyKey(\''+u.key_hash+'\')" title="Copy the full key to the clipboard">Copy</button>'+
+      '<button class="btn btn-secondary btn-sm" onclick="rotateUser(\''+u.key_hash+'\', \''+escAttr(u.name)+'\')" title="Replace this key with a new one; the old key stops working immediately">Rotate</button>'+
       '<button class="btn btn-danger btn-sm" onclick="deleteUser(\''+u.key_hash+'\', \''+escAttr(u.name)+'\')">Delete</button>'+
     '</div></td></tr>';
+}
+
+function fetchKey(keyHash){
+  return apiPost("/admin/users/mutate", {action:"reveal", key_hash: keyHash}).then(function(res){
+    if(!res.ok) throw new Error(res.json.error && res.json.error.message || "Reveal failed");
+    return res.json.key;
+  });
+}
+
+function revealKey(keyHash){
+  fetchKey(keyHash).then(function(key){
+    state.revealed[keyHash] = key;
+    renderUsers();
+  }).catch(function(e){ flash(e.message, "error"); });
+}
+
+function hideKey(keyHash){
+  delete state.revealed[keyHash];
+  renderUsers();
+}
+
+function copyKey(keyHash){
+  var cached = state.revealed[keyHash];
+  var p = cached ? Promise.resolve(cached) : fetchKey(keyHash);
+  p.then(function(key){
+    return copyToClipboard(key);
+  }).then(function(){
+    flash("Key copied to clipboard", "success");
+  }).catch(function(e){ flash(e.message || "Copy failed", "error"); });
+}
+
+function rotateUser(keyHash, name){
+  if(!confirm('Rotate the key for "'+name+'"?\n\nA new key will be generated and shown once. The current key stops working immediately — anything still using it will get 401s until updated.')) return;
+  apiPost("/admin/users/mutate", {action:"rotate", key_hash: keyHash}).then(function(res){
+    if(!res.ok){ flash(res.json.error && res.json.error.message || "Rotate failed", "error"); return; }
+    var j = res.json;
+    delete state.revealed[keyHash];
+    showPersistentBanner(
+      '<strong>New API key for <code>'+esc(name)+'</code> (the old key is now invalid):</strong><br>' +
+      '<code id="rotatedKeyVal">'+esc(j.key)+'</code>' +
+      '<div class="persist-actions">' +
+      '<button class="btn btn-primary btn-sm" type="button" onclick="copyToClipboard(document.getElementById(\'rotatedKeyVal\').textContent).then(function(){flash(\'Copied to clipboard\',\'success\');})">Copy</button>' +
+      '<button class="btn btn-secondary btn-sm" type="button" onclick="dismissPersistent()">Dismiss</button>' +
+      '</div>'
+    );
+    load();
+  });
 }
 
 function addUserPrompt(){
@@ -221,7 +314,7 @@ function addUserPrompt(){
       '<div class="persist-actions">' +
       '<button class="btn btn-primary btn-sm" type="button" onclick="copyToClipboard(document.getElementById(\'newKeyVal\').textContent).then(function(){flash(\'Copied to clipboard\',\'success\');})">Copy</button>' +
       '<button class="btn btn-secondary btn-sm" type="button" onclick="dismissPersistent()">Dismiss</button>' +
-      '<span style="color:var(--muted);font-size:.82rem;align-self:center">This key is shown only once.</span>' +
+      '<span style="color:var(--muted);font-size:.82rem;align-self:center">Recoverable later via the reveal button.</span>' +
       '</div>'
     );
     load();

@@ -327,3 +327,55 @@ func TestLookupKeyByHashUnknown(t *testing.T) {
 		t.Fatal("expected error for unknown hash")
 	}
 }
+
+func TestRotateKeyPreservesNameAndModels(t *testing.T) {
+	path := writeFixture(t, baseFixture)
+	cs := loadStore(t, path)
+
+	newKey, err := cs.RotateKey(KeyHash("sk-existing-one"))
+	if err != nil {
+		t.Fatalf("RotateKey: %v", err)
+	}
+	if newKey == "sk-existing-one" || !strings.HasPrefix(newKey, "dy-") {
+		t.Fatalf("unexpected new key %q", newKey)
+	}
+
+	cfg := cs.Get()
+	if LookupKeyByHash(cfg, KeyHash("sk-existing-one")) != "" {
+		t.Error("old key still present after rotation")
+	}
+	found := false
+	for _, k := range cfg.Keys {
+		if k.Key == newKey {
+			found = true
+			if k.Name != "first" {
+				t.Errorf("rotation lost name: %q", k.Name)
+			}
+			if len(k.Models) != 1 || k.Models[0] != "model-a" {
+				t.Errorf("rotation lost model allowlist: %v", k.Models)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("new key not present in config")
+	}
+}
+
+func TestRotateKeyUnknownHash(t *testing.T) {
+	path := writeFixture(t, baseFixture)
+	cs := loadStore(t, path)
+	if _, err := cs.RotateKey("deadbeefdeadbeef"); err == nil {
+		t.Fatal("expected error for unknown key hash")
+	}
+}
+
+func TestLookupKeyByHash(t *testing.T) {
+	path := writeFixture(t, baseFixture)
+	cfg := loadStore(t, path).Get()
+	if got := LookupKeyByHash(cfg, KeyHash("sk-existing-two")); got != "sk-existing-two" {
+		t.Errorf("lookup returned %q", got)
+	}
+	if got := LookupKeyByHash(cfg, "nope"); got != "" {
+		t.Errorf("expected empty for unknown hash, got %q", got)
+	}
+}

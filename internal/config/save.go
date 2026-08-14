@@ -292,6 +292,45 @@ func (cs *ConfigStore) RenameKey(keyHash, newName string) error {
 	})
 }
 
+// RotateKey replaces the secret for the key identified by keyHash with a
+// freshly generated one, preserving the entry's name and model allowlist.
+// Returns the new full key — callers should display it to the user; the old
+// key stops authenticating the moment the config reloads.
+func (cs *ConfigStore) RotateKey(keyHash string) (string, error) {
+	cur := cs.Get()
+	oldKey := lookupKeyByHash(cur, keyHash)
+	if oldKey == "" {
+		return "", fmt.Errorf("key not found")
+	}
+
+	newKey, err := GenerateKey()
+	if err != nil {
+		return "", fmt.Errorf("generating key: %w", err)
+	}
+	for _, k := range cur.Keys {
+		if k.Key == newKey {
+			return "", fmt.Errorf("key collision, please retry")
+		}
+	}
+
+	err = cs.mutateYAML(func(root *yaml.Node) error {
+		return mutateKeyEntry(root, oldKey, func(entry *yaml.Node) error {
+			setMappingValue(entry, "key", stringNode(newKey))
+			return nil
+		})
+	})
+	if err != nil {
+		return "", err
+	}
+	return newKey, nil
+}
+
+// LookupKeyByHash returns the full key whose KeyHash matches, or "" when no
+// key matches. Used by the admin reveal/rotate endpoints.
+func LookupKeyByHash(cfg *Config, keyHash string) string {
+	return lookupKeyByHash(cfg, keyHash)
+}
+
 // DeleteKey removes the key identified by keyHash from the config. Refuses
 // to delete the last remaining key to avoid locking all API clients out.
 func (cs *ConfigStore) DeleteKey(keyHash string) error {
