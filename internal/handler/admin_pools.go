@@ -7,6 +7,7 @@ import (
 
 	"go-llm-proxy/internal/config"
 	"go-llm-proxy/internal/httputil"
+	"go-llm-proxy/internal/lb"
 )
 
 // PoolsPage renders the /admin/pools HTML page.
@@ -21,22 +22,38 @@ func (h *AdminHandler) PoolsPage(w http.ResponseWriter, r *http.Request) {
 	h.renderShell(w, "pools", "Admin · Pools", body, poolsPageJS())
 }
 
-// PoolsData serves the JSON payload the /admin/pools page fetches.
+// PoolsData serves the JSON payload the /admin/pools page fetches: pool
+// configuration merged with live per-backend state (probe health, in-flight
+// count, circuit-breaker state).
 func (h *AdminHandler) PoolsData(w http.ResponseWriter, r *http.Request) {
 	cfg := h.cs.Get()
+
+	var probed map[string]config.BackendHealth
+	if h.health != nil {
+		probed = h.health.GetBackendStatus()
+	}
 
 	pools := make([]map[string]any, 0, len(cfg.Pools))
 	for _, p := range cfg.Pools {
 		backends := make([]map[string]any, 0, len(p.Backends))
 		for _, b := range p.Backends {
-			backends = append(backends, map[string]any{
+			live := lb.Status(b.URL)
+			entry := map[string]any{
 				"url":          b.URL,
 				"has_api_key":  b.APIKey != "",
 				"api_key_mask": config.MaskSecret(b.APIKey),
 				"weight":       b.Weight,
 				"max_inflight": b.MaxInflight,
 				"disabled":     b.Disabled,
-			})
+				"inflight":     live.Inflight,
+				"breaker":      live.Breaker,
+			}
+			if bh, ok := probed[b.URL]; ok {
+				entry["online"] = bh.Online
+				entry["error"] = bh.Error
+				entry["external"] = bh.External
+			}
+			backends = append(backends, entry)
 		}
 		pools = append(pools, map[string]any{
 			"name":          p.Name,
@@ -255,9 +272,9 @@ function renderPools(){
         '<td class="mono" title="'+esc(b.url)+'">'+esc(b.url)+'</td>' +
         '<td class="mono">'+(b.has_api_key ? esc(b.api_key_mask) : "—")+'</td>' +
         '<td style="text-align:center">'+esc(b.weight || 1)+'</td>' +
-        '<td style="text-align:center">'+(b.max_inflight ? esc(b.max_inflight) : "∞")+'</td>' +
-        '<td style="text-align:center">'+(b.disabled ? '<span class="drain-badge">drained</span>' : '<span class="health-dot health-unknown" id="probe-dot-'+i+'-'+j+'"></span><span class="mono" id="probe-label-'+i+'-'+j+'">—</span>')+'</td>' +
-        '<td class="row-actions"><button class="btn btn-secondary btn-sm" onclick="probeRow('+i+','+j+')">Probe</button></td>' +
+        '<td style="text-align:center">'+esc(b.inflight || 0)+(b.max_inflight ? ' / '+esc(b.max_inflight) : "")+'</td>' +
+        '<td style="text-align:center">'+renderBackendStatus(b)+'</td>' +
+        '<td class="row-actions"><button class="btn btn-secondary btn-sm" onclick="probeRow('+i+','+j+')" id="probe-btn-'+i+'-'+j+'">Probe</button></td>' +
       '</tr>';
     }
     html += '<div class="card" style="margin-bottom:16px">' +
@@ -268,31 +285,48 @@ function renderPools(){
         '</div></div>' +
       '<div style="margin-bottom:10px">'+refHTML+'</div>' +
       '<div class="table-wrap"><table class="data-table"><thead><tr>' +
-        '<th>Backend URL</th><th style="width:120px">API key</th><th style="width:70px;text-align:center">Weight</th><th style="width:100px;text-align:center">Max in-flight</th><th style="width:130px;text-align:center">Status</th><th style="width:80px;text-align:right"></th>' +
+        '<th>Backend URL</th><th style="width:120px">API key</th><th style="width:70px;text-align:center">Weight</th><th style="width:100px;text-align:center">In-flight</th><th style="width:170px;text-align:center">Status</th><th style="width:80px;text-align:right"></th>' +
       '</tr></thead><tbody>'+rows+'</tbody></table></div>' +
     '</div>';
   }
   el.innerHTML = html;
 }
 
+function renderBackendStatus(b){
+  if(b.disabled) return '<span class="drain-badge">drained</span>';
+  var dot, label, title = b.error || "";
+  if(b.online === undefined){
+    dot = "health-unknown"; label = "unknown";
+  } else if(b.online){
+    dot = "health-online"; label = b.external ? "online (external)" : "online";
+  } else {
+    dot = "health-offline"; label = "offline";
+  }
+  var breaker = "";
+  if(b.breaker === "open") breaker = ' <span class="drain-badge" title="Circuit breaker open: skipped after repeated failures">breaker open</span>';
+  else if(b.breaker === "half-open") breaker = ' <span class="drain-badge" title="Circuit breaker half-open: next request probes this backend">half-open</span>';
+  return '<span class="health-dot '+dot+'" title="'+esc(title)+'"></span><span class="mono">'+esc(label)+'</span>'+breaker;
+}
+
 function probeRow(pi, bi){
   var p = pstate.pools[pi], b = p.backends[bi];
-  var dot = document.getElementById("probe-dot-"+pi+"-"+bi);
-  var label = document.getElementById("probe-label-"+pi+"-"+bi);
-  if(label) label.textContent = "…";
+  var btn = document.getElementById("probe-btn-"+pi+"-"+bi);
+  if(btn){ btn.disabled = true; btn.textContent = "…"; }
   apiPost("/admin/pools/probe", {url: b.url, pool: p.name}).then(function(res){
     var r = res.json || {};
-    if(!dot || !label) return;
+    if(btn){ btn.disabled = false; btn.textContent = "Probe"; }
     if(r.reachable){
-      dot.className = "health-dot health-online";
-      label.textContent = r.engine ? r.engine + (r.context_window ? " · " + Number(r.context_window).toLocaleString() : "") : "online";
+      var detail = r.engine || "reachable";
+      if(r.context_window) detail += " · ctx " + Number(r.context_window).toLocaleString();
+      flash("Backend OK: " + detail, "success");
     } else {
-      dot.className = "health-dot health-offline";
-      label.textContent = "offline";
-      dot.title = r.error || "";
       flash("Probe failed: " + (r.error || "unreachable"), "error");
     }
-  }).catch(function(e){ if(label) label.textContent = "error"; flash("Probe failed: "+e.message, "error"); });
+    loadPools();
+  }).catch(function(e){
+    if(btn){ btn.disabled = false; btn.textContent = "Probe"; }
+    flash("Probe failed: "+e.message, "error");
+  });
 }
 
 // ── Pool modal ──────────────────────────────────────────────────────────────
@@ -467,5 +501,9 @@ function deletePool(name){
 }
 
 loadPools();
+// Live refresh of in-flight counts and health; paused while the editor is open.
+setInterval(function(){
+  if(!document.getElementById("poolModal").classList.contains("open")) loadPools();
+}, 10000);
 `
 }

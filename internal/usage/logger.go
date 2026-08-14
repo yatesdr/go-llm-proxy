@@ -32,6 +32,7 @@ type UsageRecord struct {
 	KeyHash       string // first 16 hex chars of SHA-256(key)
 	KeyName       string
 	Model         string
+	Backend       string // backend URL that served the request (empty pre-pools)
 	Endpoint      string
 	StatusCode    int
 	RequestBytes  int64
@@ -49,6 +50,7 @@ CREATE TABLE IF NOT EXISTS usage (
 	key_hash      TEXT    NOT NULL,
 	key_name      TEXT    NOT NULL DEFAULT '',
 	model         TEXT    NOT NULL,
+	backend       TEXT    NOT NULL DEFAULT '',
 	endpoint      TEXT    NOT NULL DEFAULT '',
 	status_code   INTEGER NOT NULL DEFAULT 0,
 	request_bytes INTEGER NOT NULL DEFAULT 0,
@@ -77,6 +79,15 @@ func NewUsageLogger(dbPath string) (*UsageLogger, error) {
 		return nil, fmt.Errorf("creating usage schema: %w", err)
 	}
 
+	// Migration for databases created before the backend column existed.
+	// SQLite has no ADD COLUMN IF NOT EXISTS; a duplicate-column error means
+	// the migration already ran.
+	if _, err := db.Exec(`ALTER TABLE usage ADD COLUMN backend TEXT NOT NULL DEFAULT ''`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		db.Close()
+		return nil, fmt.Errorf("migrating usage schema: %w", err)
+	}
+
 	readDB, err := sql.Open("sqlite", dbPath+"?mode=ro&_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
 		db.Close()
@@ -94,14 +105,15 @@ func (ul *UsageLogger) Log(rec UsageRecord) {
 	defer ul.mu.Unlock()
 
 	_, err := ul.db.Exec(`
-		INSERT INTO usage (timestamp, key_hash, key_name, model, endpoint,
+		INSERT INTO usage (timestamp, key_hash, key_name, model, backend, endpoint,
 			status_code, request_bytes, response_bytes,
 			input_tokens, output_tokens, total_tokens, duration_ms)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.Timestamp.UTC().Format(time.RFC3339),
 		rec.KeyHash,
 		rec.KeyName,
 		rec.Model,
+		rec.Backend,
 		rec.Endpoint,
 		rec.StatusCode,
 		rec.RequestBytes,

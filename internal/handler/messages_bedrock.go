@@ -100,6 +100,7 @@ func (h *MessagesHandler) handleBedrock(
 			startTime: startTime, statusCode: resp.StatusCode,
 			keyName: keyName, keyHash: keyHash,
 			model: req.Model, endpoint: "/v1/messages",
+			backend:      model.Backend,
 			requestBytes: int64(len(body)), responseBytes: int64(len(errBody)),
 		})
 		return
@@ -116,6 +117,7 @@ func (h *MessagesHandler) handleBedrock(
 			startTime: startTime, statusCode: resp.StatusCode,
 			keyName: keyName, keyHash: keyHash,
 			model: req.Model, endpoint: "/v1/messages",
+			backend:      model.Backend,
 			requestBytes: int64(len(body)), responseBytes: respBytes,
 		}, usageData)
 		return
@@ -143,6 +145,7 @@ func (h *MessagesHandler) handleBedrock(
 		startTime: startTime, statusCode: resp.StatusCode,
 		keyName: keyName, keyHash: keyHash,
 		model: req.Model, endpoint: "/v1/messages",
+		backend:      model.Backend,
 		requestBytes: int64(len(body)), responseBytes: int64(len(respBody)),
 	}, usageData)
 }

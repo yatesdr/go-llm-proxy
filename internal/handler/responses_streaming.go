@@ -800,6 +800,7 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 		startTime: startTime, statusCode: resp.StatusCode,
 		keyName: keyName, keyHash: keyHash,
 		model: req.Model, endpoint: "/v1/responses",
+		backend:      model.Backend,
 		requestBytes: requestBytes, responseBytes: responseBytes,
 	}, usageData)
 }

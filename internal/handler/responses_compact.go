@@ -215,6 +215,7 @@ func (h *ResponsesHandler) HandleCompact(w http.ResponseWriter, r *http.Request)
 		startTime: startTime, statusCode: resp.StatusCode,
 		keyName: keyName, keyHash: keyHash,
 		model: req.Model, endpoint: "/v1/responses/compact",
+		backend:      model.Backend,
 		requestBytes: int64(len(chatBody)), responseBytes: int64(len(respBody)),
 	}, chatResp.Usage)
 }

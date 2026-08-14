@@ -97,6 +97,7 @@ func (p *ProxyHandler) handleBedrockChat(
 			startTime: startTime, statusCode: resp.StatusCode,
 			keyName: keyName, keyHash: keyHash,
 			model: modelName, endpoint: "/v1/chat/completions",
+			backend:      model.Backend,
 			requestBytes: int64(len(body)), responseBytes: int64(len(errBody)),
 		})
 		return
@@ -113,6 +114,7 @@ func (p *ProxyHandler) handleBedrockChat(
 			startTime: startTime, statusCode: resp.StatusCode,
 			keyName: keyName, keyHash: keyHash,
 			model: modelName, endpoint: "/v1/chat/completions",
+			backend:      model.Backend,
 			requestBytes: int64(len(body)), responseBytes: respBytes,
 		}, usageData)
 		return
@@ -140,6 +142,7 @@ func (p *ProxyHandler) handleBedrockChat(
 		startTime: startTime, statusCode: resp.StatusCode,
 		keyName: keyName, keyHash: keyHash,
 		model: modelName, endpoint: "/v1/chat/completions",
+		backend:      model.Backend,
 		requestBytes: int64(len(body)), responseBytes: int64(len(respBody)),
 	}, usageData)
 }

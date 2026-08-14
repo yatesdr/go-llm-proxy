@@ -6,6 +6,7 @@ import (
 
 	"go-llm-proxy/internal/api"
 	"go-llm-proxy/internal/config"
+	"go-llm-proxy/internal/lb"
 	"go-llm-proxy/internal/usage"
 )
 
@@ -19,22 +20,28 @@ var healthRecorder *config.HealthStore
 // Call once during startup, before serving requests.
 func SetHealthStore(hs *config.HealthStore) { healthRecorder = hs }
 
-// recordBackendHealth updates a model's health from an upstream status code.
-// Only backend-caused outcomes move the needle: 2xx marks online; auth/billing
-// (401/402/403) and server errors (5xx) mark offline. Other 4xx (bad request,
-// unknown model) and 429 rate-limits are client- or transient-side, so they
-// leave the existing status untouched to avoid false "offline" flapping.
-func recordBackendHealth(model string, statusCode int) {
-	if healthRecorder == nil || model == "" {
-		return
-	}
+// recordBackendHealth updates a model's health — and the serving backend's
+// circuit breaker — from an upstream status code. Only backend-caused
+// outcomes move the needle: 2xx marks online; auth/billing (401/402/403) and
+// server errors (5xx) mark offline. Other 4xx (bad request, unknown model)
+// and 429 rate-limits are client- or transient-side, so they leave the
+// existing status untouched to avoid false "offline" flapping.
+func recordBackendHealth(model, backend string, statusCode int) {
+	success := false
+	errMsg := ""
 	switch {
 	case statusCode >= 200 && statusCode < 300:
-		healthRecorder.RecordUsage(model, true, "")
+		success = true
 	case statusCode == 401 || statusCode == 402 || statusCode == 403:
-		healthRecorder.RecordUsage(model, false, fmt.Sprintf("backend rejected credentials: HTTP %d", statusCode))
+		errMsg = fmt.Sprintf("backend rejected credentials: HTTP %d", statusCode)
 	case statusCode >= 500:
-		healthRecorder.RecordUsage(model, false, fmt.Sprintf("backend error: HTTP %d", statusCode))
+		errMsg = fmt.Sprintf("backend error: HTTP %d", statusCode)
+	default:
+		return // client-side or transient — no signal either way
+	}
+	lb.RecordOutcome(backend, success)
+	if healthRecorder != nil && model != "" {
+		healthRecorder.RecordUsage(model, success, errMsg)
 	}
 }
 
@@ -56,6 +63,7 @@ type usageLogInput struct {
 	keyName       string
 	keyHash       string
 	model         string
+	backend       string // chosen backend URL (empty for non-model routes)
 	endpoint      string
 	requestBytes  int64
 	responseBytes int64
@@ -70,7 +78,7 @@ type usageLogInput struct {
 func logUsage(ul *usage.UsageLogger, in usageLogInput) {
 	// Update backend health from the outcome first — this must run even when
 	// usage logging is disabled (ul == nil).
-	recordBackendHealth(in.model, in.statusCode)
+	recordBackendHealth(in.model, in.backend, in.statusCode)
 	if ul == nil {
 		return
 	}
@@ -79,6 +87,7 @@ func logUsage(ul *usage.UsageLogger, in usageLogInput) {
 		KeyHash:       in.keyHash,
 		KeyName:       in.keyName,
 		Model:         in.model,
+		Backend:       in.backend,
 		Endpoint:      in.endpoint,
 		StatusCode:    in.statusCode,
 		RequestBytes:  in.requestBytes,

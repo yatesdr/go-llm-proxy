@@ -336,6 +336,7 @@ func (h *MessagesHandler) handleNativePassthrough(ctx context.Context, w http.Re
 			startTime: startTime, statusCode: resp.StatusCode,
 			keyName: keyName, keyHash: keyHash,
 			model: req.Model, endpoint: "/v1/messages",
+			backend:      model.Backend,
 			requestBytes: int64(len(body)), responseBytes: int64(len(errBody)),
 		})
 		return
@@ -374,6 +375,7 @@ func (h *MessagesHandler) handleNativePassthrough(ctx context.Context, w http.Re
 		startTime: startTime, statusCode: resp.StatusCode,
 		keyName: keyName, keyHash: keyHash,
 		model: req.Model, endpoint: "/v1/messages",
+		backend:      model.Backend,
 		requestBytes: int64(len(body)), responseBytes: totalBytes,
 	})
 }
@@ -496,6 +498,7 @@ func (h *MessagesHandler) handleNonStreaming(w http.ResponseWriter, resp *http.R
 		startTime: startTime, statusCode: resp.StatusCode,
 		keyName: keyName, keyHash: keyHash,
 		model: req.Model, endpoint: "/v1/messages",
+		backend:      model.Backend,
 		requestBytes: requestBytes, responseBytes: int64(len(body)),
 	}, chatResp.Usage)
 }

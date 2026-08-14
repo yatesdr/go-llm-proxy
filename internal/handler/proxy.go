@@ -240,7 +240,38 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := p.client.Do(upReq)
+
+	// One-shot failover: a transport error or 5xx from the chosen backend —
+	// before anything was written to the client — retries once on another
+	// pool backend. A cold prefix cache beats a 502.
+	if (err != nil && ctx.Err() == nil) || (err == nil && resp.StatusCode >= 500) {
+		lb.RecordOutcome(model.Backend, false)
+		if alt, altRelease := lb.ResolveAlternate(cfg, model, model.Backend); alt != nil {
+			defer altRelease()
+			slog.Warn("failing over to alternate backend",
+				"model", modelName, "failed", model.Backend, "alternate", alt.Backend, "error", err)
+			if resp != nil {
+				resp.Body.Close()
+			}
+			model = alt
+			rc.model = alt
+			altReq, altErr := http.NewRequestWithContext(ctx, r.Method, strings.TrimRight(model.Backend, "/")+relPath, bytes.NewReader(body))
+			if altErr == nil {
+				copyHeaders(altReq.Header, r.Header, model.Type)
+				if model.APIKey != "" {
+					if model.Type == config.BackendAnthropic {
+						altReq.Header.Set("X-Api-Key", model.APIKey)
+					} else {
+						altReq.Header.Set("Authorization", "Bearer "+model.APIKey)
+					}
+				}
+				resp, err = p.client.Do(altReq)
+			}
+		}
+	}
+
 	if err != nil {
+		lb.RecordOutcome(model.Backend, false)
 		if ctx.Err() != nil {
 			httputil.WriteError(w, http.StatusGatewayTimeout, "upstream request timed out")
 			return
@@ -269,6 +300,7 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			startTime: startTime, statusCode: resp.StatusCode,
 			keyName: keyName, keyHash: keyHash,
 			model: modelName, endpoint: cleanPath,
+			backend:      model.Backend,
 			requestBytes: int64(len(body)), responseBytes: int64(len(errBody)),
 		})
 		return
@@ -618,6 +650,7 @@ func logUsageFromChatResponse(ul *usage.UsageLogger, usageData *api.ChunkUsage,
 		keyName:       rc.keyName,
 		keyHash:       rc.keyHash,
 		model:         rc.modelName,
+		backend:       rc.model.Backend,
 		endpoint:      rc.endpoint,
 		requestBytes:  int64(len(rc.requestBody)),
 		responseBytes: responseBytes,

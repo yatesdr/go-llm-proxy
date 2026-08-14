@@ -27,13 +27,13 @@ func TestRecordBackendHealth(t *testing.T) {
 	}
 
 	// 2xx marks online.
-	recordBackendHealth("m", 200)
+	recordBackendHealth("m", "", 200)
 	if !online() {
 		t.Fatalf("200 should mark online")
 	}
 
 	// 402 (insufficient balance) marks offline with an explanatory error.
-	recordBackendHealth("m", 402)
+	recordBackendHealth("m", "", 402)
 	if online() {
 		t.Fatalf("402 should mark offline")
 	}
@@ -42,29 +42,29 @@ func TestRecordBackendHealth(t *testing.T) {
 	}
 
 	// Recover to online, then confirm non-decisive codes do NOT flip it.
-	recordBackendHealth("m", 200)
+	recordBackendHealth("m", "", 200)
 	for _, code := range []int{400, 404, 422, 429} {
-		recordBackendHealth("m", code)
+		recordBackendHealth("m", "", code)
 		if !online() {
 			t.Errorf("HTTP %d should leave status unchanged (still online)", code)
 		}
 	}
 
 	// 5xx marks offline.
-	recordBackendHealth("m", 503)
+	recordBackendHealth("m", "", 503)
 	if online() {
 		t.Fatalf("503 should mark offline")
 	}
 
 	// 401/403 mark offline.
-	recordBackendHealth("m", 200)
-	recordBackendHealth("m", 401)
+	recordBackendHealth("m", "", 200)
+	recordBackendHealth("m", "", 401)
 	if online() {
 		t.Fatalf("401 should mark offline")
 	}
 
 	// Unknown model and unset recorder must not panic.
-	recordBackendHealth("does-not-exist", 200)
+	recordBackendHealth("does-not-exist", "", 200)
 	SetHealthStore(nil)
-	recordBackendHealth("m", 500)
+	recordBackendHealth("m", "", 500)
 }

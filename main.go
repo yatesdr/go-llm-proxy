@@ -15,6 +15,7 @@ import (
 	"go-llm-proxy/internal/config"
 	"go-llm-proxy/internal/handler"
 	"go-llm-proxy/internal/httputil"
+	"go-llm-proxy/internal/lb"
 	"go-llm-proxy/internal/mcp"
 	"go-llm-proxy/internal/pipeline"
 	"go-llm-proxy/internal/ratelimit"
@@ -118,6 +119,9 @@ func main() {
 	// Let the usage-logging funnel update backend health from real request
 	// outcomes (esp. external backends, which are otherwise probed only once).
 	handler.SetHealthStore(healthStore)
+	// Feed periodic probe results into the load balancer's health gate so
+	// probed-down pool members are skipped by selection.
+	healthStore.SetBackendListener(lb.SetProbeHealth)
 
 	// Create the processing pipeline (shared by all handlers).
 	pl := pipeline.NewPipeline(cs, httputil.NewHTTPClient())

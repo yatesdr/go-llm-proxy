@@ -20,16 +20,69 @@ type ModelHealth struct {
 	External  bool      `json:"external"` // true if backend is an external API (not polled periodically)
 }
 
+// BackendHealth represents the probed health of a single backend URL.
+// Backends are probed individually so a pool with one dead member still
+// shows (and routes to) its live members.
+type BackendHealth struct {
+	URL       string    `json:"url"`
+	Online    bool      `json:"online"`
+	LastCheck time.Time `json:"last_check"`
+	Error     string    `json:"error,omitempty"`
+	External  bool      `json:"external"`
+}
+
 // HealthStore manages health status for all configured models.
 // All methods are safe for concurrent use.
 type HealthStore struct {
 	config        *ConfigStore
 	mu            sync.RWMutex
 	health        map[string]*ModelHealth
+	backends      map[string]*BackendHealth // keyed by backend URL
+	onBackend     func(url string, online bool)
 	stopCh        chan struct{}
 	wg            sync.WaitGroup
 	checkInterval time.Duration
 	checkTimeout  time.Duration
+}
+
+// SetBackendListener registers a callback invoked after every backend probe
+// with the probed URL and result. Used to feed the load balancer's health
+// gate. Call once during startup, before Start.
+func (hs *HealthStore) SetBackendListener(fn func(url string, online bool)) {
+	hs.onBackend = fn
+}
+
+// backendRef aggregates everything needed to probe one unique backend URL:
+// credentials, protocol type, and the models it serves.
+type backendRef struct {
+	url      string
+	apiKey   string
+	typ      string
+	external bool
+	models   []string
+}
+
+// collectBackendRefs builds the set of unique backend URLs across all models
+// (expanding pools), remembering which models each URL serves.
+func collectBackendRefs(cfg *Config) map[string]*backendRef {
+	refs := make(map[string]*backendRef)
+	for i := range cfg.Models {
+		m := &cfg.Models[i]
+		for _, b := range cfg.EffectiveBackends(m) {
+			ref, ok := refs[b.URL]
+			if !ok {
+				ref = &backendRef{
+					url:      b.URL,
+					apiKey:   b.APIKey,
+					typ:      m.Type,
+					external: isExternalBackend(b.URL),
+				}
+				refs[b.URL] = ref
+			}
+			ref.models = append(ref.models, m.Name)
+		}
+	}
+	return refs
 }
 
 // NewHealthStore initializes a health store from the current config.
@@ -37,6 +90,7 @@ func NewHealthStore(cs *ConfigStore, interval, timeout time.Duration) *HealthSto
 	hs := &HealthStore{
 		config:        cs,
 		health:        make(map[string]*ModelHealth),
+		backends:      make(map[string]*BackendHealth),
 		stopCh:        make(chan struct{}),
 		checkInterval: interval,
 		checkTimeout:  timeout,
@@ -137,6 +191,14 @@ func (hs *HealthStore) RefreshFromConfig() {
 	for name := range hs.health {
 		if !configModels[name] {
 			delete(hs.health, name)
+		}
+	}
+
+	// Prune backend entries whose URL no longer appears in any model/pool.
+	live := collectBackendRefs(cfg)
+	for url := range hs.backends {
+		if _, ok := live[url]; !ok {
+			delete(hs.backends, url)
 		}
 	}
 }
@@ -241,85 +303,135 @@ func (hs *HealthStore) runChecker(ctx context.Context, client *http.Client) {
 	}
 }
 
-// checkAll checks all local (non-external) model backends.
+// checkAll probes all local (non-external) backend URLs.
 // External backends are only checked once at startup via checkAllInitial.
 func (hs *HealthStore) checkAll(ctx context.Context, client *http.Client) {
-	cfg := hs.config.Get()
-	for i := range cfg.Models {
-		m := &cfg.Models[i]
+	for _, ref := range collectBackendRefs(hs.config.Get()) {
 		// Skip external backends - they're updated via RecordUsage instead.
-		if isExternalBackend(m.Backend) {
+		if ref.external {
 			continue
 		}
 		hs.wg.Add(1)
-		go hs.checkOne(ctx, client, m)
+		go hs.checkOne(ctx, client, ref)
 	}
 }
 
-// checkAllInitial checks ALL backends including external ones.
+// checkAllInitial probes ALL backend URLs including external ones.
 // Called once at startup to establish initial state.
 func (hs *HealthStore) checkAllInitial(ctx context.Context, client *http.Client) {
-	cfg := hs.config.Get()
-	for i := range cfg.Models {
-		m := &cfg.Models[i]
+	for _, ref := range collectBackendRefs(hs.config.Get()) {
 		hs.wg.Add(1)
-		go hs.checkOne(ctx, client, m)
+		go hs.checkOne(ctx, client, ref)
 	}
 }
 
-func (hs *HealthStore) checkOne(ctx context.Context, client *http.Client, m *ModelConfig) {
+func (hs *HealthStore) checkOne(ctx context.Context, client *http.Client, ref *backendRef) {
 	defer hs.wg.Done()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, m.Backend, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, ref.url, nil)
 	if err != nil {
-		hs.updateHealth(m.Name, false, "invalid backend URL: "+err.Error())
+		hs.updateBackendHealth(ref, false, "invalid backend URL: "+err.Error())
 		return
 	}
 
-	if m.APIKey != "" {
-		if m.Type == BackendAnthropic {
-			req.Header.Set("X-Api-Key", m.APIKey)
+	if ref.apiKey != "" {
+		if ref.typ == BackendAnthropic {
+			req.Header.Set("X-Api-Key", ref.apiKey)
 		} else {
-			req.Header.Set("Authorization", "Bearer "+m.APIKey)
+			req.Header.Set("Authorization", "Bearer "+ref.apiKey)
 		}
 	}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		hs.updateHealth(m.Name, false, err.Error())
+		hs.updateBackendHealth(ref, false, err.Error())
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 500 {
-		hs.updateHealth(m.Name, false, fmt.Sprintf("server error: HTTP %d", resp.StatusCode))
+		hs.updateBackendHealth(ref, false, fmt.Sprintf("server error: HTTP %d", resp.StatusCode))
 		return
 	}
+	hs.updateBackendHealth(ref, true, "")
+}
 
-	if resp.StatusCode < 500 {
-		hs.updateHealth(m.Name, true, "")
-		return
+// updateBackendHealth records a probe result for one backend URL, feeds the
+// load balancer's health gate, and recomputes health for every model the
+// backend serves (a pooled model is online while ANY of its backends is).
+func (hs *HealthStore) updateBackendHealth(ref *backendRef, online bool, errMsg string) {
+	cfg := hs.config.Get()
+	now := time.Now()
+
+	hs.mu.Lock()
+	bh, ok := hs.backends[ref.url]
+	if !ok {
+		bh = &BackendHealth{URL: ref.url, External: ref.external}
+		hs.backends[ref.url] = bh
+	}
+	prevOnline := bh.Online || bh.LastCheck.IsZero()
+	bh.Online = online
+	bh.LastCheck = now
+	bh.Error = errMsg
+
+	// Recompute each served model's health from all of its backends.
+	for _, name := range ref.models {
+		h, ok := hs.health[name]
+		if !ok {
+			continue
+		}
+		m := FindModel(cfg, name)
+		if m == nil {
+			continue
+		}
+		anyOnline := false
+		firstErr := ""
+		for _, b := range cfg.EffectiveBackends(m) {
+			if b.Disabled {
+				continue
+			}
+			known, seen := hs.backends[b.URL]
+			if !seen || known.Online {
+				anyOnline = true
+				break
+			}
+			if firstErr == "" {
+				firstErr = known.Error
+			}
+		}
+		h.Online = anyOnline
+		h.LastCheck = now
+		if anyOnline {
+			h.Error = ""
+		} else {
+			h.Error = firstErr
+		}
+	}
+	hs.mu.Unlock()
+
+	if online != prevOnline {
+		if online {
+			slog.Info("health: backend online", "backend", ref.url)
+		} else {
+			slog.Info("health: backend offline", "backend", ref.url, "error", errMsg)
+		}
+	}
+
+	if hs.onBackend != nil {
+		hs.onBackend(ref.url, online)
 	}
 }
 
-func (hs *HealthStore) updateHealth(name string, online bool, errMsg string) {
-	hs.mu.Lock()
-	defer hs.mu.Unlock()
-
-	h, ok := hs.health[name]
-	if !ok {
-		return
+// GetBackendStatus returns a copy of all probed backend health entries,
+// keyed by backend URL.
+func (hs *HealthStore) GetBackendStatus() map[string]BackendHealth {
+	hs.mu.RLock()
+	defer hs.mu.RUnlock()
+	out := make(map[string]BackendHealth, len(hs.backends))
+	for url, b := range hs.backends {
+		out[url] = *b
 	}
-
-	h.Online = online
-	h.LastCheck = time.Now()
-	h.Error = errMsg
-
-	if online {
-		slog.Debug("health: model online", "model", name)
-	} else {
-		slog.Info("health: model offline", "model", name, "error", errMsg)
-	}
+	return out
 }
 
 // RecordUsage updates health status based on actual request results.

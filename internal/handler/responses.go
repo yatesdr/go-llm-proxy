@@ -568,6 +568,7 @@ func (h *ResponsesHandler) handleNonStreaming(w http.ResponseWriter, resp *http.
 		startTime: startTime, statusCode: resp.StatusCode,
 		keyName: keyName, keyHash: keyHash,
 		model: req.Model, endpoint: "/v1/responses",
+		backend:      model.Backend,
 		requestBytes: requestBytes, responseBytes: int64(len(body)),
 	}, chatResp.Usage)
 }
