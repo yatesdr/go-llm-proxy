@@ -17,7 +17,7 @@ func (h *AdminHandler) UsersPage(w http.ResponseWriter, r *http.Request) {
 <div class="card">
   <div class="table-wrap">
     <table class="data-table">
-      <thead><tr><th style="width:220px">Name</th><th style="width:140px">Key</th><th>Allowed Models</th><th style="width:110px;text-align:right">Actions</th></tr></thead>
+      <thead><tr><th style="width:170px">Name</th><th style="width:170px">Key</th><th>Allowed Models</th><th style="width:210px;text-align:right">Actions</th></tr></thead>
       <tbody id="usersBody"><tr><td colspan="4" style="text-align:center;color:var(--muted)">Loading…</td></tr></tbody>
     </table>
   </div>
@@ -195,7 +195,7 @@ func indexOf(s, sub string) int {
 
 func usersPageJS() string {
 	return `
-var state = {users: [], allModels: [], revealed: {}};
+var state = {users: [], allModels: []};
 
 function load(){
   apiGet("/admin/users/data").then(function(d){
@@ -236,20 +236,15 @@ function renderUserRow(u){
     }
   }
   pills += '<button class="pill-add" onclick="showAddModel(\''+u.key_hash+'\', this)">+ add model…</button>';
-  var revealed = state.revealed[u.key_hash];
-  var keyCell = revealed
-    ? '<code class="mono" style="word-break:break-all">'+esc(revealed)+'</code> ' +
-      '<button class="btn-link" onclick="hideKey(\''+u.key_hash+'\')" title="Hide key">hide</button>'
-    : '<code>'+esc(u.masked)+'</code> ' +
-      '<button class="btn-link" onclick="revealKey(\''+u.key_hash+'\')" title="Show the full key">reveal</button>';
   return '<tr data-hash="'+u.key_hash+'">' +
     '<td class="cell-name" title="'+esc(u.name)+'"><button class="btn-link" onclick="renameUser(\''+u.key_hash+'\', \''+escAttr(u.name)+'\')" title="Rename">'+esc(u.name)+'</button></td>' +
-    '<td>'+keyCell+'</td>' +
-    '<td class="cell-pills"><div class="pills-scroll">'+pills+'</div></td>' +
+    '<td class="cell-key"><code>'+esc(u.masked)+'</code></td>' +
+    '<td class="cell-pills"><div class="pills-wrap">'+pills+'</div></td>' +
     '<td class="row-actions"><div class="action-group">'+
+      '<button class="btn btn-secondary btn-sm" onclick="revealKey(\''+u.key_hash+'\', \''+escAttr(u.name)+'\')" title="Show the full key in a banner">Reveal</button>'+
       '<button class="btn btn-secondary btn-sm" onclick="copyKey(\''+u.key_hash+'\')" title="Copy the full key to the clipboard">Copy</button>'+
       '<button class="btn btn-secondary btn-sm" onclick="rotateUser(\''+u.key_hash+'\', \''+escAttr(u.name)+'\')" title="Replace this key with a new one; the old key stops working immediately">Rotate</button>'+
-      '<button class="btn btn-danger btn-sm" onclick="deleteUser(\''+u.key_hash+'\', \''+escAttr(u.name)+'\')">Delete</button>'+
+      '<button class="btn btn-danger btn-sm" onclick="deleteUser(\''+u.key_hash+'\', \''+escAttr(u.name)+'\')" title="Delete this key">&times;</button>'+
     '</div></td></tr>';
 }
 
@@ -260,22 +255,21 @@ function fetchKey(keyHash){
   });
 }
 
-function revealKey(keyHash){
+function revealKey(keyHash, name){
   fetchKey(keyHash).then(function(key){
-    state.revealed[keyHash] = key;
-    renderUsers();
+    showPersistentBanner(
+      '<strong>API key for <code>'+esc(name)+'</code>:</strong><br>' +
+      '<code id="revealKeyVal">'+esc(key)+'</code>' +
+      '<div class="persist-actions">' +
+      '<button class="btn btn-primary btn-sm" type="button" onclick="copyToClipboard(document.getElementById(\'revealKeyVal\').textContent).then(function(){flash(\'Copied to clipboard\',\'success\');})">Copy</button>' +
+      '<button class="btn btn-secondary btn-sm" type="button" onclick="dismissPersistent()">Dismiss</button>' +
+      '</div>'
+    );
   }).catch(function(e){ flash(e.message, "error"); });
 }
 
-function hideKey(keyHash){
-  delete state.revealed[keyHash];
-  renderUsers();
-}
-
 function copyKey(keyHash){
-  var cached = state.revealed[keyHash];
-  var p = cached ? Promise.resolve(cached) : fetchKey(keyHash);
-  p.then(function(key){
+  fetchKey(keyHash).then(function(key){
     return copyToClipboard(key);
   }).then(function(){
     flash("Key copied to clipboard", "success");
@@ -287,7 +281,6 @@ function rotateUser(keyHash, name){
   apiPost("/admin/users/mutate", {action:"rotate", key_hash: keyHash}).then(function(res){
     if(!res.ok){ flash(res.json.error && res.json.error.message || "Rotate failed", "error"); return; }
     var j = res.json;
-    delete state.revealed[keyHash];
     showPersistentBanner(
       '<strong>New API key for <code>'+esc(name)+'</code> (the old key is now invalid):</strong><br>' +
       '<code id="rotatedKeyVal">'+esc(j.key)+'</code>' +

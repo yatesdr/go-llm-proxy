@@ -377,7 +377,14 @@ func adminCSS() string {
 .pill-add:hover{border-color:var(--blue);color:var(--blue)}
 .model-input{padding:2px 6px;font-size:.8rem;border:1px solid var(--border);border-radius:10px;width:140px;margin-left:4px;font-family:inherit}
 .row-actions{text-align:right;white-space:nowrap}
-.row-actions .action-group{display:inline-flex;gap:6px;align-items:center;vertical-align:middle}
+.row-actions .action-group{display:inline-flex;gap:4px;align-items:center;vertical-align:middle;flex-wrap:wrap;justify-content:flex-end}
+.row-actions .btn-sm{padding:3px 8px;font-size:.78rem}
+/* Admin tables: let rows grow and pill lists wrap instead of the dashboard's
+   fixed 48px rows with hidden overflow. */
+.data-table td{height:auto;min-height:44px;padding:8px 10px;overflow:visible}
+.data-table .cell-key code{white-space:nowrap}
+.pills-wrap{display:flex;flex-wrap:wrap;align-items:center;gap:4px;row-gap:4px}
+.data-table .cell-pills{max-width:none}
 .flash-bar{padding:10px 14px;border-radius:6px;margin-bottom:14px;font-size:.9rem;font-weight:500;display:none}
 .flash-success{background:var(--green-bg);color:var(--green)}
 .flash-error{background:#fef2f2;color:#b91c1c}
