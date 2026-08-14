@@ -101,19 +101,7 @@ func (cs *ConfigStore) mutateYAML(mutate func(root *yaml.Node) error) error {
 	if err := yaml.Unmarshal(buf.Bytes(), &validated); err != nil {
 		return fmt.Errorf("re-parsing config: %w", err)
 	}
-	for i := range validated.Models {
-		m := &validated.Models[i]
-		if m.Timeout == 0 {
-			m.Timeout = 300
-		}
-		if m.Model == "" {
-			m.Model = m.Name
-		}
-		if m.Type == BackendBedrock {
-			applyBedrockDefaults(m)
-		}
-	}
-	if err := validateConfig(&validated); err != nil {
+	if err := finalizeConfig(&validated); err != nil {
 		return fmt.Errorf("resulting config is invalid: %w", err)
 	}
 
@@ -598,7 +586,14 @@ func modelConfigNode(m ModelConfig) *yaml.Node {
 		n.Content = append(n.Content, stringNode(key), value)
 	}
 	add("name", stringNode(m.Name))
-	add("backend", stringNode(m.Backend))
+	switch {
+	case m.Pool != "":
+		add("pool", stringNode(m.Pool))
+	case len(m.Backends) > 0:
+		add("backends", backendsSeqNode(m.Backends))
+	default:
+		add("backend", stringNode(m.Backend))
+	}
 	if m.APIKey != "" {
 		add("api_key", stringNode(m.APIKey))
 	}
@@ -657,6 +652,145 @@ func modelConfigNode(m ModelConfig) *yaml.Node {
 		add("processors", processorsNode(*m.Processors))
 	}
 	return n
+}
+
+func backendConfigNode(b BackendConfig) *yaml.Node {
+	n := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	add := func(key string, value *yaml.Node) {
+		n.Content = append(n.Content, stringNode(key), value)
+	}
+	add("url", stringNode(b.URL))
+	if b.APIKey != "" {
+		add("api_key", stringNode(b.APIKey))
+	}
+	if b.Weight != 0 && b.Weight != 1 {
+		add("weight", intNode(b.Weight))
+	}
+	if b.MaxInflight != 0 {
+		add("max_inflight", intNode(b.MaxInflight))
+	}
+	if b.Disabled {
+		add("disabled", boolNode(true))
+	}
+	return n
+}
+
+func backendsSeqNode(backends []BackendConfig) *yaml.Node {
+	n := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+	for _, b := range backends {
+		n.Content = append(n.Content, backendConfigNode(b))
+	}
+	return n
+}
+
+func poolConfigNode(p PoolConfig) *yaml.Node {
+	n := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	n.Content = append(n.Content,
+		stringNode("name"), stringNode(p.Name),
+		stringNode("backends"), backendsSeqNode(p.Backends),
+	)
+	return n
+}
+
+// ─── Pools ───────────────────────────────────────────────────────────────────
+
+// AddPool appends a new backend pool to the config.
+func (cs *ConfigStore) AddPool(p PoolConfig) error {
+	if p.Name == "" {
+		return fmt.Errorf("pool name is required")
+	}
+	if FindPool(cs.Get(), p.Name) != nil {
+		return fmt.Errorf("pool %q already exists", p.Name)
+	}
+	return cs.mutateYAML(func(root *yaml.Node) error {
+		poolsNode := findMappingValue(root, "pools")
+		if poolsNode == nil {
+			poolsNode = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+			setMappingValue(root, "pools", poolsNode)
+		}
+		if poolsNode.Kind != yaml.SequenceNode {
+			return fmt.Errorf("pools section is not a sequence")
+		}
+		poolsNode.Content = append(poolsNode.Content, poolConfigNode(p))
+		return nil
+	})
+}
+
+// UpdatePool replaces the pool identified by originalName with p. Renames are
+// propagated to models that reference the pool so the config stays consistent.
+func (cs *ConfigStore) UpdatePool(originalName string, p PoolConfig) error {
+	if p.Name == "" {
+		return fmt.Errorf("pool name is required")
+	}
+	cur := cs.Get()
+	if FindPool(cur, originalName) == nil {
+		return fmt.Errorf("pool %q not found", originalName)
+	}
+	if p.Name != originalName && FindPool(cur, p.Name) != nil {
+		return fmt.Errorf("pool %q already exists", p.Name)
+	}
+	return cs.mutateYAML(func(root *yaml.Node) error {
+		poolsNode := findMappingValue(root, "pools")
+		if poolsNode == nil || poolsNode.Kind != yaml.SequenceNode {
+			return fmt.Errorf("pools section not found")
+		}
+		for i, entry := range poolsNode.Content {
+			if entry.Kind != yaml.MappingNode {
+				continue
+			}
+			nameVal := findMappingValue(entry, "name")
+			if nameVal == nil || nameVal.Value != originalName {
+				continue
+			}
+			poolsNode.Content[i] = poolConfigNode(p)
+			if p.Name != originalName {
+				renamePoolReferences(root, originalName, p.Name)
+			}
+			return nil
+		}
+		return fmt.Errorf("pool %q not found in config file", originalName)
+	})
+}
+
+// DeletePool removes the named pool. Refused while any model references it.
+func (cs *ConfigStore) DeletePool(name string) error {
+	if refs := PoolReferrers(cs.Get(), name); len(refs) > 0 {
+		return fmt.Errorf("pool %q is referenced by models: %v", name, refs)
+	}
+	return cs.mutateYAML(func(root *yaml.Node) error {
+		poolsNode := findMappingValue(root, "pools")
+		if poolsNode == nil || poolsNode.Kind != yaml.SequenceNode {
+			return fmt.Errorf("pools section not found")
+		}
+		for i, entry := range poolsNode.Content {
+			if entry.Kind != yaml.MappingNode {
+				continue
+			}
+			nameVal := findMappingValue(entry, "name")
+			if nameVal == nil || nameVal.Value != name {
+				continue
+			}
+			poolsNode.Content = append(poolsNode.Content[:i], poolsNode.Content[i+1:]...)
+			return nil
+		}
+		return fmt.Errorf("pool %q not found in config file", name)
+	})
+}
+
+// renamePoolReferences rewrites models' pool fields after a pool rename.
+func renamePoolReferences(root *yaml.Node, oldName, newName string) {
+	modelsNode := findMappingValue(root, "models")
+	if modelsNode == nil || modelsNode.Kind != yaml.SequenceNode {
+		return
+	}
+	for _, entry := range modelsNode.Content {
+		if entry.Kind != yaml.MappingNode {
+			continue
+		}
+		if poolVal := findMappingValue(entry, "pool"); poolVal != nil && poolVal.Value == oldName {
+			poolVal.Value = newName
+		}
+	}
 }
 
 func samplingDefaultsEmpty(d SamplingDefaults) bool {

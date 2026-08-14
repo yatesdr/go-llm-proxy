@@ -54,6 +54,7 @@ func (h *AdminHandler) ModelsData(w http.ResponseWriter, r *http.Request) {
 		entry := map[string]any{
 			"name":              m.Name,
 			"backend":           m.Backend,
+			"pool":              m.Pool,
 			"type":              m.Type,
 			"model":             m.Model,
 			"timeout":           m.Timeout,
@@ -101,9 +102,15 @@ func (h *AdminHandler) ModelsData(w http.ResponseWriter, r *http.Request) {
 		models = append(models, entry)
 	}
 
+	poolNames := make([]string, 0, len(cfg.Pools))
+	for _, p := range cfg.Pools {
+		poolNames = append(poolNames, p.Name)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"models":  models,
 		"regions": awsRegions,
+		"pools":   poolNames,
 	})
 }
 
@@ -183,6 +190,7 @@ func (h *AdminHandler) ModelsMutate(w http.ResponseWriter, r *http.Request) {
 type modelInputDTO struct {
 	Name             string              `json:"name"`
 	Backend          string              `json:"backend"`
+	Pool             string              `json:"pool"`
 	Type             string              `json:"type"`
 	Model            string              `json:"model"`
 	Timeout          int                 `json:"timeout"`
@@ -229,6 +237,7 @@ func (d *modelInputDTO) toConfig(cfg *config.Config, originalName string) (confi
 	mc := config.ModelConfig{
 		Name:             d.Name,
 		Backend:          d.Backend,
+		Pool:             d.Pool,
 		Type:             d.Type,
 		Model:            d.Model,
 		Timeout:          d.Timeout,
@@ -243,6 +252,11 @@ func (d *modelInputDTO) toConfig(cfg *config.Config, originalName string) (confi
 		GuardrailID:      d.GuardrailID,
 		GuardrailVersion: d.GuardrailVersion,
 		GuardrailTrace:   d.GuardrailTrace,
+	}
+	// A pooled model must not carry a stray single-backend URL — the config
+	// layer rejects a model with more than one backend source.
+	if mc.Pool != "" {
+		mc.Backend = ""
 	}
 
 	// Resolve secret fields, preserving existing values when omitted.
@@ -351,7 +365,18 @@ func modelModalHTML() string {
                 <option value="bedrock">bedrock</option>
               </select>
             </div>
-            <div class="field field-full">
+            <div class="field" id="backendSourceField">
+              <label>Backend source <span class="tip" tabindex="0" data-tip="Single URL sends every request to one backend. Pool load-balances requests across the pool's backends with sticky session affinity. Define pools on the Pools tab.">?</span></label>
+              <select name="backend_source" id="backendSourceSelect" onchange="onBackendSourceChange()">
+                <option value="single">Single URL</option>
+                <option value="pool">Pool</option>
+              </select>
+            </div>
+            <div class="field" id="poolField" style="display:none">
+              <label>Pool <span class="tip" tabindex="0" data-tip="Named backend pool serving this model. Manage pools on the Pools tab.">?</span></label>
+              <select name="pool" id="poolSelect"></select>
+            </div>
+            <div class="field field-full" id="backendUrlField">
               <label>Backend URL <span class="tip" tabindex="0" data-tip="Upstream server URL. Default for bedrock: https://bedrock-runtime.{region}.amazonaws.com (auto-derived — leave empty unless you need a VPC endpoint). Required for openai/anthropic.">?</span></label>
               <input type="url" name="backend" id="backendInput" placeholder="http://localhost:8000/v1">
             </div>
@@ -526,12 +551,25 @@ func modelModalHTML() string {
 // modelsPageJS returns the JavaScript for the models tab.
 func modelsPageJS() string {
 	return `
-var mstate = {models: [], regions: [], editing: null, secretOverrides: {}};
+var mstate = {models: [], regions: [], pools: [], editing: null, secretOverrides: {}};
 
 function loadModels(){
   apiGet("/admin/models/data").then(function(d){
     mstate.models = d.models || [];
     mstate.regions = d.regions || [];
+    mstate.pools = d.pools || [];
+    var ps = document.getElementById("poolSelect");
+    ps.innerHTML = "";
+    for(var i=0;i<mstate.pools.length;i++){
+      var o = document.createElement("option");
+      o.value = mstate.pools[i]; o.textContent = mstate.pools[i];
+      ps.appendChild(o);
+    }
+    if(!mstate.pools.length){
+      var o = document.createElement("option");
+      o.value = ""; o.textContent = "(no pools defined — see Pools tab)";
+      ps.appendChild(o);
+    }
     var dl = document.getElementById("regionsList");
     dl.innerHTML = "";
     for(var i=0;i<mstate.regions.length;i++){
@@ -566,7 +604,7 @@ function renderModels(){
   for(var i=0;i<mstate.models.length;i++){
     var m = mstate.models[i];
     var t = m.type || "openai";
-    var backend = m.backend || "";
+    var backend = m.pool ? ("pool: " + m.pool) : (m.backend || "");
     if(backend.length > 48) backend = backend.substring(0,45) + "…";
     var ctx = m.context_window ? Number(m.context_window).toLocaleString() : "auto";
     var vision = m.supports_vision ? "✓" : "";
@@ -611,7 +649,9 @@ function openModelModal(name){
   });
   if(m){
     form.elements["name"].value = m.name || "";
-    form.elements["backend"].value = m.backend || "";
+    form.elements["backend"].value = m.pool ? "" : (m.backend || "");
+    form.elements["backend_source"].value = m.pool ? "pool" : "single";
+    if(m.pool) form.elements["pool"].value = m.pool;
     form.elements["type"].value = m.type || "";
     form.elements["model"].value = (m.model && m.model !== m.name) ? m.model : "";
     form.elements["timeout"].value = m.timeout || "";
@@ -658,6 +698,7 @@ function openModelModal(name){
     document.getElementById("procWebSearchKeyMask").textContent = "(not set)";
   }
   onTypeChange();
+  onBackendSourceChange();
   document.getElementById("modelFormErr").style.display = "none";
   document.getElementById("modelModal").classList.add("open");
   // Focus first field.
@@ -679,10 +720,26 @@ document.addEventListener("keydown", function(ev){
   }
 });
 
+function onBackendSourceChange(){
+  var form = document.getElementById("modelForm");
+  var src = form.elements["backend_source"].value;
+  document.getElementById("poolField").style.display = (src === "pool") ? "" : "none";
+  document.getElementById("backendUrlField").style.display = (src === "pool") ? "none" : "";
+}
+
 function onTypeChange(){
   var form = document.getElementById("modelForm");
   var t = form.elements["type"].value;
   document.getElementById("bedrockSection").style.display = (t === "bedrock") ? "" : "none";
+  // Bedrock models are always single-backend (SigV4 signing is per-endpoint).
+  var srcField = document.getElementById("backendSourceField");
+  if(t === "bedrock"){
+    form.elements["backend_source"].value = "single";
+    srcField.style.display = "none";
+    onBackendSourceChange();
+  } else {
+    srcField.style.display = "";
+  }
   var bi = document.getElementById("backendInput");
   if(!bi.value){
     if(t === "anthropic") bi.placeholder = "https://api.anthropic.com";
@@ -713,9 +770,11 @@ function clearSecret(field){
 
 function collectForm(){
   var form = document.getElementById("modelForm");
+  var usePool = form.elements["backend_source"].value === "pool";
   var body = {
     name: form.elements["name"].value.trim(),
-    backend: form.elements["backend"].value.trim(),
+    backend: usePool ? "" : form.elements["backend"].value.trim(),
+    pool: usePool ? form.elements["pool"].value : "",
     type: form.elements["type"].value,
     model: form.elements["model"].value.trim(),
     timeout: parseInt(form.elements["timeout"].value,10) || 0,
@@ -787,7 +846,8 @@ function submitModel(ev){
   errEl.style.display = "none";
   var body = collectForm();
   if(!body.name){ return showFormErr("Name is required"); }
-  if(!body.backend && body.type !== "bedrock"){ return showFormErr("Backend URL is required"); }
+  if(body.pool === "" && form_usesPool()){ return showFormErr("Select a pool, or define one on the Pools tab first"); }
+  if(!body.pool && !body.backend && body.type !== "bedrock"){ return showFormErr("Backend URL is required"); }
   if(body.backend){
     try { new URL(body.backend); } catch(e){ return showFormErr("Backend URL is invalid"); }
   }
@@ -811,6 +871,10 @@ function submitModel(ev){
     btn.disabled = false; btn.textContent = "Save";
     showFormErr(e.message || "Save failed");
   });
+}
+
+function form_usesPool(){
+  return document.getElementById("modelForm").elements["backend_source"].value === "pool";
 }
 
 function showFormErr(msg){

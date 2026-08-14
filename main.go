@@ -128,8 +128,10 @@ func main() {
 	models := handler.NewModelsHandler(cs, healthStore)
 	rl := ratelimit.NewRateLimiter(cfg.TrustedProxies)
 
+	dashEnabled := (*serveDashboard || cfg.UsageDashboard) && ul != nil
+	adminEnabled := cfg.EffectiveAdminPassword() != ""
 	var dashRl *ratelimit.RateLimiter
-	if (*serveDashboard || cfg.UsageDashboard) && ul != nil {
+	if dashEnabled || adminEnabled {
 		dashRl = ratelimit.NewRateLimiter(cfg.TrustedProxies)
 	}
 
@@ -170,14 +172,15 @@ func main() {
 		mux.Handle("GET /{$}", configPage)
 		slog.Info("config generator page enabled at GET /")
 	}
-	if dashRl != nil {
+	if dashEnabled {
 		dash := handler.NewUsageDashboardHandler(cs, ul, dashRl)
 		mux.Handle("GET /usage", http.HandlerFunc(dash.LoginPage))
 		mux.Handle("POST /usage", http.HandlerFunc(dash.HandleLogin))
 		mux.Handle("POST /usage/logout", http.HandlerFunc(dash.HandleLogout))
 		mux.Handle("GET /usage/data", http.HandlerFunc(dash.ServeData))
 		slog.Info("usage dashboard enabled at /usage")
-
+	}
+	if adminEnabled {
 		admin := handler.NewAdminHandler(cs, dashRl, healthStore)
 		mux.Handle("GET /admin", http.HandlerFunc(admin.Root))
 		mux.Handle("GET /admin/", http.HandlerFunc(admin.Root))
@@ -190,6 +193,10 @@ func main() {
 		mux.Handle("GET /admin/models", admin.RequirePage(admin.ModelsPage))
 		mux.Handle("GET /admin/models/data", admin.RequireAPI(admin.ModelsData))
 		mux.Handle("POST /admin/models/mutate", admin.RequireAPI(admin.ModelsMutate))
+		mux.Handle("GET /admin/pools", admin.RequirePage(admin.PoolsPage))
+		mux.Handle("GET /admin/pools/data", admin.RequireAPI(admin.PoolsData))
+		mux.Handle("POST /admin/pools/mutate", admin.RequireAPI(admin.PoolsMutate))
+		mux.Handle("POST /admin/pools/probe", admin.RequireAPI(admin.PoolsProbe))
 		mux.Handle("GET /admin/processors", admin.RequirePage(admin.ProcessorsPage))
 		mux.Handle("GET /admin/processors/data", admin.RequireAPI(admin.ProcessorsData))
 		mux.Handle("POST /admin/processors/mutate", admin.RequireAPI(admin.ProcessorsMutate))

@@ -22,6 +22,7 @@ type ProcessorsConfig struct {
 
 type Config struct {
 	Listen                 string           `yaml:"listen"`
+	Pools                  []PoolConfig     `yaml:"pools"` // named backend pools shared by models
 	Models                 []ModelConfig    `yaml:"models"`
 	Keys                   []KeyConfig      `yaml:"keys"`
 	Services               ServicesConfig   `yaml:"services"`                 // external service proxies (Qdrant, etc.)
@@ -32,6 +33,20 @@ type Config struct {
 	UsageDB                string           `yaml:"usage_db"`                 // path to SQLite usage database (default: usage.db)
 	UsageDashboard         bool             `yaml:"usage_dashboard"`          // enable the usage dashboard at /usage
 	UsageDashboardPassword string           `yaml:"usage_dashboard_password"` // password for the usage dashboard
+	AdminPassword          string           `yaml:"admin_password"`           // password for /admin (falls back to usage_dashboard_password)
+}
+
+// EffectiveAdminPassword returns the password guarding /admin: admin_password
+// when set, otherwise the usage dashboard password (when the dashboard is
+// enabled). Empty means the admin UI is disabled.
+func (c *Config) EffectiveAdminPassword() string {
+	if c.AdminPassword != "" {
+		return c.AdminPassword
+	}
+	if c.UsageDashboard {
+		return c.UsageDashboardPassword
+	}
+	return ""
 }
 
 const (
@@ -64,6 +79,8 @@ type SamplingDefaults struct {
 type ModelConfig struct {
 	Name           string            `yaml:"name"`
 	Backend        string            `yaml:"backend"`         // upstream URL e.g. http://192.168.100.10:8000/v1
+	Backends       []BackendConfig   `yaml:"backends"`        // inline backend pool (mutually exclusive with backend/pool)
+	Pool           string            `yaml:"pool"`            // named pool reference (mutually exclusive with backend/backends)
 	APIKey         string            `yaml:"api_key"`         // key to send to the backend (if required)
 	Model          string            `yaml:"model"`           // model name to send to the backend (if different from Name)
 	Timeout        int               `yaml:"timeout"`         // request timeout in seconds (default 300)
@@ -156,20 +173,7 @@ func (cs *ConfigStore) Load() error {
 		cfg.Listen = ":8080"
 	}
 
-	for i := range cfg.Models {
-		m := &cfg.Models[i]
-		if m.Timeout == 0 {
-			m.Timeout = 300
-		}
-		if m.Model == "" {
-			m.Model = m.Name
-		}
-		if m.Type == BackendBedrock {
-			applyBedrockDefaults(m)
-		}
-	}
-
-	if err := validateConfig(&cfg); err != nil {
+	if err := finalizeConfig(&cfg); err != nil {
 		return err
 	}
 
@@ -279,6 +283,46 @@ func applyBedrockDefaults(m *ModelConfig) {
 	}
 }
 
+// finalizeConfig applies per-model defaults, validates the whole config, and
+// bridges pooled models' first backend into the legacy single-backend fields.
+// Shared by Load() and the admin save path so both enforce identical rules.
+func finalizeConfig(cfg *Config) error {
+	for i := range cfg.Models {
+		m := &cfg.Models[i]
+		if m.Timeout == 0 {
+			m.Timeout = 300
+		}
+		if m.Model == "" {
+			m.Model = m.Name
+		}
+		if m.Type == BackendBedrock {
+			applyBedrockDefaults(m)
+		}
+	}
+
+	if err := validateConfig(cfg); err != nil {
+		return err
+	}
+
+	// Bridge: code that predates pools reads m.Backend / m.APIKey directly.
+	// Point those at the pool's first backend so a pooled model behaves like
+	// a single-backend model everywhere the load balancer isn't involved yet.
+	for i := range cfg.Models {
+		m := &cfg.Models[i]
+		if m.Backend != "" {
+			continue
+		}
+		backends := cfg.EffectiveBackends(m)
+		if len(backends) > 0 {
+			m.Backend = backends[0].URL
+			if m.APIKey == "" {
+				m.APIKey = backends[0].APIKey
+			}
+		}
+	}
+	return nil
+}
+
 // FindModel returns the ModelConfig with the given name, or nil if not found.
 func FindModel(cfg *Config, name string) *ModelConfig {
 	for i := range cfg.Models {
@@ -303,28 +347,51 @@ func validateConfig(cfg *Config) error {
 		}
 	}
 
+	if err := validatePools(cfg); err != nil {
+		return err
+	}
+
 	names := make(map[string]bool)
 	for _, m := range cfg.Models {
 		if m.Name == "" {
 			return fmt.Errorf("model entry missing name")
 		}
-		if m.Backend == "" {
-			return fmt.Errorf("model %q missing backend", m.Name)
+
+		// Exactly one backend source: single backend URL, inline backends
+		// list, or a named pool reference.
+		sources := 0
+		if m.Backend != "" {
+			sources++
+		}
+		if len(m.Backends) > 0 {
+			sources++
+		}
+		if m.Pool != "" {
+			sources++
+		}
+		if sources == 0 {
+			return fmt.Errorf("model %q missing backend (set backend, backends, or pool)", m.Name)
+		}
+		if sources > 1 {
+			return fmt.Errorf("model %q must set only one of backend, backends, or pool", m.Name)
+		}
+		if m.Type == BackendBedrock && (m.Pool != "" || len(m.Backends) > 0) {
+			return fmt.Errorf("model %q (bedrock) does not support backends/pool — use a single backend", m.Name)
 		}
 
-		// Validate backend URL.
-		u, err := url.Parse(m.Backend)
-		if err != nil {
-			return fmt.Errorf("model %q has invalid backend URL: %w", m.Name, err)
-		}
-		if u.Scheme != "http" && u.Scheme != "https" {
-			return fmt.Errorf("model %q backend must use http or https scheme, got %q", m.Name, u.Scheme)
-		}
-		if u.Host == "" {
-			return fmt.Errorf("model %q backend missing host", m.Name)
-		}
-		if u.User != nil {
-			return fmt.Errorf("model %q backend must not contain credentials in URL", m.Name)
+		switch {
+		case m.Backend != "":
+			if err := validateBackendURL(fmt.Sprintf("model %q", m.Name), m.Backend); err != nil {
+				return err
+			}
+		case len(m.Backends) > 0:
+			if err := validateBackendList(fmt.Sprintf("model %q", m.Name), m.Backends); err != nil {
+				return err
+			}
+		case m.Pool != "":
+			if FindPool(cfg, m.Pool) == nil {
+				return fmt.Errorf("model %q references unknown pool %q", m.Name, m.Pool)
+			}
 		}
 
 		switch m.Type {

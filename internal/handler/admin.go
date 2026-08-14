@@ -56,7 +56,8 @@ func (h *AdminHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	password := r.FormValue("password")
 	cfg := h.cs.Get()
-	if !constantTimeEqual(password, cfg.UsageDashboardPassword) {
+	adminPassword := cfg.EffectiveAdminPassword()
+	if adminPassword == "" || !constantTimeEqual(password, adminPassword) {
 		h.rl.RecordFailure(ip)
 		h.renderLogin(w, "Incorrect password")
 		return
@@ -248,7 +249,7 @@ func (h *AdminHandler) renderShell(w http.ResponseWriter, activeTab, title, body
 <div class="header">
   <div class="header-inner">
     <h1>Admin</h1>
-    <nav class="admin-nav">`+tab("users", "Users", "/admin/users")+tab("models", "Models", "/admin/models")+tab("processors", "Processors", "/admin/processors")+`</nav>
+    <nav class="admin-nav">`+tab("users", "Users", "/admin/users")+tab("models", "Models", "/admin/models")+tab("pools", "Pools", "/admin/pools")+tab("processors", "Processors", "/admin/processors")+`</nav>
     <form method="POST" action="/admin/logout" style="margin-left:auto">
       <button class="btn-logout" type="submit">Sign out</button>
     </form>
@@ -387,6 +388,9 @@ select{width:100%}
 .checkbox-row input[type=checkbox]{width:auto;margin:0}
 .checkbox-row label{display:inline;font-size:.88rem;color:var(--text);font-weight:400;letter-spacing:0;text-transform:none;margin:0}
 .secret-row{display:flex;gap:6px;align-items:center}
+.pool-intro{color:var(--muted);font-size:.88rem;margin:-6px 0 14px}
+.backend-disabled{opacity:.55}
+.drain-badge{display:inline-block;padding:2px 8px;border-radius:10px;background:#fef3c7;color:#92400e;font-size:.75rem;font-weight:600}
 .secret-row .mono{flex:1}
 .inline-err{color:#b91c1c;font-size:.78rem;margin-top:3px}
 `
