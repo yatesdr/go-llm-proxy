@@ -60,7 +60,7 @@ func (h *AdminHandler) ModelsData(w http.ResponseWriter, r *http.Request) {
 			"timeout":           m.Timeout,
 			"context_window":    m.ContextWindow,
 			"supports_vision":   m.SupportsVision,
-			"supports_audio":   m.SupportsAudio,
+			"supports_audio":    m.SupportsAudio,
 			"force_pipeline":    m.ForcePipeline,
 			"responses_mode":    m.ResponsesMode,
 			"messages_mode":     m.MessagesMode,
@@ -82,10 +82,10 @@ func (h *AdminHandler) ModelsData(w http.ResponseWriter, r *http.Request) {
 		}
 		if m.Processors != nil {
 			entry["processors"] = map[string]any{
-				"vision":                  m.Processors.Vision,
-				"ocr":                     m.Processors.OCR,
-				"has_web_search_key":      m.Processors.WebSearchKey != "",
-				"web_search_key_mask":     config.MaskSecret(m.Processors.WebSearchKey),
+				"vision":              m.Processors.Vision,
+				"ocr":                 m.Processors.OCR,
+				"has_web_search_key":  m.Processors.WebSearchKey != "",
+				"web_search_key_mask": config.MaskSecret(m.Processors.WebSearchKey),
 			}
 		} else {
 			entry["processors"] = nil

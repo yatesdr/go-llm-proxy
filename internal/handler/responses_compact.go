@@ -15,6 +15,7 @@ import (
 	"go-llm-proxy/internal/auth"
 	"go-llm-proxy/internal/config"
 	"go-llm-proxy/internal/httputil"
+	"go-llm-proxy/internal/lb"
 	"go-llm-proxy/internal/usage"
 )
 
@@ -66,6 +67,10 @@ func (h *ResponsesHandler) HandleCompact(w http.ResponseWriter, r *http.Request)
 		httputil.WriteError(w, http.StatusBadRequest, "compaction is not supported for anthropic backends")
 		return
 	}
+
+	// Sticky backend selection for the compaction call.
+	model, releaseBackend := lb.ResolveModel(cfg, model, body)
+	defer releaseBackend()
 
 	keyName, keyHash := "", ""
 	if key != nil {

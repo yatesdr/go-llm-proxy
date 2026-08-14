@@ -126,4 +126,3 @@ func classifyStreamException(shape apiShape, exceptionType string) (errType, pub
 	}
 	return "api_error", "upstream stream error"
 }
-

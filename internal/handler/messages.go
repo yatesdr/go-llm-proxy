@@ -16,6 +16,7 @@ import (
 	"go-llm-proxy/internal/auth"
 	"go-llm-proxy/internal/config"
 	"go-llm-proxy/internal/httputil"
+	"go-llm-proxy/internal/lb"
 	"go-llm-proxy/internal/pipeline"
 	"go-llm-proxy/internal/usage"
 )
@@ -104,6 +105,11 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "model is not an anthropic backend")
 		return
 	}
+
+	// Sticky backend selection; the model view carries the chosen backend
+	// through every downstream call for this request.
+	model, releaseBackend := lb.ResolveModel(cfg, model, body)
+	defer releaseBackend()
 
 	keyName, keyHash := "", ""
 	if key != nil {
