@@ -133,11 +133,10 @@ func main() {
 	rl := ratelimit.NewRateLimiter(cfg.TrustedProxies)
 
 	dashEnabled := (*serveDashboard || cfg.UsageDashboard) && ul != nil
-	adminEnabled := cfg.EffectiveAdminPassword() != ""
-	var dashRl *ratelimit.RateLimiter
-	if dashEnabled || adminEnabled {
-		dashRl = ratelimit.NewRateLimiter(cfg.TrustedProxies)
-	}
+	// Admin routes always mount; the handler answers 404 until an admin
+	// password exists (admin_password, or the dashboard password when the
+	// dashboard is enabled), so enabling it is a config reload, not a restart.
+	dashRl := ratelimit.NewRateLimiter(cfg.TrustedProxies)
 
 	cs.SetOnReload(func(newCfg *config.Config) {
 		rl.SetTrustedProxies(newCfg.TrustedProxies)
@@ -184,7 +183,7 @@ func main() {
 		mux.Handle("GET /usage/data", http.HandlerFunc(dash.ServeData))
 		slog.Info("usage dashboard enabled at /usage")
 	}
-	if adminEnabled {
+	{
 		admin := handler.NewAdminHandler(cs, dashRl, healthStore)
 		mux.Handle("GET /admin", http.HandlerFunc(admin.Root))
 		mux.Handle("GET /admin/", http.HandlerFunc(admin.Root))
@@ -204,7 +203,9 @@ func main() {
 		mux.Handle("GET /admin/processors", admin.RequirePage(admin.ProcessorsPage))
 		mux.Handle("GET /admin/processors/data", admin.RequireAPI(admin.ProcessorsData))
 		mux.Handle("POST /admin/processors/mutate", admin.RequireAPI(admin.ProcessorsMutate))
-		slog.Info("admin page enabled at /admin")
+		if cfg.EffectiveAdminPassword() != "" {
+			slog.Info("admin page enabled at /admin")
+		}
 	}
 	mux.Handle("GET /v1/models", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, models)))
 	mux.Handle("GET /v1/models/status", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, http.HandlerFunc(models.ServeStatus))))

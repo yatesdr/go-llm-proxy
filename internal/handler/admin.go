@@ -28,14 +28,29 @@ func NewAdminHandler(cs *config.ConfigStore, rl *ratelimit.RateLimiter, hs *conf
 	return &AdminHandler{cs: cs, rl: rl, health: hs, sessions: newSessionStore()}
 }
 
+// enabled reports whether the admin UI is switched on in the current config.
+// Routes are always mounted; a 404 is served until a password exists, so the
+// UI can be enabled by config reload without restarting.
+func (h *AdminHandler) enabled() bool {
+	return h.cs.Get().EffectiveAdminPassword() != ""
+}
+
 // Root redirects /admin → /admin/users.
 func (h *AdminHandler) Root(w http.ResponseWriter, r *http.Request) {
+	if !h.enabled() {
+		http.NotFound(w, r)
+		return
+	}
 	http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
 }
 
 // LoginPage renders the login form (or redirects to /admin/users when the
 // caller already has a valid session cookie).
 func (h *AdminHandler) LoginPage(w http.ResponseWriter, r *http.Request) {
+	if !h.enabled() {
+		http.NotFound(w, r)
+		return
+	}
 	if h.authed(r) {
 		http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
 		return
@@ -45,6 +60,10 @@ func (h *AdminHandler) LoginPage(w http.ResponseWriter, r *http.Request) {
 
 // HandleLogin verifies the submitted password and issues a session cookie.
 func (h *AdminHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
+	if !h.enabled() {
+		http.NotFound(w, r)
+		return
+	}
 	ip := ratelimit.ClientIP(h.rl, r)
 	if !h.rl.Check(ip) {
 		httputil.WriteError(w, http.StatusTooManyRequests, "too many attempts")
@@ -112,6 +131,10 @@ func (h *AdminHandler) setCookie(w http.ResponseWriter, r *http.Request, token s
 // requests are redirected to /admin/login.
 func (h *AdminHandler) RequirePage(inner http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !h.enabled() {
+			http.NotFound(w, r)
+			return
+		}
 		if !h.authed(r) {
 			http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
 			return
@@ -125,6 +148,10 @@ func (h *AdminHandler) RequirePage(inner http.HandlerFunc) http.HandlerFunc {
 // matches the server's own host — defense in depth beside SameSite=Strict.
 func (h *AdminHandler) RequireAPI(inner http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !h.enabled() {
+			http.NotFound(w, r)
+			return
+		}
 		if !h.authed(r) {
 			httputil.WriteError(w, http.StatusUnauthorized, "not authenticated")
 			return
