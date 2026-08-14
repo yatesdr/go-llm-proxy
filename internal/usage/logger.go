@@ -144,6 +144,7 @@ type DashboardData struct {
 	DailyModels []DailyModelRow `json:"daily_models"`
 	Users       []UserRow       `json:"users"`
 	Models      []ModelRow      `json:"models"`
+	Backends    []BackendRow    `json:"backends"`
 }
 
 type DashboardTotals struct {
@@ -182,6 +183,18 @@ type ModelRow struct {
 	Users       int     `json:"users"`
 	TotalTokens int64   `json:"total_tokens"`
 	AvgLatency  float64 `json:"avg_latency_ms"`
+}
+
+// BackendRow aggregates usage per (model, backend URL) — the load-balancer's
+// distribution view. Rows exist only for records written after the backend
+// column was introduced.
+type BackendRow struct {
+	Model       string  `json:"model"`
+	Backend     string  `json:"backend"`
+	Requests    int     `json:"requests"`
+	TotalTokens int64   `json:"total_tokens"`
+	AvgLatency  float64 `json:"avg_latency_ms"`
+	Errors      int     `json:"errors"`
 }
 
 func (ul *UsageLogger) QueryDashboardData(days int) (*DashboardData, error) {
@@ -288,6 +301,31 @@ func (ul *UsageLogger) QueryDashboardData(days int) (*DashboardData, error) {
 		data.Models = append(data.Models, r)
 	}
 	modelRows.Close()
+
+	backendRows, err := ul.readDB.Query(`
+		SELECT
+			model,
+			backend,
+			COUNT(*)        AS requests,
+			COALESCE(SUM(total_tokens), 0),
+			CAST(AVG(duration_ms) AS REAL) AS avg_duration_ms,
+			SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) AS errors
+		FROM usage
+		WHERE timestamp >= date('now', ?) AND backend != ''
+		GROUP BY model, backend
+		ORDER BY model, total_tokens DESC
+	`, periodArg)
+	if err != nil {
+		return nil, fmt.Errorf("backends query: %w", err)
+	}
+	for backendRows.Next() {
+		var r BackendRow
+		if err := backendRows.Scan(&r.Model, &r.Backend, &r.Requests, &r.TotalTokens, &r.AvgLatency, &r.Errors); err != nil {
+			continue
+		}
+		data.Backends = append(data.Backends, r)
+	}
+	backendRows.Close()
 
 	dailyModelRows, err := ul.readDB.Query(`
 		SELECT

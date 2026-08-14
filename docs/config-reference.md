@@ -13,6 +13,51 @@ go-llm-proxy is configured via a single YAML file (default: `config.yaml`). See 
 | `usage_db` | `"usage.db"` | Path to the SQLite usage database |
 | `usage_dashboard` | `false` | Enable the usage dashboard at `/usage` |
 | `usage_dashboard_password` | — | Required when dashboard is enabled |
+| `admin_password` | — | Enables the admin UI at `/admin` on its own; when unset, `/admin` uses the dashboard password (and requires the dashboard to be enabled) |
+| `pools` | `[]` | Named backend pools for load balancing (see [Backend pools](#backend-pools)) |
+
+## Backend pools
+
+A pool is a named group of interchangeable backends serving the same model.
+Point one or more models at a pool and the proxy load-balances requests
+across the members. Pools can be managed entirely from the admin UI
+(`/admin/pools`), which is the recommended workflow.
+
+```yaml
+pools:
+  - name: glm-cluster
+    backends:
+      - url: http://192.168.1.10:8000/v1
+        weight: 2          # relative capacity share (default 1)
+        max_inflight: 8    # spill to another member beyond this (0 = unlimited)
+      - url: http://192.168.1.11:8000/v1
+        api_key: key       # optional per-backend key (default: model's api_key)
+        disabled: false    # true = drained (kept in config, excluded from routing)
+
+models:
+  - name: glm-4.6
+    pool: glm-cluster      # replaces backend:
+  - name: glm-4.6-fast     # multiple models can share one pool — they balance
+    pool: glm-cluster      # against the same live capacity
+```
+
+A model must set exactly one backend source: `backend` (single URL),
+`backends` (an inline pool private to that model), or `pool` (a named pool).
+Bedrock models are always single-backend.
+
+**Routing behavior.** Selection is sticky: the proxy hashes each request's
+stable conversation prefix (system prompt + first message) and maps it onto a
+pool member with weighted rendezvous hashing, so every turn of a session
+lands on the backend whose KV/prefix cache is already warm, and retries and
+follow-up turns hash identically with no client cooperation. New sessions
+spread across members proportionally to `weight`; requests with no
+conversation shape go to the least-loaded member. A member at `max_inflight`
+spills new sessions to the next-ranked member. Failed members are skipped: a
+circuit breaker opens after 3 consecutive backend failures (30s, then a
+half-open retry), the 30s health probes exclude probed-down members, and a
+transport error or 5xx on `/v1/chat/completions` fails over to another
+member once before reporting an error. Adding a backend to a pool only
+remaps ~1/N of active sessions.
 
 ## Model fields
 
@@ -32,7 +77,9 @@ models:
 | Field | Required | Default | Description |
 |---|---|---|---|
 | `name` | yes | — | Model name clients use in requests |
-| `backend` | yes | — | Upstream base URL (see [Backend URL routing](#backend-url-routing)) |
+| `backend` | one of | — | Upstream base URL (see [Backend URL routing](#backend-url-routing)) |
+| `backends` | one of | — | Inline backend pool for this model (see [Backend pools](#backend-pools)) |
+| `pool` | one of | — | Named pool reference (see [Backend pools](#backend-pools)) |
 | `api_key` | no | — | Token sent upstream (`Bearer` for OpenAI, `x-api-key` for Anthropic) |
 | `model` | no | same as `name` | Model name sent to the backend (for rewriting) |
 | `timeout` | no | `300` | Request timeout in seconds |

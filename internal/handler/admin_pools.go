@@ -83,6 +83,8 @@ func (h *AdminHandler) PoolsMutate(w http.ResponseWriter, r *http.Request) {
 		OriginalName string           `json:"original_name"`
 		Name         string           `json:"name"`
 		Backends     []poolBackendDTO `json:"backends"`
+		URL          string           `json:"url"`     // set_drained target
+		Drained      bool             `json:"drained"` // set_drained value
 	}
 	if err := decodeJSONBody(r, &req, 64*1024); err != nil {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid request body")
@@ -127,6 +129,38 @@ func (h *AdminHandler) PoolsMutate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Info("admin: pool deleted", "name", req.Name)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+
+	case "set_drained":
+		// One-click drain/enable of a single backend without opening the editor.
+		if req.Name == "" || req.URL == "" {
+			httputil.WriteError(w, http.StatusBadRequest, "name and url are required")
+			return
+		}
+		existing := config.FindPool(h.cs.Get(), req.Name)
+		if existing == nil {
+			httputil.WriteError(w, http.StatusNotFound, "pool not found")
+			return
+		}
+		updated := config.PoolConfig{Name: existing.Name, Backends: make([]config.BackendConfig, len(existing.Backends))}
+		copy(updated.Backends, existing.Backends)
+		found := false
+		for i := range updated.Backends {
+			if updated.Backends[i].URL == req.URL {
+				updated.Backends[i].Disabled = req.Drained
+				found = true
+				break
+			}
+		}
+		if !found {
+			httputil.WriteError(w, http.StatusNotFound, "backend not found in pool")
+			return
+		}
+		if err := h.cs.UpdatePool(req.Name, updated); err != nil {
+			writeMutateError(w, err)
+			return
+		}
+		slog.Info("admin: backend drain toggled", "pool", req.Name, "backend", req.URL, "drained", req.Drained)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 
 	default:
@@ -274,7 +308,10 @@ function renderPools(){
         '<td style="text-align:center">'+esc(b.weight || 1)+'</td>' +
         '<td style="text-align:center">'+esc(b.inflight || 0)+(b.max_inflight ? ' / '+esc(b.max_inflight) : "")+'</td>' +
         '<td style="text-align:center">'+renderBackendStatus(b)+'</td>' +
-        '<td class="row-actions"><button class="btn btn-secondary btn-sm" onclick="probeRow('+i+','+j+')" id="probe-btn-'+i+'-'+j+'">Probe</button></td>' +
+        '<td class="row-actions"><div class="action-group" style="display:inline-flex;gap:6px">' +
+          '<button class="btn btn-secondary btn-sm" onclick="probeRow('+i+','+j+')" id="probe-btn-'+i+'-'+j+'">Probe</button>' +
+          '<button class="btn btn-secondary btn-sm" onclick="toggleDrain('+i+','+j+')">'+(b.disabled?"Enable":"Drain")+'</button>' +
+        '</div></td>' +
       '</tr>';
     }
     html += '<div class="card" style="margin-bottom:16px">' +
@@ -306,6 +343,17 @@ function renderBackendStatus(b){
   if(b.breaker === "open") breaker = ' <span class="drain-badge" title="Circuit breaker open: skipped after repeated failures">breaker open</span>';
   else if(b.breaker === "half-open") breaker = ' <span class="drain-badge" title="Circuit breaker half-open: next request probes this backend">half-open</span>';
   return '<span class="health-dot '+dot+'" title="'+esc(title)+'"></span><span class="mono">'+esc(label)+'</span>'+breaker;
+}
+
+function toggleDrain(pi, bi){
+  var p = pstate.pools[pi], b = p.backends[bi];
+  var drain = !b.disabled;
+  if(drain && !confirm('Drain '+b.url+'? It stops receiving new requests; in-flight requests finish normally.')) return;
+  apiPost("/admin/pools/mutate", {action:"set_drained", name: p.name, url: b.url, drained: drain}).then(function(res){
+    if(!res.ok){ flash((res.json.error && res.json.error.message) || "Update failed", "error"); return; }
+    flash(drain ? "Backend drained" : "Backend enabled", "success");
+    loadPools();
+  });
 }
 
 function probeRow(pi, bi){

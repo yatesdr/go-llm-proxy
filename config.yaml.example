@@ -9,6 +9,22 @@
 # For local-only testing: use ":8080".
 listen: ":8080"
 
+# ── Backend pools (load balancing) ─────────────────────────────────────────────
+# A pool groups interchangeable backends serving the same model. Models that
+# reference a pool are load-balanced across its members with sticky session
+# affinity: each conversation keeps hitting the backend that holds its prefix
+# cache, while distinct sessions spread across the pool. Manage pools in the
+# admin UI (/admin/pools) or here.
+# pools:
+#   - name: glm-cluster
+#     backends:
+#       - url: http://192.168.1.10:8000/v1
+#         weight: 2                  # relative share (faster GPU = higher weight)
+#         max_inflight: 8            # spill to another member beyond this (0 = unlimited)
+#       - url: http://192.168.1.11:8000/v1
+#         # api_key: per-backend-key # overrides the model's api_key for this member
+#         # disabled: true           # drained: kept in config, excluded from routing
+
 # ── Models ─────────────────────────────────────────────────────────────────────
 # Each model gets a name that clients use, and a backend URL where requests are sent.
 # The proxy auto-detects the protocol and translates as needed.
@@ -23,6 +39,10 @@ models:
     # supports_vision: false         # set true if the model handles images natively
     # responses_mode: auto           # auto | native | translate (for Codex CLI)
     # messages_mode: auto            # auto | native | translate (for Claude Code)
+    # pool: glm-cluster              # load-balance via a named pool (replaces backend:)
+    # backends:                      # ...or an inline pool private to this model
+    #   - url: http://192.168.1.10:8000/v1
+    #   - url: http://192.168.1.11:8000/v1
     # defaults:                      # injected when the client doesn't send its own
     #   temperature: 0.7
     #   max_new_tokens: 4096
@@ -100,6 +120,7 @@ keys:
 # Usage dashboard: web UI at /usage (requires log_metrics and a password).
 # usage_dashboard: true
 # usage_dashboard_password: change-me
+# admin_password: change-me-too      # enables /admin on its own (defaults to the dashboard password)
 
 # ── Services ─────────────────────────────────────────────────────────────────
 # External service proxies. Currently supports Qdrant vector database.

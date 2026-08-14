@@ -210,6 +210,13 @@ func (h *UsageDashboardHandler) renderDashboard(w http.ResponseWriter) {
 <tbody id="modelsBody"></tbody>
 </table></div>
 </div>
+<div class="card" id="backendsCard" style="display:none">
+<h2>Backends</h2>
+<div class="table-wrap"><table class="data-table">
+<thead><tr><th>Model</th><th>Backend</th><th>Requests</th><th>Share</th><th>Tokens</th><th>Avg Latency</th><th>Errors</th></tr></thead>
+<tbody id="backendsBody"></tbody>
+</table></div>
+</div>
 </div>
 <script>
 var MODEL_COLORS=["#1a56db","#047857","#b45309","#7c3aed","#db2777","#0d9488","#ca8a04","#dc2626","#4f46e5","#059669","#d97706","#9333ea"];
@@ -249,6 +256,24 @@ function renderData(d){
 			"<td>"+m.users+"</td><td>"+fmtNum(m.total_tokens)+"</td>"+
 			"<td>"+Math.round(m.avg_latency_ms)+" ms</td>";
 	});
+	// Backends table: shown only when pooled routing has produced rows.
+	var bc=document.getElementById("backendsCard");
+	if(d.backends&&d.backends.length){
+		bc.style.display="";
+		var perModel={};
+		for(var i=0;i<d.backends.length;i++){
+			perModel[d.backends[i].model]=(perModel[d.backends[i].model]||0)+d.backends[i].requests;
+		}
+		renderTable("backendsBody",d.backends,function(b){
+			var share=perModel[b.model]>0?(100*b.requests/perModel[b.model]).toFixed(0)+"%":"—";
+			return "<td>"+esc(b.model)+"</td><td><code>"+esc(b.backend)+"</code></td>"+
+				"<td>"+fmtNum(b.requests)+"</td><td>"+share+"</td>"+
+				"<td>"+fmtNum(b.total_tokens)+"</td>"+
+				"<td>"+Math.round(b.avg_latency_ms)+" ms</td><td>"+fmtNum(b.errors)+"</td>";
+		});
+	}else{
+		bc.style.display="none";
+	}
 }
 function summaryCard(label,value){
 	return "<div class=\"summary-card\"><div class=\"summary-value\">"+value+"</div><div class=\"summary-label\">"+label+"</div></div>";
