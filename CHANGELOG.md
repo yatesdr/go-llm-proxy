@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.5.0 — 2026-08-16
+
+### Added
+
+- Dedicated **Audio** configuration for Whisper transcription/translation and
+  TTS speech generation, each with its own model name, upstream model, timeout,
+  and backend list.
+- Dedicated **Documents** configuration for PaddleOCR using its official
+  `POST /layout-parsing` request and response contract.
+- Direct PaddleOCR layout extraction in the PDF pipeline. Native PDF text stays
+  first; scanned documents use PaddleOCR Markdown before the legacy OCR/vision
+  fallbacks.
+- Admin health tests for Chat, Audio, and Document backends.
+
+### Changed
+
+- Removed named pools from the active configuration model. Every Chat, Audio,
+  and Document service now owns a `backends` list directly; adding another
+  backend to that list adds capacity and enables balancing/failover.
+- Replaced the Pools and Processors-oriented admin workflow with focused
+  **Chat**, **Audio**, and **Documents** tabs.
+- Simplified and made the admin interface responsive for narrow screens.
+- Audio and Document routing now shares the backend health, draining,
+  concurrency, weighted selection, circuit-breaker, and one-shot failover
+  behavior used by Chat.
+
+### Compatibility
+
+- Existing `backend`, model-level `api_key`, `pool`, and top-level `pools`
+  configuration is migrated once at startup to model-owned backend lists. The
+  original file is preserved as `config.yaml.pre-backend-lists`.
+- Legacy generic OCR/audio model configuration remains readable as a fallback
+  during rollout, while the new admin interface writes only the dedicated
+  Audio and Documents sections.
+
+### Verified
+
+- Full unit suite, race tests for config/routing/handler/pipeline packages,
+  `go vet ./...`, static Linux/amd64 build, admin JavaScript syntax checks, and
+  the live PaddleOCR 1.6 `/layout-parsing` contract on CN0.
+
 ## v0.3.9
 
 ### Security

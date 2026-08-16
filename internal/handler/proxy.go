@@ -243,7 +243,7 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// One-shot failover: a transport error or 5xx from the chosen backend —
 	// before anything was written to the client — retries once on another
-	// pool backend. A cold prefix cache beats a 502.
+	// model replica. A cold prefix cache beats a 502.
 	if (err != nil && ctx.Err() == nil) || (err == nil && resp.StatusCode >= 500) {
 		lb.RecordOutcome(model.Backend, false)
 		if alt, altRelease := lb.ResolveAlternate(cfg, model, model.Backend); alt != nil {

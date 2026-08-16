@@ -14,7 +14,8 @@ You need data security and self-host models or have upstream secure vendors (Azu
 - **Model multiplexing** — Aggregate local GPU servers, cloud APIs, and third-party providers behind one endpoint. Clients see one model list.
 - **API key management** — Issue proxy keys with per-key model restrictions. Backend credentials stay on the server.
 - **Vision pipeline** — Images sent to text-only models are described by a vision-capable model and replaced with text. Transparent to the client.
-- **PDF processing** — Text extraction for native PDFs. Scanned documents go through an OCR → vision cascade (dedicated OCR model first, vision model as automatic fallback). Works identically for Claude Code, Codex, Chat Completions, and any client that can submit a PDF as a data URL. Results cached across turns; failures use a 5-minute TTL so transient upstream issues don't permanently block a document.
+- **Document processing** — Text extraction for native PDFs plus an official PaddleOCR `/layout-parsing` route for scanned and layout-heavy documents. The original PDF goes to the configured layout service; vision remains a fallback.
+- **Audio routing** — Dedicated, load-balanced Whisper transcription/translation and text-to-speech routes using the OpenAI audio contracts.
 - **Web search** — When coding assistants request web search, the proxy executes it via Tavily or Brave Search (auto-detected from key prefix) and injects the results. No client-side MCP setup needed.
 - **MCP endpoint** — `/mcp/sse` exposes web search for OpenCode, Qwen Code, and any MCP-compatible agent.
 - **Qdrant proxy** — `/qdrant/*` proxies to a Qdrant vector database with separate app key auth and automatic multi-tenant isolation.
@@ -43,7 +44,8 @@ listen: ":8080"
 
 models:
   - name: my-model
-    backend: http://192.168.1.10:8000/v1
+    backends:
+      - url: http://192.168.1.10:8000/v1
 
 keys:
   - key: sk-your-secret-key
@@ -80,31 +82,36 @@ What works with each coding assistant through the proxy.
 | Web search (Tavily / Brave) | ✓ proxy | ✓ proxy | ✓ MCP | ✓ MCP |
 | Image description | ✓ vision | ✓ vision | ✓ vision | ✓ vision |
 | PDF text extraction | ✓ proxy | client-side | ✓ | ✓ |
-| Scanned PDF / OCR | ✓ OCR model | ✓ OCR model | ✓ | ✓ |
+| Scanned PDF / layout | ✓ PaddleOCR | ✓ PaddleOCR | ✓ | ✓ |
 | Context compaction | — | ✓ | — | — |
 | Usage logging & reports | ✓ | ✓ | ✓ | ✓ |
 
 Each assistant speaks a different API protocol. The proxy detects this and translates automatically — no per-model configuration needed for the common case.
 
-## Processing pipeline
+## Chat helpers and documents
 
 Optional. Handles content that local backends don't support natively:
 
 ```yaml
 processors:
   vision: Qwen3-VL-8B        # vision model for image descriptions
-  ocr: paddleOCR              # fast model for PDF page text extraction (optional; vision is tried automatically if OCR fails)
   web_search_key: tvly-...    # Tavily or Brave Search key (auto-detected from prefix)
+
+documents:
+  paddleocr:
+    backends:
+      - url: http://192.168.13.30:8002
 ```
 
-Without `processors`, the proxy just translates and routes. With it, images, PDFs, and search work on text-only backends.
+Chat helpers are optional. The document service keeps PaddleOCR's native API
+contract and is configured independently from OpenAI/Anthropic chat models.
 
 ### Recommended processor models
 
 | Processor | Model | Notes |
 |---|---|---|
 | Vision | [Qwen3-VL-8B](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct) | Best quality/speed balance for image description. Handles charts, screenshots, diagrams. |
-| OCR | [PaddleOCR-VL-1.5](https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.5) (0.9B) | Purpose-built for documents. 94.5% accuracy, 109 languages, ~2s/page. Tiny VRAM footprint. |
+| Documents | [PaddleOCR-VL](https://www.paddleocr.ai/main/en/version3.x/pipeline_usage/PaddleOCR-VL.html) | Configure the full layout pipeline, not the element-level recognizer alone. |
 | Web search | [Tavily](https://tavily.com) or [Brave Search](https://brave.com/search/api/) | Tavily free: 1,000 req/month. Brave free: $5/month credit. Auto-detected from key prefix. |
 
 ## Documentation

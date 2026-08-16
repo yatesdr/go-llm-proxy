@@ -120,7 +120,7 @@ func main() {
 	// outcomes (esp. external backends, which are otherwise probed only once).
 	handler.SetHealthStore(healthStore)
 	// Feed periodic probe results into the load balancer's health gate so
-	// probed-down pool members are skipped by selection.
+	// probed-down replicas are skipped by selection.
 	healthStore.SetBackendListener(lb.SetProbeHealth)
 
 	// Create the processing pipeline (shared by all handlers).
@@ -194,12 +194,19 @@ func main() {
 		mux.Handle("GET /admin/users/data", admin.RequireAPI(admin.UsersData))
 		mux.Handle("POST /admin/users/mutate", admin.RequireAPI(admin.UsersMutate))
 		mux.Handle("GET /admin/models", admin.RequirePage(admin.ModelsPage))
+		mux.Handle("GET /admin/chat", admin.RequirePage(admin.ModelsPage))
 		mux.Handle("GET /admin/models/data", admin.RequireAPI(admin.ModelsData))
 		mux.Handle("POST /admin/models/mutate", admin.RequireAPI(admin.ModelsMutate))
-		mux.Handle("GET /admin/pools", admin.RequirePage(admin.PoolsPage))
-		mux.Handle("GET /admin/pools/data", admin.RequireAPI(admin.PoolsData))
-		mux.Handle("POST /admin/pools/mutate", admin.RequireAPI(admin.PoolsMutate))
-		mux.Handle("POST /admin/pools/probe", admin.RequireAPI(admin.PoolsProbe))
+		mux.Handle("POST /admin/backends/probe", admin.RequireAPI(admin.BackendsProbe))
+		mux.Handle("GET /admin/audio", admin.RequirePage(admin.AudioPage))
+		mux.Handle("GET /admin/audio/data", admin.RequireAPI(admin.AudioData))
+		mux.Handle("POST /admin/audio/mutate", admin.RequireAPI(admin.AudioMutate))
+		mux.Handle("GET /admin/documents", admin.RequirePage(admin.DocumentsPage))
+		mux.Handle("GET /admin/documents/data", admin.RequireAPI(admin.DocumentsData))
+		mux.Handle("POST /admin/documents/mutate", admin.RequireAPI(admin.DocumentsMutate))
+		mux.Handle("POST /admin/workloads/probe", admin.RequireAPI(admin.WorkloadProbe))
+		// Legacy processors API remains as a compatibility surface for the
+		// Chat helpers card; it is no longer an administrator-facing tab.
 		mux.Handle("GET /admin/processors", admin.RequirePage(admin.ProcessorsPage))
 		mux.Handle("GET /admin/processors/data", admin.RequireAPI(admin.ProcessorsData))
 		mux.Handle("POST /admin/processors/mutate", admin.RequireAPI(admin.ProcessorsMutate))
@@ -218,6 +225,12 @@ func main() {
 	mux.Handle("POST /anthropic/v1/messages/count_tokens", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, countTokens)))
 	mux.Handle("POST /v1/messages", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, messages)))
 	mux.Handle("POST /anthropic/v1/messages", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, messages)))
+	audio := handler.NewAudioHandler(cs, proxy)
+	documents := handler.NewDocumentHandler(cs)
+	mux.Handle("POST /v1/audio/transcriptions", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, audio)))
+	mux.Handle("POST /v1/audio/translations", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, audio)))
+	mux.Handle("POST /v1/audio/speech", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, audio)))
+	mux.Handle("POST /layout-parsing", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, documents)))
 	mux.Handle("/v1/", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, proxy)))
 	mux.Handle("/anthropic/", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, proxy)))
 

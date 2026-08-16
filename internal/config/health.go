@@ -21,8 +21,8 @@ type ModelHealth struct {
 }
 
 // BackendHealth represents the probed health of a single backend URL.
-// Backends are probed individually so a pool with one dead member still
-// shows (and routes to) its live members.
+// Backends are probed individually so one dead replica does not hide or block
+// the other replicas serving the same workload.
 type BackendHealth struct {
 	URL       string    `json:"url"`
 	Online    bool      `json:"online"`
@@ -62,8 +62,8 @@ type backendRef struct {
 	models   []string
 }
 
-// collectBackendRefs builds the set of unique backend URLs across all models
-// (expanding pools), remembering which models each URL serves.
+// collectBackendRefs builds the set of unique backend URLs across chat, audio,
+// and document workloads, remembering which chat models each URL serves.
 func collectBackendRefs(cfg *Config) map[string]*backendRef {
 	refs := make(map[string]*backendRef)
 	for i := range cfg.Models {
@@ -81,6 +81,22 @@ func collectBackendRefs(cfg *Config) map[string]*backendRef {
 			}
 			ref.models = append(ref.models, m.Name)
 		}
+	}
+	addWorkload := func(backends []BackendConfig) {
+		for _, b := range backends {
+			if _, ok := refs[b.URL]; !ok {
+				refs[b.URL] = &backendRef{url: b.URL, apiKey: b.APIKey, external: isExternalBackend(b.URL)}
+			}
+		}
+	}
+	if cfg.Audio.Whisper != nil {
+		addWorkload(cfg.Audio.Whisper.Backends)
+	}
+	if cfg.Audio.TTS != nil {
+		addWorkload(cfg.Audio.TTS.Backends)
+	}
+	if cfg.Documents.PaddleOCR != nil {
+		addWorkload(cfg.Documents.PaddleOCR.Backends)
 	}
 	return refs
 }
@@ -194,7 +210,7 @@ func (hs *HealthStore) RefreshFromConfig() {
 		}
 	}
 
-	// Prune backend entries whose URL no longer appears in any model/pool.
+	// Prune backend entries whose URL no longer appears in any workload.
 	live := collectBackendRefs(cfg)
 	for url := range hs.backends {
 		if _, ok := live[url]; !ok {
@@ -358,7 +374,7 @@ func (hs *HealthStore) checkOne(ctx context.Context, client *http.Client, ref *b
 
 // updateBackendHealth records a probe result for one backend URL, feeds the
 // load balancer's health gate, and recomputes health for every model the
-// backend serves (a pooled model is online while ANY of its backends is).
+// backend serves (a model is online while ANY of its replicas is).
 func (hs *HealthStore) updateBackendHealth(ref *backendRef, online bool, errMsg string) {
 	cfg := hs.config.Get()
 	now := time.Now()

@@ -20,13 +20,49 @@ type ProcessorsConfig struct {
 	WebSearchKey string `yaml:"web_search_key"` // web search API key — Tavily or Brave (empty = web search disabled)
 }
 
+// AudioConfig groups the OpenAI-compatible audio workloads exposed by the
+// proxy. Each logical workload owns its backend replicas directly; adding a
+// backend automatically adds capacity without creating a separate pool.
+type AudioConfig struct {
+	Whisper *AudioModelConfig `yaml:"whisper,omitempty"`
+	TTS     *AudioModelConfig `yaml:"tts,omitempty"`
+}
+
+// AudioModelConfig describes one client-facing audio model and its replicas.
+// Whisper is served on the OpenAI transcription/translation routes; TTS is
+// served on the OpenAI speech route.
+type AudioModelConfig struct {
+	Name     string          `yaml:"name"`
+	Model    string          `yaml:"model,omitempty"`
+	Backends []BackendConfig `yaml:"backends"`
+	Timeout  int             `yaml:"timeout,omitempty"`
+}
+
+// DocumentsConfig contains document-processing workloads. PaddleOCR is the
+// only supported document adapter today, but the capability name remains
+// generic so clients do not depend on the implementation.
+type DocumentsConfig struct {
+	PaddleOCR *PaddleOCRConfig `yaml:"paddleocr,omitempty"`
+}
+
+// PaddleOCRConfig configures replicas of the official PaddleOCR layout
+// parsing service. Endpoint is the upstream request path; go-llm exposes the
+// same contract publicly at /layout-parsing.
+type PaddleOCRConfig struct {
+	Backends       []BackendConfig `yaml:"backends"`
+	Endpoint       string          `yaml:"endpoint,omitempty"`
+	HealthEndpoint string          `yaml:"health_endpoint,omitempty"`
+	Timeout        int             `yaml:"timeout,omitempty"`
+}
+
 type Config struct {
 	Listen                 string           `yaml:"listen"`
-	Pools                  []PoolConfig     `yaml:"pools"` // named backend pools shared by models
 	Models                 []ModelConfig    `yaml:"models"`
 	Keys                   []KeyConfig      `yaml:"keys"`
 	Services               ServicesConfig   `yaml:"services"`                 // external service proxies (Qdrant, etc.)
 	Processors             ProcessorsConfig `yaml:"processors"`               // global processor defaults
+	Audio                  AudioConfig      `yaml:"audio,omitempty"`          // transcription and text-to-speech workloads
+	Documents              DocumentsConfig  `yaml:"documents,omitempty"`      // native document-processing workloads
 	TrustedProxies         []string         `yaml:"trusted_proxies"`          // CIDR or IPs allowed to set X-Real-IP
 	ServeConfigGenerator   bool             `yaml:"serve_config_generator"`   // enable the config generator page at GET /
 	LogMetrics             bool             `yaml:"log_metrics"`              // enable per-request usage logging to SQLite
@@ -78,10 +114,7 @@ type SamplingDefaults struct {
 
 type ModelConfig struct {
 	Name           string            `yaml:"name"`
-	Backend        string            `yaml:"backend"`         // upstream URL e.g. http://192.168.100.10:8000/v1
-	Backends       []BackendConfig   `yaml:"backends"`        // inline backend pool (mutually exclusive with backend/pool)
-	Pool           string            `yaml:"pool"`            // named pool reference (mutually exclusive with backend/backends)
-	APIKey         string            `yaml:"api_key"`         // key to send to the backend (if required)
+	Backends       []BackendConfig   `yaml:"backends"`        // all replicas serving this logical model
 	Model          string            `yaml:"model"`           // model name to send to the backend (if different from Name)
 	Timeout        int               `yaml:"timeout"`         // request timeout in seconds (default 300)
 	Type           string            `yaml:"type"`            // backend type: "" or "openai" (default), "anthropic"
@@ -110,6 +143,12 @@ type ModelConfig struct {
 	GuardrailID      string `yaml:"guardrail_id,omitempty"`
 	GuardrailVersion string `yaml:"guardrail_version,omitempty"`
 	GuardrailTrace   string `yaml:"guardrail_trace,omitempty"`
+
+	// Backend and APIKey are request-scoped compatibility fields populated by
+	// finalizeConfig and the load balancer. They are never serialized: every
+	// configured model owns a backends list, even when it contains one server.
+	Backend string `yaml:"-"`
+	APIKey  string `yaml:"-"`
 }
 
 type KeyConfig struct {
@@ -162,6 +201,17 @@ func (cs *ConfigStore) Load() error {
 	data, err := os.ReadFile(cs.path)
 	if err != nil {
 		return fmt.Errorf("reading config: %w", err)
+	}
+
+	data, migrated, err := migrateLegacyBackendConfig(data)
+	if err != nil {
+		return fmt.Errorf("migrating legacy backend config: %w", err)
+	}
+	if migrated {
+		if err := persistMigratedConfig(cs.path, data); err != nil {
+			return fmt.Errorf("saving migrated backend config: %w", err)
+		}
+		slog.Info("migrated config to model-owned backend lists", "backup", cs.path+legacyConfigBackupSuffix)
 	}
 
 	var cfg Config
@@ -283,8 +333,9 @@ func applyBedrockDefaults(m *ModelConfig) {
 	}
 }
 
-// finalizeConfig applies per-model defaults, validates the whole config, and
-// bridges pooled models' first backend into the legacy single-backend fields.
+// finalizeConfig applies defaults, validates the whole config, and bridges
+// each model's first configured replica into request-scoped compatibility
+// fields used by protocol adapters before the load balancer selects a replica.
 // Shared by Load() and the admin save path so both enforce identical rules.
 func finalizeConfig(cfg *Config) error {
 	for i := range cfg.Models {
@@ -299,19 +350,37 @@ func finalizeConfig(cfg *Config) error {
 			applyBedrockDefaults(m)
 		}
 	}
+	for _, audio := range []*AudioModelConfig{cfg.Audio.Whisper, cfg.Audio.TTS} {
+		if audio == nil {
+			continue
+		}
+		if audio.Model == "" {
+			audio.Model = audio.Name
+		}
+		if audio.Timeout == 0 {
+			audio.Timeout = 300
+		}
+	}
+	if doc := cfg.Documents.PaddleOCR; doc != nil {
+		if doc.Endpoint == "" {
+			doc.Endpoint = "/layout-parsing"
+		}
+		if doc.HealthEndpoint == "" {
+			doc.HealthEndpoint = "/health"
+		}
+		if doc.Timeout == 0 {
+			doc.Timeout = 300
+		}
+	}
 
 	if err := validateConfig(cfg); err != nil {
 		return err
 	}
 
-	// Bridge: code that predates pools reads m.Backend / m.APIKey directly.
-	// Point those at the pool's first backend so a pooled model behaves like
-	// a single-backend model everywhere the load balancer isn't involved yet.
+	// Bridge code that predates replica lists. The load balancer overwrites
+	// these request-scoped fields with the actual selected backend.
 	for i := range cfg.Models {
 		m := &cfg.Models[i]
-		if m.Backend != "" {
-			continue
-		}
 		backends := cfg.EffectiveBackends(m)
 		if len(backends) > 0 {
 			m.Backend = backends[0].URL
@@ -347,51 +416,21 @@ func validateConfig(cfg *Config) error {
 		}
 	}
 
-	if err := validatePools(cfg); err != nil {
-		return err
-	}
-
 	names := make(map[string]bool)
-	for _, m := range cfg.Models {
+	for i := range cfg.Models {
+		m := &cfg.Models[i]
 		if m.Name == "" {
 			return fmt.Errorf("model entry missing name")
 		}
 
-		// Exactly one backend source: single backend URL, inline backends
-		// list, or a named pool reference.
-		sources := 0
-		if m.Backend != "" {
-			sources++
-		}
-		if len(m.Backends) > 0 {
-			sources++
-		}
-		if m.Pool != "" {
-			sources++
-		}
-		if sources == 0 {
-			return fmt.Errorf("model %q missing backend (set backend, backends, or pool)", m.Name)
-		}
-		if sources > 1 {
-			return fmt.Errorf("model %q must set only one of backend, backends, or pool", m.Name)
-		}
-		if m.Type == BackendBedrock && (m.Pool != "" || len(m.Backends) > 0) {
-			return fmt.Errorf("model %q (bedrock) does not support backends/pool — use a single backend", m.Name)
-		}
-
-		switch {
-		case m.Backend != "":
-			if err := validateBackendURL(fmt.Sprintf("model %q", m.Name), m.Backend); err != nil {
-				return err
+		if len(m.Backends) == 0 {
+			if m.Backend == "" {
+				return fmt.Errorf("model %q missing backend list", m.Name)
 			}
-		case len(m.Backends) > 0:
-			if err := validateBackendList(fmt.Sprintf("model %q", m.Name), m.Backends); err != nil {
-				return err
-			}
-		case m.Pool != "":
-			if FindPool(cfg, m.Pool) == nil {
-				return fmt.Errorf("model %q references unknown pool %q", m.Name, m.Pool)
-			}
+			m.Backends = []BackendConfig{{URL: m.Backend, APIKey: m.APIKey, Weight: 1}}
+		}
+		if err := validateBackendList(fmt.Sprintf("model %q", m.Name), m.Backends); err != nil {
+			return err
 		}
 
 		switch m.Type {
@@ -400,7 +439,14 @@ func validateConfig(cfg *Config) error {
 			if m.Region == "" {
 				return fmt.Errorf("model %q (bedrock) requires region", m.Name)
 			}
-			if m.APIKey == "" && (m.AWSAccessKey == "" || m.AWSSecretKey == "") {
+			hasAPIKey := false
+			for _, b := range m.Backends {
+				if b.APIKey != "" {
+					hasAPIKey = true
+					break
+				}
+			}
+			if !hasAPIKey && m.APIKey == "" && (m.AWSAccessKey == "" || m.AWSSecretKey == "") {
 				return fmt.Errorf("model %q (bedrock) requires either api_key (Bedrock API key) or aws_access_key + aws_secret_key (set in config or environment)", m.Name)
 			}
 			// Soft check: cross-region inference profile IDs are prefixed with
@@ -446,6 +492,49 @@ func validateConfig(cfg *Config) error {
 			return fmt.Errorf("duplicate model name %q", m.Name)
 		}
 		names[m.Name] = true
+	}
+
+	for label, audio := range map[string]*AudioModelConfig{
+		"audio.whisper": cfg.Audio.Whisper,
+		"audio.tts":     cfg.Audio.TTS,
+	} {
+		if audio == nil {
+			continue
+		}
+		if audio.Name == "" {
+			return fmt.Errorf("%s missing name", label)
+		}
+		if names[audio.Name] {
+			return fmt.Errorf("%s name %q conflicts with a chat model", label, audio.Name)
+		}
+		if len(audio.Backends) == 0 {
+			return fmt.Errorf("%s has no backends", label)
+		}
+		if err := validateBackendList(label, audio.Backends); err != nil {
+			return err
+		}
+		if audio.Timeout < 1 {
+			return fmt.Errorf("%s timeout must be positive", label)
+		}
+		names[audio.Name] = true
+	}
+
+	if doc := cfg.Documents.PaddleOCR; doc != nil {
+		if len(doc.Backends) == 0 {
+			return fmt.Errorf("documents.paddleocr has no backends")
+		}
+		if err := validateBackendList("documents.paddleocr", doc.Backends); err != nil {
+			return err
+		}
+		if doc.Endpoint == "" || doc.Endpoint[0] != '/' {
+			return fmt.Errorf("documents.paddleocr endpoint must be an absolute path")
+		}
+		if doc.HealthEndpoint == "" || doc.HealthEndpoint[0] != '/' {
+			return fmt.Errorf("documents.paddleocr health_endpoint must be an absolute path")
+		}
+		if doc.Timeout < 1 {
+			return fmt.Errorf("documents.paddleocr timeout must be positive")
+		}
 	}
 
 	// Validate global vision processor references a defined model.

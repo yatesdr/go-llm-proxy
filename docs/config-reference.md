@@ -14,40 +14,32 @@ go-llm-proxy is configured via a single YAML file (default: `config.yaml`). See 
 | `usage_dashboard` | `false` | Enable the usage dashboard at `/usage` |
 | `usage_dashboard_password` | — | Required when dashboard is enabled |
 | `admin_password` | — | Enables the admin UI at `/admin` on its own; when unset, `/admin` uses the dashboard password (and requires the dashboard to be enabled) |
-| `pools` | `[]` | Named backend pools for load balancing (see [Backend pools](#backend-pools)) |
+## Model backend lists
 
-## Backend pools
-
-A pool is a named group of interchangeable backends serving the same model.
-Point one or more models at a pool and the proxy load-balances requests
-across the members. Pools can be managed entirely from the admin UI
-(`/admin/pools`), which is the recommended workflow.
+Every logical model owns the servers that serve it. Add another entry to the
+model's `backends` list to add capacity; there is no separate pool object to
+create or link.
 
 ```yaml
-pools:
-  - name: glm-cluster
+models:
+  - name: glm-4.6
     backends:
       - url: http://192.168.1.10:8000/v1
         weight: 2          # relative capacity share (default 1)
-        max_inflight: 8    # spill to another member beyond this (0 = unlimited)
+        max_inflight: 8    # spill beyond this limit (0 = unlimited)
       - url: http://192.168.1.11:8000/v1
-        api_key: key       # optional per-backend key (default: model's api_key)
-        disabled: false    # true = drained (kept in config, excluded from routing)
-
-models:
-  - name: glm-4.6
-    pool: glm-cluster      # replaces backend:
-  - name: glm-4.6-fast     # multiple models can share one pool — they balance
-    pool: glm-cluster      # against the same live capacity
+        api_key: key       # optional credential for this server
+        disabled: false    # true = configured but excluded from routing
 ```
 
-A model must set exactly one backend source: `backend` (single URL),
-`backends` (an inline pool private to that model), or `pool` (a named pool).
-Bedrock models are always single-backend.
+A model must contain at least one `backends` entry. A one-server model still
+uses a one-item list. Older `backend`, model-level `api_key`, `pool`, and
+top-level `pools` YAML is expanded automatically on first startup; the original
+file is retained beside it with a `.pre-backend-lists` suffix.
 
 **Routing behavior.** Selection is sticky: the proxy hashes each request's
 stable conversation prefix (system prompt + first message) and maps it onto a
-pool member with weighted rendezvous hashing, so every turn of a session
+backend with weighted rendezvous hashing, so every turn of a session
 lands on the backend whose KV/prefix cache is already warm, and retries and
 follow-up turns hash identically with no client cooperation. New sessions
 spread across members proportionally to `weight`; requests with no
@@ -56,7 +48,7 @@ spills new sessions to the next-ranked member. Failed members are skipped: a
 circuit breaker opens after 3 consecutive backend failures (30s, then a
 half-open retry), the 30s health probes exclude probed-down members, and a
 transport error or 5xx on `/v1/chat/completions` fails over to another
-member once before reporting an error. Adding a backend to a pool only
+backend once before reporting an error. Adding a backend to a model only
 remaps ~1/N of active sessions.
 
 ## Model fields
@@ -64,8 +56,9 @@ remaps ~1/N of active sessions.
 ```yaml
 models:
   - name: MiniMax-M2.5
-    backend: http://192.168.100.10:8000/v1
-    api_key: your-backend-key
+    backends:
+      - url: http://192.168.100.10:8000/v1
+        api_key: your-backend-key
     model: internal-model-name    # optional
     timeout: 300                  # optional
     type: openai                  # optional
@@ -77,10 +70,12 @@ models:
 | Field | Required | Default | Description |
 |---|---|---|---|
 | `name` | yes | — | Model name clients use in requests |
-| `backend` | one of | — | Upstream base URL (see [Backend URL routing](#backend-url-routing)) |
-| `backends` | one of | — | Inline backend pool for this model (see [Backend pools](#backend-pools)) |
-| `pool` | one of | — | Named pool reference (see [Backend pools](#backend-pools)) |
-| `api_key` | no | — | Token sent upstream (`Bearer` for OpenAI, `x-api-key` for Anthropic) |
+| `backends` | yes | — | One or more upstream replicas (see [Model backend lists](#model-backend-lists)) |
+| `backends[].url` | yes | — | Upstream base URL (see [Backend URL routing](#backend-url-routing)) |
+| `backends[].api_key` | no | — | Token sent upstream (`Bearer` for OpenAI, `x-api-key` for Anthropic) |
+| `backends[].weight` | no | `1` | Relative capacity share |
+| `backends[].max_inflight` | no | `0` | Spill to another replica beyond this count; `0` is unlimited |
+| `backends[].disabled` | no | `false` | Keep configured but exclude from routing |
 | `model` | no | same as `name` | Model name sent to the backend (for rewriting) |
 | `timeout` | no | `300` | Request timeout in seconds |
 | `type` | no | `"openai"` | Backend protocol: `"openai"`, `"anthropic"`, or `"bedrock"` (see [Bedrock backends](#bedrock-backends)) |
@@ -96,7 +91,8 @@ The `defaults` block sets sampling parameters that are injected when the client 
 ```yaml
 models:
   - name: gemma4-31b
-    backend: http://192.168.13.30:8003/v1
+    backends:
+      - url: http://192.168.13.30:8003/v1
     defaults:
       temperature: 0.7
       top_p: 1.0
@@ -118,22 +114,56 @@ models:
 | `reasoning_effort` | string | Thinking budget: `low`, `medium`, or `high` |
 | `stop` | list | Strings that trigger end of generation |
 
-## Processors (pipeline)
+## Chat helpers
 
-The `processors` block configures the proxy's content processing pipeline. This enables transparent image description, PDF extraction, and web search for backends that don't support these features natively.
+The `processors` block retains chat-only helpers: transparent image description
+and web search for chat backends that do not support them natively.
 
 ```yaml
 processors:
   vision: Qwen3-VL-8B           # model name for vision processing (must be in models list)
-  ocr: PaddleOCR-VL-1.5         # fast model for PDF/document text extraction (falls back to vision)
   web_search_key: tvly-...      # Tavily API key for web search
 ```
 
 | Field | Default | Description |
 |---|---|---|
 | `vision` | — | Model name to use for describing images sent to text-only backends. Must be a vision-capable model defined in `models`. |
-| `ocr` | — | Model name for OCR/text extraction from PDF page images. Use a fast, lightweight vision model here. Falls back to `vision` if not set. |
 | `web_search_key` | — | Search API key. Supports [Tavily](https://tavily.com/) (`tvly-...`) and [Brave Search](https://brave.com/search/api/) (`BSA...`) — provider is auto-detected from the key prefix. When set, the proxy executes web searches on behalf of clients (Claude Code, Codex) transparently. |
+
+## Audio workloads
+
+```yaml
+audio:
+  whisper:
+    name: whisper-large-v3-turbo
+    model: /models/faster-whisper-large-v3-turbo
+    timeout: 300
+    backends:
+      - url: http://192.168.13.30:8007/v1
+  tts:
+    name: tts-1
+    backends:
+      - url: http://192.168.13.30:8008/v1
+```
+
+Whisper is exposed on `/v1/audio/transcriptions` and
+`/v1/audio/translations`; TTS is exposed on `/v1/audio/speech`. These retain
+the OpenAI request/response contracts. Either workload may be omitted.
+
+## Document workloads
+
+```yaml
+documents:
+  paddleocr:
+    endpoint: /layout-parsing
+    health_endpoint: /health
+    timeout: 300
+    backends:
+      - url: http://192.168.13.30:8002
+```
+
+The proxy exposes `POST /layout-parsing` and forwards PaddleOCR's official
+request and response unchanged. No artificial OpenAI model ID is required.
 
 ### Per-model processor overrides
 
@@ -142,17 +172,20 @@ Each model can override or disable global processors:
 ```yaml
 models:
   - name: MiniMax-M2.5
-    backend: http://192.168.13.32:8000/v1
+    backends:
+      - url: http://192.168.13.32:8000/v1
     # No vision → images routed to qwen-3.5 automatically
 
   - name: qwen-3.5
-    backend: http://192.168.13.30:8000/v1
+    backends:
+      - url: http://192.168.13.30:8000/v1
     supports_vision: true         # model handles images natively
     processors:
       vision: none                # disable vision processing for this model
 
   - name: glm-5.1
-    backend: https://api.z.ai/api/coding/paas/v4
+    backends:
+      - url: https://api.z.ai/api/coding/paas/v4
     processors:
       vision: MiniMax-M2.5        # use a specific model for this backend's images
 ```
@@ -169,11 +202,15 @@ models:
 
 **Vision processing**: When a client sends an image to a text-only model, the proxy sends the image to the configured vision model with a description prompt, then replaces the image with the text description. The backend model receives only text. Images are processed concurrently (up to 5 in parallel) and cached by content hash so follow-up turns are instant.
 
-**OCR processing**: Images in tool result messages (PDF page renders, Codex `view_image` output, screenshots) are routed to the `ocr` model with a text-extraction prompt instead of the general vision description prompt. This covers both proxy-side PDF pipelines and client-side image extraction. If no `ocr` model is configured, the `vision` model is used as a fallback.
+**Legacy OCR compatibility**: Existing `processors.ocr` settings remain readable
+for tool-result images and rasterized pages. New document deployments should
+use `documents.paddleocr`; if neither is available, the vision model is the
+fallback.
 
 **Web search**: When a client (Claude Code, Codex) includes a web search tool, the proxy converts it to a function tool that the backend can call. If the backend calls `web_search`, the proxy executes a Tavily search, injects the results, and re-sends to the backend. The client sees only the final response with search context incorporated.
 
-**PDF processing**: PDF content is extracted as text. If text extraction fails (scanned PDFs), the OCR/vision processor is used as a fallback.
+**PDF processing**: Native text is extracted first. Scanned PDFs go to the
+configured document layout service, with legacy OCR and vision as fallbacks.
 
 Native Anthropic backends skip the pipeline by default (images, search, and PDFs pass through to Anthropic's infrastructure). Set `force_pipeline: true` to override this.
 
@@ -229,23 +266,27 @@ The proxy appends the request path to the backend URL. How the path is construct
 models:
   # Standard OpenAI-compatible (vLLM, llama-server)
   - name: MiniMax-M2.5
-    backend: http://192.168.100.10:8000/v1
+    backends:
+      - url: http://192.168.100.10:8000/v1
 
   # Non-standard path (Zhipu GLM)
   - name: glm-5.1
-    backend: https://api.z.ai/api/coding/paas/v4
-    api_key: your-key
+    backends:
+      - url: https://api.z.ai/api/coding/paas/v4
+        api_key: your-key
 
   # Anthropic — base URL omits /v1
   - name: claude-sonnet-4-20250514
-    backend: https://api.anthropic.com
-    api_key: sk-ant-your-key
+    backends:
+      - url: https://api.anthropic.com
+        api_key: sk-ant-your-key
     type: anthropic
 
   # Third-party Anthropic-compatible
   - name: MiniMax-M2.7
-    backend: https://api.minimax.io/anthropic
-    api_key: your-key
+    backends:
+      - url: https://api.minimax.io/anthropic
+        api_key: your-key
     type: anthropic
 ```
 
@@ -266,7 +307,9 @@ Bedrock supports two auth styles. Pick whichever fits your deployment.
   type: bedrock
   region: us-east-1
   model: us.anthropic.claude-sonnet-4-20250514-v1:0
-  api_key: bdrk-...
+  backends:
+    - url: https://bedrock-runtime.us-east-1.amazonaws.com
+      api_key: bdrk-...
 ```
 
 **IAM static credentials (SigV4).** Set `aws_access_key` + `aws_secret_key`, or omit them and the proxy reads `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` from the environment. Each request is signed with SigV4.
@@ -276,6 +319,8 @@ Bedrock supports two auth styles. Pick whichever fits your deployment.
   type: bedrock
   region: us-east-1
   model: us.anthropic.claude-sonnet-4-20250514-v1:0
+  backends:
+    - url: https://bedrock-runtime.us-east-1.amazonaws.com
   aws_access_key: AKIA...
   aws_secret_key: ...
   # aws_session_token: ...   # optional, for STS temporary credentials
@@ -285,8 +330,8 @@ Bedrock supports two auth styles. Pick whichever fits your deployment.
 |---|---|---|---|
 | `region` | yes | — | AWS region, e.g. `us-east-1` |
 | `model` | yes | — | Bedrock model ID or inference profile (e.g. `us.anthropic.claude-sonnet-4-20250514-v1:0`) |
-| `backend` | no | `https://bedrock-runtime.<region>.amazonaws.com` | Override only for VPC endpoints |
-| `api_key` | one of | — | Bedrock API key (bearer auth, no SigV4) |
+| `backends` | yes | — | Bedrock runtime endpoint(s); use a VPC endpoint here when applicable |
+| `backends[].api_key` | one of | — | Bedrock API key (bearer auth, no SigV4) |
 | `aws_access_key` | one of | env `AWS_ACCESS_KEY_ID` | IAM access key ID for SigV4 |
 | `aws_secret_key` | one of | env `AWS_SECRET_ACCESS_KEY` | IAM secret for SigV4 |
 | `aws_session_token` | no | env `AWS_SESSION_TOKEN` | STS session token if using temporary credentials |
@@ -312,7 +357,8 @@ Controls how the proxy handles Responses API requests (`POST /v1/responses`, `PO
 
 ```yaml
 - name: MiniMax-M2.5
-  backend: http://192.168.100.10:8000/v1
+  backends:
+    - url: http://192.168.100.10:8000/v1
   responses_mode: translate   # vLLM: use translation for reliable Codex support
 ```
 
@@ -333,11 +379,13 @@ In `auto` mode, the proxy determines the behavior from the model's `type` field 
 ```yaml
 # Auto (default): OpenAI backend → translates automatically
 - name: MiniMax-M2.5
-  backend: http://192.168.100.10:8000/v1
+  backends:
+    - url: http://192.168.100.10:8000/v1
 
 # Auto: Anthropic backend → passthroughs natively
 - name: claude-sonnet-4
-  backend: https://api.anthropic.com
+  backends:
+    - url: https://api.anthropic.com
   type: anthropic
 ```
 
@@ -357,7 +405,8 @@ Set `context_window` explicitly for backends that don't report it:
 
 ```yaml
 - name: MiniMax-M2.7
-  backend: https://api.minimax.io/anthropic
+  backends:
+    - url: https://api.minimax.io/anthropic
   type: anthropic
   context_window: 1048576   # 1M tokens
 ```
@@ -422,29 +471,31 @@ Tested recipes for each coding agent with full pipeline support.
 models:
   # Opus slot — strong reasoning model
   - name: glm-5.1
-    backend: https://api.z.ai/api/coding/paas/v4
-    api_key: your-zhipu-key
+    backends:
+      - url: https://api.z.ai/api/coding/paas/v4
+        api_key: your-zhipu-key
 
   # Sonnet + Haiku slots — fast, capable all-rounder
   - name: MiniMax-M2.5
-    backend: http://192.168.13.32:8000/v1
+    backends:
+      - url: http://192.168.13.32:8000/v1
     responses_mode: translate
     timeout: 600
 
   # Vision processor — general image description
   - name: Qwen3-VL-8B
-    backend: http://192.168.13.30:8000/v1
-    supports_vision: true
-
-  # OCR processor — fast document text extraction
-  - name: PaddleOCR-VL-1.5
-    backend: http://192.168.13.30:8000/v1
+    backends:
+      - url: http://192.168.13.30:8000/v1
     supports_vision: true
 
 processors:
   vision: Qwen3-VL-8B
-  ocr: PaddleOCR-VL-1.5
   web_search_key: tvly-your-tavily-key
+
+documents:
+  paddleocr:
+    backends:
+      - url: http://192.168.13.30:8002
 ```
 
 Claude Code model slot mapping: Opus → `glm-5.1`, Sonnet → `MiniMax-M2.5`, Haiku → `MiniMax-M2.5`.
@@ -454,22 +505,24 @@ Claude Code model slot mapping: Opus → `glm-5.1`, Sonnet → `MiniMax-M2.5`, H
 ```yaml
 models:
   - name: MiniMax-M2.5
-    backend: http://192.168.13.32:8000/v1
+    backends:
+      - url: http://192.168.13.32:8000/v1
     responses_mode: translate    # required for vLLM backends
     timeout: 600
 
   - name: Qwen3-VL-8B
-    backend: http://192.168.13.30:8000/v1
-    supports_vision: true
-
-  - name: PaddleOCR-VL-1.5
-    backend: http://192.168.13.30:8000/v1
+    backends:
+      - url: http://192.168.13.30:8000/v1
     supports_vision: true
 
 processors:
   vision: Qwen3-VL-8B
-  ocr: PaddleOCR-VL-1.5
   web_search_key: tvly-your-tavily-key
+
+documents:
+  paddleocr:
+    backends:
+      - url: http://192.168.13.30:8002
 ```
 
 Codex uses a single model. Set `responses_mode: translate` for any vLLM backend — vLLM's native `/v1/responses` endpoint bypasses the proxy pipeline, breaking web search, image, and PDF processing.

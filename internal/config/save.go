@@ -456,10 +456,39 @@ func (cs *ConfigStore) UpdateModel(originalName string, m ModelConfig) error {
 				continue
 			}
 			modelsNode.Content[i] = modelConfigNode(m)
+			if m.Name != originalName {
+				renameModelReferences(root, originalName, m.Name)
+			}
 			return nil
 		}
 		return fmt.Errorf("model %q not found in config file", originalName)
 	})
+}
+
+func renameModelReferences(root *yaml.Node, oldName, newName string) {
+	renameKeyModelReferences(root, oldName, newName)
+	if processors := findMappingValue(root, "processors"); processors != nil {
+		for _, field := range []string{"vision", "audio", "ocr"} {
+			if value := findMappingValue(processors, field); value != nil && value.Value == oldName {
+				value.Value = newName
+			}
+		}
+	}
+	models := findMappingValue(root, "models")
+	if models == nil || models.Kind != yaml.SequenceNode {
+		return
+	}
+	for _, entry := range models.Content {
+		processors := findMappingValue(entry, "processors")
+		if processors == nil {
+			continue
+		}
+		for _, field := range []string{"vision", "ocr"} {
+			if value := findMappingValue(processors, field); value != nil && value.Value == oldName {
+				value.Value = newName
+			}
+		}
+	}
 }
 
 // DeleteModel removes the named model. If force is false and the model is
@@ -625,17 +654,11 @@ func modelConfigNode(m ModelConfig) *yaml.Node {
 		n.Content = append(n.Content, stringNode(key), value)
 	}
 	add("name", stringNode(m.Name))
-	switch {
-	case m.Pool != "":
-		add("pool", stringNode(m.Pool))
-	case len(m.Backends) > 0:
-		add("backends", backendsSeqNode(m.Backends))
-	default:
-		add("backend", stringNode(m.Backend))
+	backends := m.Backends
+	if len(backends) == 0 && m.Backend != "" {
+		backends = []BackendConfig{{URL: m.Backend, APIKey: m.APIKey, Weight: 1}}
 	}
-	if m.APIKey != "" {
-		add("api_key", stringNode(m.APIKey))
-	}
+	add("backends", backendsSeqNode(backends))
 	if m.Model != "" && m.Model != m.Name {
 		add("model", stringNode(m.Model))
 	}
@@ -722,114 +745,132 @@ func backendsSeqNode(backends []BackendConfig) *yaml.Node {
 	return n
 }
 
-func poolConfigNode(p PoolConfig) *yaml.Node {
+func audioModelNode(a AudioModelConfig) *yaml.Node {
 	n := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-	n.Content = append(n.Content,
-		stringNode("name"), stringNode(p.Name),
-		stringNode("backends"), backendsSeqNode(p.Backends),
-	)
+	setMappingValue(n, "name", stringNode(a.Name))
+	if a.Model != "" && a.Model != a.Name {
+		setMappingValue(n, "model", stringNode(a.Model))
+	}
+	if a.Timeout != 0 && a.Timeout != 300 {
+		setMappingValue(n, "timeout", intNode(a.Timeout))
+	}
+	setMappingValue(n, "backends", backendsSeqNode(a.Backends))
 	return n
 }
 
-// ─── Pools ───────────────────────────────────────────────────────────────────
-
-// AddPool appends a new backend pool to the config.
-func (cs *ConfigStore) AddPool(p PoolConfig) error {
-	if p.Name == "" {
-		return fmt.Errorf("pool name is required")
+// UpdateAudioModel replaces or disables the named audio workload. Supported
+// kinds are whisper and tts. A nil model removes that workload's YAML block.
+func (cs *ConfigStore) UpdateAudioModel(kind string, a *AudioModelConfig) error {
+	if kind != "whisper" && kind != "tts" {
+		return fmt.Errorf("unknown audio workload %q", kind)
 	}
-	if FindPool(cs.Get(), p.Name) != nil {
-		return fmt.Errorf("pool %q already exists", p.Name)
+	cur := cs.Get()
+	var existing *AudioModelConfig
+	if kind == "whisper" {
+		existing = cur.Audio.Whisper
+	} else {
+		existing = cur.Audio.TTS
+	}
+	if a == nil && existing != nil {
+		if refs := keyModelReferrers(cur, existing.Name); len(refs) > 0 {
+			return fmt.Errorf("audio model %q is referenced by API keys: %v", existing.Name, refs)
+		}
 	}
 	return cs.mutateYAML(func(root *yaml.Node) error {
-		poolsNode := findMappingValue(root, "pools")
-		if poolsNode == nil {
-			poolsNode = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
-			setMappingValue(root, "pools", poolsNode)
+		audio := findMappingValue(root, "audio")
+		if a == nil {
+			if audio != nil {
+				deleteMappingValue(audio, kind)
+				if len(audio.Content) == 0 {
+					deleteMappingValue(root, "audio")
+				}
+			}
+			return nil
 		}
-		if poolsNode.Kind != yaml.SequenceNode {
-			return fmt.Errorf("pools section is not a sequence")
+		if audio == nil {
+			audio = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+			setMappingValue(root, "audio", audio)
 		}
-		poolsNode.Content = append(poolsNode.Content, poolConfigNode(p))
+		if audio.Kind != yaml.MappingNode {
+			return fmt.Errorf("audio section is not a mapping")
+		}
+		setMappingValue(audio, kind, audioModelNode(*a))
+		if existing != nil && existing.Name != a.Name {
+			renameKeyModelReferences(root, existing.Name, a.Name)
+		}
 		return nil
 	})
 }
 
-// UpdatePool replaces the pool identified by originalName with p. Renames are
-// propagated to models that reference the pool so the config stays consistent.
-func (cs *ConfigStore) UpdatePool(originalName string, p PoolConfig) error {
-	if p.Name == "" {
-		return fmt.Errorf("pool name is required")
-	}
-	cur := cs.Get()
-	if FindPool(cur, originalName) == nil {
-		return fmt.Errorf("pool %q not found", originalName)
-	}
-	if p.Name != originalName && FindPool(cur, p.Name) != nil {
-		return fmt.Errorf("pool %q already exists", p.Name)
-	}
-	return cs.mutateYAML(func(root *yaml.Node) error {
-		poolsNode := findMappingValue(root, "pools")
-		if poolsNode == nil || poolsNode.Kind != yaml.SequenceNode {
-			return fmt.Errorf("pools section not found")
+func keyModelReferrers(cfg *Config, modelName string) []string {
+	var refs []string
+	for _, key := range cfg.Keys {
+		for _, allowed := range key.Models {
+			if allowed == modelName {
+				refs = append(refs, key.Name)
+				break
+			}
 		}
-		for i, entry := range poolsNode.Content {
-			if entry.Kind != yaml.MappingNode {
-				continue
-			}
-			nameVal := findMappingValue(entry, "name")
-			if nameVal == nil || nameVal.Value != originalName {
-				continue
-			}
-			poolsNode.Content[i] = poolConfigNode(p)
-			if p.Name != originalName {
-				renamePoolReferences(root, originalName, p.Name)
-			}
-			return nil
-		}
-		return fmt.Errorf("pool %q not found in config file", originalName)
-	})
+	}
+	return refs
 }
 
-// DeletePool removes the named pool. Refused while any model references it.
-func (cs *ConfigStore) DeletePool(name string) error {
-	if refs := PoolReferrers(cs.Get(), name); len(refs) > 0 {
-		return fmt.Errorf("pool %q is referenced by models: %v", name, refs)
-	}
-	return cs.mutateYAML(func(root *yaml.Node) error {
-		poolsNode := findMappingValue(root, "pools")
-		if poolsNode == nil || poolsNode.Kind != yaml.SequenceNode {
-			return fmt.Errorf("pools section not found")
-		}
-		for i, entry := range poolsNode.Content {
-			if entry.Kind != yaml.MappingNode {
-				continue
-			}
-			nameVal := findMappingValue(entry, "name")
-			if nameVal == nil || nameVal.Value != name {
-				continue
-			}
-			poolsNode.Content = append(poolsNode.Content[:i], poolsNode.Content[i+1:]...)
-			return nil
-		}
-		return fmt.Errorf("pool %q not found in config file", name)
-	})
-}
-
-// renamePoolReferences rewrites models' pool fields after a pool rename.
-func renamePoolReferences(root *yaml.Node, oldName, newName string) {
-	modelsNode := findMappingValue(root, "models")
-	if modelsNode == nil || modelsNode.Kind != yaml.SequenceNode {
+func renameKeyModelReferences(root *yaml.Node, oldName, newName string) {
+	keys := findMappingValue(root, "keys")
+	if keys == nil || keys.Kind != yaml.SequenceNode {
 		return
 	}
-	for _, entry := range modelsNode.Content {
-		if entry.Kind != yaml.MappingNode {
+	for _, entry := range keys.Content {
+		models := findMappingValue(entry, "models")
+		if models == nil || models.Kind != yaml.SequenceNode {
 			continue
 		}
-		if poolVal := findMappingValue(entry, "pool"); poolVal != nil && poolVal.Value == oldName {
-			poolVal.Value = newName
+		for _, name := range models.Content {
+			if name.Value == oldName {
+				name.Value = newName
+			}
 		}
 	}
+}
+
+func paddleOCRNode(p PaddleOCRConfig) *yaml.Node {
+	n := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	setMappingValue(n, "backends", backendsSeqNode(p.Backends))
+	if p.Endpoint != "" && p.Endpoint != "/layout-parsing" {
+		setMappingValue(n, "endpoint", stringNode(p.Endpoint))
+	}
+	if p.HealthEndpoint != "" && p.HealthEndpoint != "/health" {
+		setMappingValue(n, "health_endpoint", stringNode(p.HealthEndpoint))
+	}
+	if p.Timeout != 0 && p.Timeout != 300 {
+		setMappingValue(n, "timeout", intNode(p.Timeout))
+	}
+	return n
+}
+
+// UpdatePaddleOCR replaces or disables the PaddleOCR document workload.
+func (cs *ConfigStore) UpdatePaddleOCR(p *PaddleOCRConfig) error {
+	return cs.mutateYAML(func(root *yaml.Node) error {
+		docs := findMappingValue(root, "documents")
+		if p == nil {
+			if docs != nil {
+				deleteMappingValue(docs, "paddleocr")
+				if len(docs.Content) == 0 {
+					deleteMappingValue(root, "documents")
+				}
+			}
+			return nil
+		}
+		if docs == nil {
+			docs = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+			setMappingValue(root, "documents", docs)
+		}
+		if docs.Kind != yaml.MappingNode {
+			return fmt.Errorf("documents section is not a mapping")
+		}
+		setMappingValue(docs, "paddleocr", paddleOCRNode(*p))
+		return nil
+	})
 }
 
 func samplingDefaultsEmpty(d SamplingDefaults) bool {

@@ -50,6 +50,12 @@ func (h *AdminHandler) UsersData(w http.ResponseWriter, r *http.Request) {
 	for _, m := range cfg.Models {
 		allModels = append(allModels, m.Name)
 	}
+	if cfg.Audio.Whisper != nil {
+		allModels = append(allModels, cfg.Audio.Whisper.Name)
+	}
+	if cfg.Audio.TTS != nil {
+		allModels = append(allModels, cfg.Audio.TTS.Name)
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"users":      users,

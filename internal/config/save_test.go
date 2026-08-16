@@ -254,19 +254,7 @@ func TestUpdateModelSupportsRename(t *testing.T) {
 		Name:    "model-a-renamed",
 		Backend: "http://localhost:8000/v1",
 	})
-	if err == nil {
-		// rename breaks "model-a" reference in keys[0].models, should fail validation.
-		t.Log("expected validation error since model-a is referenced by 'first' key")
-	}
-	// Repeat without the dangling reference.
-	hash := KeyHash(cs.Get().Keys[0].Key)
-	if err := cs.UpdateKeyModels(hash, nil); err != nil {
-		t.Fatalf("clearing models: %v", err)
-	}
-	if err := cs.UpdateModel("model-a", ModelConfig{
-		Name:    "model-a-renamed",
-		Backend: "http://localhost:8000/v1",
-	}); err != nil {
+	if err != nil {
 		t.Fatalf("UpdateModel rename: %v", err)
 	}
 	if FindModel(cs.Get(), "model-a-renamed") == nil {
@@ -274,6 +262,9 @@ func TestUpdateModelSupportsRename(t *testing.T) {
 	}
 	if FindModel(cs.Get(), "model-a") != nil {
 		t.Error("original name should be gone")
+	}
+	if got := cs.Get().Keys[0].Models; len(got) != 1 || got[0] != "model-a-renamed" {
+		t.Fatalf("key model reference was not renamed: %v", got)
 	}
 }
 

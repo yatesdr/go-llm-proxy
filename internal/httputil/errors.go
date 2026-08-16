@@ -105,6 +105,16 @@ func RecoveryMiddleware(next http.Handler) http.Handler {
 // bound; these transport settings just stop the connection from hanging
 // forever if the upstream misbehaves at a specific phase.
 func NewHTTPClient() *http.Client {
+	return NewHTTPClientWithResponseHeaderTimeout(30 * time.Second)
+}
+
+// NewHTTPClientWithResponseHeaderTimeout keeps the standard transport safety
+// bounds while allowing non-streaming processors such as OCR and speech to
+// use their configured first-byte timeout instead of the chat-oriented 30s.
+func NewHTTPClientWithResponseHeaderTimeout(headerTimeout time.Duration) *http.Client {
+	if headerTimeout <= 0 {
+		headerTimeout = 30 * time.Second
+	}
 	return &http.Client{
 		Transport: &http.Transport{
 			DialContext: (&net.Dialer{
@@ -112,7 +122,7 @@ func NewHTTPClient() *http.Client {
 				KeepAlive: 30 * time.Second,
 			}).DialContext,
 			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second,
+			ResponseHeaderTimeout: headerTimeout,
 			ExpectContinueTimeout: 1 * time.Second,
 			IdleConnTimeout:       90 * time.Second,
 			MaxIdleConns:          100,

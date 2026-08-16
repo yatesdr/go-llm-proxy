@@ -9,40 +9,25 @@
 # For local-only testing: use ":8080".
 listen: ":8080"
 
-# ── Backend pools (load balancing) ─────────────────────────────────────────────
-# A pool groups interchangeable backends serving the same model. Models that
-# reference a pool are load-balanced across its members with sticky session
-# affinity: each conversation keeps hitting the backend that holds its prefix
-# cache, while distinct sessions spread across the pool. Manage pools in the
-# admin UI (/admin/pools) or here.
-# pools:
-#   - name: glm-cluster
-#     backends:
-#       - url: http://192.168.1.10:8000/v1
-#         weight: 2                  # relative share (faster GPU = higher weight)
-#         max_inflight: 8            # spill to another member beyond this (0 = unlimited)
-#       - url: http://192.168.1.11:8000/v1
-#         # api_key: per-backend-key # overrides the model's api_key for this member
-#         # disabled: true           # drained: kept in config, excluded from routing
-
 # ── Models ─────────────────────────────────────────────────────────────────────
-# Each model gets a name that clients use, and a backend URL where requests are sent.
-# The proxy auto-detects the protocol and translates as needed.
+# Each logical model owns the list of servers that serve it. Add another
+# backend here to add capacity; no separate pool object is needed.
 models:
   # Local vLLM / llama-server / Ollama backend (OpenAI-compatible)
   - name: my-model
-    backend: http://192.168.1.10:8000/v1
-    # api_key: backend-key           # if your backend requires auth
+    backends:
+      - url: http://192.168.1.10:8000/v1
+        # api_key: backend-key       # if this server requires auth
+        # weight: 2                  # relative capacity share (default: 1)
+        # max_inflight: 8            # spill after this many requests (0 = unlimited)
+      # - url: http://192.168.1.11:8000/v1
+      #   disabled: true             # keep configured but take temporarily offline
     # model: actual-model-name       # if the backend expects a different model name
     # timeout: 300                   # request timeout in seconds (default: 300)
     # context_window: 131072         # set manually if auto-detect fails (default: auto)
     # supports_vision: false         # set true if the model handles images natively
     # responses_mode: auto           # auto | native | translate (for Codex CLI)
     # messages_mode: auto            # auto | native | translate (for Claude Code)
-    # pool: glm-cluster              # load-balance via a named pool (replaces backend:)
-    # backends:                      # ...or an inline pool private to this model
-    #   - url: http://192.168.1.10:8000/v1
-    #   - url: http://192.168.1.11:8000/v1
     # defaults:                      # injected when the client doesn't send its own
     #   temperature: 0.7
     #   max_new_tokens: 4096
@@ -52,19 +37,22 @@ models:
 
   # Cloud Anthropic backend (native passthrough — no translation needed)
   # - name: claude-sonnet-4
-  #   backend: https://api.anthropic.com
-  #   api_key: sk-ant-your-key
+  #   backends:
+  #     - url: https://api.anthropic.com
+  #       api_key: sk-ant-your-key
   #   type: anthropic
 
   # Cloud OpenAI backend
   # - name: gpt-4.1
-  #   backend: https://api.openai.com/v1
-  #   api_key: sk-your-openai-key
+  #   backends:
+  #     - url: https://api.openai.com/v1
+  #       api_key: sk-your-openai-key
 
   # Third-party API with model name rewriting
   # - name: glm-4.5
-  #   backend: https://api.z.ai/api/coding/paas/v4
-  #   api_key: your-zhipu-key
+  #   backends:
+  #     - url: https://api.z.ai/api/coding/paas/v4
+  #       api_key: your-zhipu-key
 
   # AWS Bedrock — Converse API with auto-translation from /v1/messages,
   # /v1/chat/completions. Pick ONE of the auth options:
@@ -74,7 +62,9 @@ models:
   #   type: bedrock
   #   region: us-east-1
   #   model: us.anthropic.claude-sonnet-4-20250514-v1:0
-  #   api_key: bdrk-your-bedrock-api-key
+  #   backends:
+  #     - url: https://bedrock-runtime.us-east-1.amazonaws.com
+  #       api_key: bdrk-your-bedrock-api-key
   #
   # (b) Static IAM credentials (SigV4 signing). Falls back to
   #     AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY env vars if omitted:
@@ -82,19 +72,41 @@ models:
   #   type: bedrock
   #   region: us-east-1
   #   model: us.anthropic.claude-sonnet-4-20250514-v1:0
+  #   backends:
+  #     - url: https://bedrock-runtime.us-east-1.amazonaws.com
   #   aws_access_key: AKIA...
   #   aws_secret_key: ...
   #   # aws_session_token: ...        # optional, for temporary STS credentials
   #
-  # The proxy auto-derives backend URL from region; override only for VPC
-  # endpoints: backend: https://bedrock-runtime.us-east-1.amazonaws.com
-
-# ── Processing Pipeline ────────────────────────────────────────────────────────
-# Optional. Handles images, PDFs, and web search for backends that don't support them.
+# ── Chat helpers ───────────────────────────────────────────────────────────────
+# Optional. Handles images and web search for chat models that need help.
 # processors:
 #   vision: my-vision-model          # model name from above (must support vision)
-#   ocr: my-fast-ocr-model           # optional: fast model for PDF page text extraction (falls back to vision)
 #   web_search_key: tvly-...         # Tavily API key — enables proxy-side web search
+
+# ── Audio ─────────────────────────────────────────────────────────────────────
+# OpenAI-compatible audio routes. Configure either service independently.
+# audio:
+#   whisper:
+#     name: whisper-large-v3-turbo
+#     model: /models/faster-whisper-large-v3-turbo
+#     timeout: 300
+#     backends:
+#       - url: http://192.168.13.30:8007/v1
+#   tts:
+#     name: tts-1
+#     backends:
+#       - url: http://192.168.13.30:8008/v1
+
+# ── Documents ─────────────────────────────────────────────────────────────────
+# PaddleOCR uses its official API contract; no model ID is invented.
+# documents:
+#   paddleocr:
+#     endpoint: /layout-parsing
+#     health_endpoint: /health
+#     timeout: 300
+#     backends:
+#       - url: http://192.168.13.30:8002
 
 # ── API Keys ───────────────────────────────────────────────────────────────────
 # Clients authenticate with these keys via Authorization: Bearer or x-api-key.

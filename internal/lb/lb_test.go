@@ -45,7 +45,7 @@ func TestAffinityKey_AnthropicAndResponsesShapes(t *testing.T) {
 
 func TestResolveModel_SingleBackendPassthrough(t *testing.T) {
 	cfg := &config.Config{Models: []config.ModelConfig{
-		{Name: "m", Backend: "http://one:8000/v1", APIKey: "k"},
+		{Name: "m", Backends: []config.BackendConfig{{URL: "http://one:8000/v1", APIKey: "k"}}, Backend: "http://one:8000/v1", APIKey: "k"},
 	}}
 	m := &cfg.Models[0]
 	view, release := ResolveModel(cfg, m, nil)
@@ -65,11 +65,10 @@ func TestResolveModel_SingleBackendPassthrough(t *testing.T) {
 
 func TestResolveModel_SkipsDrainedBackend(t *testing.T) {
 	cfg := &config.Config{
-		Pools: []config.PoolConfig{{Name: "p", Backends: []config.BackendConfig{
+		Models: []config.ModelConfig{{Name: "m", Backends: []config.BackendConfig{
 			{URL: "http://drained:8000", Disabled: true},
 			{URL: "http://live:8000", APIKey: "bk"},
 		}}},
-		Models: []config.ModelConfig{{Name: "m", Pool: "p"}},
 	}
 	view, release := ResolveModel(cfg, &cfg.Models[0], nil)
 	defer release()

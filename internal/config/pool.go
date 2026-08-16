@@ -5,8 +5,8 @@ import (
 	"net/url"
 )
 
-// BackendConfig describes one upstream server inside a pool (or a model's
-// inline backend list). Weight and MaxInflight feed the load balancer;
+// BackendConfig describes one upstream server in a logical model or
+// processor's replica list. Weight and MaxInflight feed the load balancer;
 // Disabled drains a backend without deleting it.
 type BackendConfig struct {
 	URL         string `yaml:"url"`
@@ -16,63 +16,23 @@ type BackendConfig struct {
 	Disabled    bool   `yaml:"disabled,omitempty"`     // drained: excluded from selection
 }
 
-// PoolConfig is a named group of backends that one or more models share.
-// Health, in-flight counts, and breaker state are tracked per backend URL,
-// so models referencing the same pool balance against the same real capacity.
-type PoolConfig struct {
-	Name     string          `yaml:"name"`
-	Backends []BackendConfig `yaml:"backends"`
-}
-
-// FindPool returns the PoolConfig with the given name, or nil if not found.
-func FindPool(cfg *Config, name string) *PoolConfig {
-	for i := range cfg.Pools {
-		if cfg.Pools[i].Name == name {
-			return &cfg.Pools[i]
-		}
-	}
-	return nil
-}
-
-// EffectiveBackends returns the list of backends serving m: the referenced
-// pool's backends, the model's inline list, or the single backend field as a
-// one-element list. Each returned entry has APIKey resolved (backend override
-// falling back to the model's api_key), so callers never consult m.APIKey.
+// EffectiveBackends returns the replicas serving m. A copy is returned so
+// default weights can be normalized without mutating the live config.
 func (cfg *Config) EffectiveBackends(m *ModelConfig) []BackendConfig {
-	var src []BackendConfig
-	switch {
-	case m.Pool != "":
-		if p := FindPool(cfg, m.Pool); p != nil {
-			src = p.Backends
-		}
-	case len(m.Backends) > 0:
-		src = m.Backends
-	default:
+	// Runtime-only compatibility for tests and embedders constructing Config
+	// values directly. YAML cannot populate these fields; file configs always
+	// pass through the migration and use Backends.
+	if len(m.Backends) == 0 && m.Backend != "" {
 		return []BackendConfig{{URL: m.Backend, APIKey: m.APIKey, Weight: 1}}
 	}
-
-	out := make([]BackendConfig, len(src))
-	for i, b := range src {
-		if b.APIKey == "" {
-			b.APIKey = m.APIKey
-		}
+	out := make([]BackendConfig, len(m.Backends))
+	for i, b := range m.Backends {
 		if b.Weight == 0 {
 			b.Weight = 1
 		}
 		out[i] = b
 	}
 	return out
-}
-
-// PoolReferrers returns the names of models that reference the named pool.
-func PoolReferrers(cfg *Config, poolName string) []string {
-	var refs []string
-	for _, m := range cfg.Models {
-		if m.Pool == poolName {
-			refs = append(refs, m.Name)
-		}
-	}
-	return refs
 }
 
 // validateBackendURL enforces the same URL rules as the single-backend field:
@@ -90,30 +50,6 @@ func validateBackendURL(label, backendURL string) error {
 	}
 	if u.User != nil {
 		return fmt.Errorf("%s backend must not contain credentials in URL", label)
-	}
-	return nil
-}
-
-// validatePools checks pool definitions: unique non-empty names, at least one
-// backend per pool, valid backend URLs, no duplicate URLs within a pool, and
-// sane weight / max_inflight values.
-func validatePools(cfg *Config) error {
-	poolNames := make(map[string]bool, len(cfg.Pools))
-	for _, p := range cfg.Pools {
-		if p.Name == "" {
-			return fmt.Errorf("pool entry missing name")
-		}
-		if poolNames[p.Name] {
-			return fmt.Errorf("duplicate pool name %q", p.Name)
-		}
-		poolNames[p.Name] = true
-
-		if len(p.Backends) == 0 {
-			return fmt.Errorf("pool %q has no backends", p.Name)
-		}
-		if err := validateBackendList("pool "+p.Name, p.Backends); err != nil {
-			return err
-		}
 	}
 	return nil
 }

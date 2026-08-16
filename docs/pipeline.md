@@ -7,15 +7,23 @@ go-llm-proxy includes a content processing pipeline that transparently handles i
 ```yaml
 processors:
   vision: Qwen3-VL-8B           # vision-capable model for image description
-  ocr: paddleOCR                # dedicated OCR model for text extraction (optional)
   web_search_key: tvly-...      # Tavily API key for web search (optional)
+
+documents:
+  paddleocr:
+    backends:
+      - url: http://192.168.13.30:8002
 ```
 
-The `vision` model is required for image processing. The `ocr` model is optional — if not configured, the vision model handles OCR duties as a fallback. See [config-reference.md](config-reference.md) for per-model overrides and additional options.
+The `vision` model handles image descriptions. The document service receives
+the original PDF via PaddleOCR's official `/layout-parsing` contract. The old
+`processors.ocr` chat-model path is still read for configuration compatibility,
+but it is no longer presented in the admin UI.
 
 ### System dependencies
 
-For optimal scanned-PDF processing, the host (or Docker container) should have one of:
+The native document service does not require a local PDF rasterizer. The
+following are needed only by the legacy OCR-model fallback:
 
 - **`poppler-utils`** (preferred) — provides `pdftoppm`, fast and purpose-built for PDF rendering
 - **`ghostscript`** — provides `gs`, widely available alternative
@@ -28,7 +36,8 @@ sudo apt install poppler-utils
 apk add --no-cache poppler-utils
 ```
 
-The proxy uses these to rasterize scanned PDFs into PNG pages before sending them to the dedicated OCR model (e.g., paddleOCR-VL). Without a rasterizer, scanned PDFs fall through to the vision model with the raw PDF bytes — still functional but slower and dependent on the vision model accepting PDF input directly. The proxy logs `"PDF rasterization unavailable or failed, skipping OCR stage"` when no rasterizer is found.
+The compatibility path rasterizes pages before sending them to a legacy OCR
+chat model. Without a rasterizer, it falls through to the vision model.
 
 ## Image processing
 
@@ -51,7 +60,7 @@ Injected content is wrapped in XML-like tags so target models clearly distinguis
 
 - `<image_description>...</image_description>` — user-role vision description
 - `<page_text>...</page_text>` — tool-role OCR/vision extraction
-- `<pdf_content filename="..." source="text|ocr|vision">...</pdf_content>` — PDF extraction (see below)
+- `<pdf_content filename="..." source="text|layout|ocr|vision">...</pdf_content>` — PDF extraction (see below)
 
 ### Processing details
 
@@ -68,15 +77,16 @@ PDF handling depends on the client and the PDF content type.
 
 ### Claude Code (Anthropic Messages API)
 
-Claude Code sends PDF content as base64 `document` blocks. The proxy handles them in a three-stage cascade:
+Claude Code sends PDF content as base64 `document` blocks. The proxy handles them in this cascade:
 
 | Stage | Condition | Action |
 |---|---|---|
 | **Stage 1: Text extraction** | Always attempted | Pure Go text extraction via `ledongthuc/pdf`. Fast, accurate for native PDFs. If ≥ 50 characters of plain text are recovered, subsequent stages are skipped. |
-| **Stage 2: OCR model** | Stage 1 returned too little text (scanned/image PDF) | Send PDF to the configured `ocr` model. On HTTP error or empty response, fall through to Stage 3. |
-| **Stage 3: Vision fallback** | Stage 2 failed or the only processor configured is `vision` | Send PDF to the configured `vision` model with the verbose extraction prompt. Covers scanned PDFs that dedicated OCR backends reject (e.g., paddleOCR does not accept `data:application/pdf` input). |
+| **Stage 2: Document layout** | Stage 1 returned too little text and `documents.paddleocr` is configured | Send the original PDF to `/layout-parsing` and use the returned markdown. |
+| **Stage 3: Legacy OCR** | Stage 2 is unavailable or failed and an old `processors.ocr` model remains configured | Rasterize pages and send them to that chat-compatible OCR model. |
+| **Stage 4: Vision fallback** | Earlier stages failed | Send the PDF to the configured vision model with the extraction prompt. |
 
-The injected text block is tagged `<pdf_content filename="..." source="text|ocr|vision">...</pdf_content>` — the `source` attribute identifies which stage produced the content, so downstream logs and debugging sessions can see the pipeline decision without replaying it.
+The injected text block is tagged `<pdf_content filename="..." source="text|layout|ocr|vision">...</pdf_content>` — the `source` attribute identifies which stage produced the content.
 
 Successful extractions are cached permanently (keyed on the PDF's content hash). Total failures are cached for 5 minutes so a broken upstream doesn't permanently block a document but a misconfigured client can't trigger repeated cascade attempts every turn.
 
@@ -104,8 +114,8 @@ These clients handle PDFs entirely client-side. The proxy's PDF pipeline runs fo
 | PDF type | Claude Code / Chat Completions | Codex CLI |
 |---|---|---|
 | **Native text PDF** | Stage 1: proxy extracts text | Client: `pdftotext` extracts text |
-| **Scanned/image PDF** | Stage 2 OCR → Stage 3 vision cascade | Client extracts images → proxy OCR → vision cascade per page |
-| **Mixed PDF** (text + scanned pages) | Stage 1 for text pages, Stages 2/3 for scanned pages | Client handles both paths |
+| **Scanned/image PDF** | Stage 2 layout → legacy OCR → vision fallback | Client extracts images → proxy vision/legacy OCR per page |
+| **Mixed PDF** (text + scanned pages) | Native text first, then layout processing when text is insufficient | Client handles both paths |
 
 ## Web search
 

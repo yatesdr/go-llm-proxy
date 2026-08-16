@@ -5,9 +5,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +19,8 @@ import (
 	"time"
 
 	"go-llm-proxy/internal/config"
+	"go-llm-proxy/internal/httputil"
+	"go-llm-proxy/internal/lb"
 
 	"github.com/ledongthuc/pdf"
 )
@@ -161,7 +165,19 @@ func (p *Pipeline) processPDFs(ctx context.Context, chatReq map[string]any,
 				continue
 			}
 
-			// Stage 2: OCR via rasterization (fast path).
+			// Stage 2: configured layout-aware document processor. It receives
+			// the original PDF through its native contract and returns markdown;
+			// no Paddle-specific table interpretation is embedded here.
+			if document := p.config.Get().Documents.PaddleOCR; document != nil {
+				if result, ok := p.tryPDFViaDocumentProcessor(ctx, document, pdfBytes, filename); ok {
+					pdfCache.Store(pdfCacheKey, result)
+					newContent = append(newContent, map[string]any{"type": "text", "text": result})
+					msgModified = true
+					continue
+				}
+			}
+
+			// Stage 3: legacy OCR via rasterization (compatibility path).
 			// Rasterize the PDF to PNG pages and send each page to the
 			// dedicated OCR model. This is the correct path for OCR
 			// backends like paddleOCR-VL that accept images but not raw
@@ -173,17 +189,17 @@ func (p *Pipeline) processPDFs(ctx context.Context, chatReq map[string]any,
 			ocrIsDedicated := ocrModel != nil && (visionModel == nil || ocrModel.Name != visionModel.Name)
 			if ocrIsDedicated {
 				if result, ok := p.tryPDFSourceViaOCR(ctx, ocrModel, pdfBytes, filename); ok {
-				pdfCache.Store(pdfCacheKey, result)
-				newContent = append(newContent, map[string]any{
-					"type": "text",
-					"text": result,
-				})
-				msgModified = true
-				continue
+					pdfCache.Store(pdfCacheKey, result)
+					newContent = append(newContent, map[string]any{
+						"type": "text",
+						"text": result,
+					})
+					msgModified = true
+					continue
 				}
 			}
 
-			// Stage 3: Vision fallback with raw PDF.
+			// Stage 4: Vision fallback with raw PDF.
 			// Vision models like Qwen3-VL accept data:application/pdf
 			// URLs directly. This covers: no rasterizer installed, no OCR
 			// model configured, or OCR returned nothing useful.
@@ -414,6 +430,117 @@ func buildPDFResult(filename, source, content string) string {
 			filename, source, content)
 	}
 	return fmt.Sprintf("<pdf_content source=%q>\n%s\n</pdf_content>", source, content)
+}
+
+type layoutParsingResponse struct {
+	ErrorCode int    `json:"errorCode"`
+	ErrorMsg  string `json:"errorMsg"`
+	Result    struct {
+		LayoutParsingResults []struct {
+			Markdown struct {
+				Text string `json:"text"`
+			} `json:"markdown"`
+		} `json:"layoutParsingResults"`
+	} `json:"result"`
+}
+
+// tryPDFViaDocumentProcessor calls the configured layout service with the
+// original PDF and consumes only its documented markdown result. The chat
+// model remains responsible for interpreting that markdown for the user's
+// task; this layer does not assume a Paddle table schema or infer cell values.
+func (p *Pipeline) tryPDFViaDocumentProcessor(ctx context.Context, doc *config.PaddleOCRConfig,
+	pdfBytes []byte, filename string) (string, bool) {
+	body, err := json.Marshal(map[string]any{
+		"file":     base64.StdEncoding.EncodeToString(pdfBytes),
+		"fileType": 0, // PaddleOCR contract: 0 = PDF, 1 = image
+	})
+	if err != nil {
+		return "", false
+	}
+	selected, release := lb.ResolveBackends(doc.Backends, 0)
+	if selected == nil {
+		return "", false
+	}
+	defer release()
+
+	timeout := doc.Timeout
+	if timeout <= 0 {
+		timeout = 300
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+	defer cancel()
+	client := httputil.NewHTTPClientWithResponseHeaderTimeout(time.Duration(timeout) * time.Second)
+
+	request := func(backend *config.BackendConfig) (*http.Response, error) {
+		endpoint := doc.Endpoint
+		if endpoint == "" {
+			endpoint = "/layout-parsing"
+		}
+		req, reqErr := http.NewRequestWithContext(requestCtx, http.MethodPost,
+			strings.TrimRight(backend.URL, "/")+"/"+strings.TrimLeft(endpoint, "/"), bytes.NewReader(body))
+		if reqErr != nil {
+			return nil, reqErr
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if backend.APIKey != "" {
+			req.Header.Set("Authorization", "Bearer "+backend.APIKey)
+		}
+		return client.Do(req)
+	}
+
+	resp, err := request(selected)
+	if (err != nil && requestCtx.Err() == nil) || (err == nil && resp.StatusCode >= 500) {
+		lb.RecordOutcome(selected.URL, false)
+		if alternate, altRelease := lb.ResolveAlternateBackend(doc.Backends, selected.URL); alternate != nil {
+			defer altRelease()
+			if resp != nil {
+				resp.Body.Close()
+			}
+			selected = alternate
+			resp, err = request(selected)
+		}
+	}
+	if err != nil {
+		lb.RecordOutcome(selected.URL, false)
+		slog.Warn("PDF document processor request failed", "filename", filename, "error", err)
+		return "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		lb.RecordOutcome(selected.URL, resp.StatusCode < 500)
+		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		slog.Warn("PDF document processor returned error", "filename", filename, "status", resp.StatusCode, "body", string(detail))
+		return "", false
+	}
+	lb.RecordOutcome(selected.URL, true)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 24<<20))
+	if err != nil {
+		return "", false
+	}
+	var parsed layoutParsingResponse
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		slog.Warn("PDF document processor response was invalid", "filename", filename, "error", err)
+		return "", false
+	}
+	if parsed.ErrorCode != 0 {
+		slog.Warn("PDF document processor reported failure", "filename", filename, "code", parsed.ErrorCode, "error", parsed.ErrorMsg)
+		return "", false
+	}
+	texts := make([]string, 0, len(parsed.Result.LayoutParsingResults))
+	for _, result := range parsed.Result.LayoutParsingResults {
+		if text := strings.TrimSpace(result.Markdown.Text); text != "" {
+			texts = append(texts, text)
+		}
+	}
+	if len(texts) == 0 {
+		return "", false
+	}
+	combined := strings.Join(texts, "\n\n")
+	if len(combined) > maxPDFTextLength {
+		combined = combined[:maxPDFTextLength] + "\n\n[Document text truncated at 100K characters]"
+	}
+	slog.Info("PDF document processing succeeded", "filename", filename, "pages", len(texts), "text_len", len(combined))
+	return buildPDFResult(filename, "layout", combined), true
 }
 
 // tryPDFSourceViaOCR rasterizes a PDF to PNG pages and runs each page

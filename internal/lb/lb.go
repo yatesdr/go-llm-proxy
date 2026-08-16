@@ -1,7 +1,7 @@
-// Package lb selects which backend serves each request for models backed by
-// a pool. Selection is sticky: requests carrying the same conversation prefix
+// Package lb selects which backend serves each request for models with one or
+// more replicas. Selection is sticky: requests carrying the same conversation prefix
 // hash to the same backend so upstream KV/prefix caches stay hot, while new
-// sessions spread across the pool.
+// sessions spread across the configured replicas.
 package lb
 
 import (
@@ -22,7 +22,7 @@ const (
 )
 
 // backendState tracks live per-backend counters, keyed by backend URL and
-// shared across every model/pool that references the URL.
+// shared across every workload that references the URL.
 type backendState struct {
 	inflight    int64
 	consecFails int
@@ -141,20 +141,9 @@ func Status(url string) BackendStatus {
 // Single-backend models pass through unchanged apart from accounting.
 func ResolveModel(cfg *config.Config, m *config.ModelConfig, body []byte) (*config.ModelConfig, func()) {
 	backends := cfg.EffectiveBackends(m)
-	chosen := pick(backends, AffinityKey(body))
-
-	mu.Lock()
-	st := state(chosen.URL)
-	st.inflight++
-	mu.Unlock()
-
-	var once sync.Once
-	release := func() {
-		once.Do(func() {
-			mu.Lock()
-			st.inflight--
-			mu.Unlock()
-		})
+	chosen, release := ResolveBackends(backends, AffinityKey(body))
+	if chosen == nil {
+		return nil, func() {}
 	}
 
 	if chosen.URL == m.Backend && chosen.APIKey == m.APIKey {
@@ -171,22 +160,28 @@ func ResolveModel(cfg *config.Config, m *config.ModelConfig, body []byte) (*conf
 // model has no other enabled backend. The failed backend's cache is lost
 // either way, so the alternate is chosen by load, not affinity.
 func ResolveAlternate(cfg *config.Config, m *config.ModelConfig, excludeURL string) (*config.ModelConfig, func()) {
-	var remaining []config.BackendConfig
-	for _, b := range cfg.EffectiveBackends(m) {
-		if b.URL != excludeURL && !b.Disabled {
-			remaining = append(remaining, b)
-		}
-	}
-	if len(remaining) == 0 {
+	chosen, release := ResolveAlternateBackend(cfg.EffectiveBackends(m), excludeURL)
+	if chosen == nil {
 		return nil, nil
 	}
-	chosen := pick(remaining, 0)
 
+	view := *m
+	view.Backend = chosen.URL
+	view.APIKey = chosen.APIKey
+	return &view, release
+}
+
+// ResolveBackends selects one replica from any workload-owned backend list.
+// It is used by audio and document adapters as well as chat models.
+func ResolveBackends(backends []config.BackendConfig, affinity uint64) (*config.BackendConfig, func()) {
+	if len(backends) == 0 {
+		return nil, nil
+	}
+	chosen := pick(backends, affinity)
 	mu.Lock()
 	st := state(chosen.URL)
 	st.inflight++
 	mu.Unlock()
-
 	var once sync.Once
 	release := func() {
 		once.Do(func() {
@@ -195,11 +190,22 @@ func ResolveAlternate(cfg *config.Config, m *config.ModelConfig, excludeURL stri
 			mu.Unlock()
 		})
 	}
+	return &chosen, release
+}
 
-	view := *m
-	view.Backend = chosen.URL
-	view.APIKey = chosen.APIKey
-	return &view, release
+// ResolveAlternateBackend selects one enabled replica other than excludeURL
+// for a single failover attempt.
+func ResolveAlternateBackend(backends []config.BackendConfig, excludeURL string) (*config.BackendConfig, func()) {
+	remaining := make([]config.BackendConfig, 0, len(backends))
+	for _, b := range backends {
+		if b.URL != excludeURL && !b.Disabled {
+			remaining = append(remaining, b)
+		}
+	}
+	if len(remaining) == 0 {
+		return nil, nil
+	}
+	return ResolveBackends(remaining, 0)
 }
 
 // pick chooses one backend from the list. Disabled (drained) backends are

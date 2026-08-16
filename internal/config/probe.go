@@ -12,7 +12,7 @@ import (
 )
 
 // ProbeResult reports what a one-shot backend probe discovered. Used by the
-// admin UI to verify a backend as it is added to a pool.
+// admin UI to verify a backend as it is added to a workload.
 type ProbeResult struct {
 	Reachable     bool   `json:"reachable"`
 	Status        int    `json:"status,omitempty"`         // HTTP status of the reachability check
