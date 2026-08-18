@@ -416,7 +416,7 @@ func (p *ProxyHandler) streamRawResponse(w http.ResponseWriter, resp *http.Respo
 			TotalTokens:   tokens.TotalTokens,
 			DurationMS:    time.Since(rc.startTime).Milliseconds(),
 		}
-		go p.usage.Log(rec)
+		p.usage.Log(rec)
 	}
 }
 

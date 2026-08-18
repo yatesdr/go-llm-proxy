@@ -70,16 +70,14 @@ func detectOne(client *http.Client, cs *ConfigStore, name, backend, modelID, api
 		return
 	}
 
-	// Update the config under the write lock so a concurrent reload
-	// doesn't discard our result.
-	cs.mu.Lock()
-	for i := range cs.config.Models {
-		if cs.config.Models[i].Name == name {
-			cs.config.Models[i].ContextWindow = ctxWindow
-			break
-		}
+	// ConfigStore snapshots remain immutable after Get returns. Publish a new
+	// models slice instead of mutating the live snapshot in place, and discard
+	// the result if the model changed while the backend request was in flight.
+	if !cs.setDetectedContextWindow(name, backend, modelID, ctxWindow) {
+		slog.Debug("discarding stale context window detection result",
+			"model", name, "backend", backend, "context_window", ctxWindow)
+		return
 	}
-	cs.mu.Unlock()
 
 	switch {
 	case configured > 0 && configured != ctxWindow:
@@ -92,6 +90,32 @@ func detectOne(client *http.Client, cs *ConfigStore, name, backend, modelID, api
 		slog.Info("detected context window",
 			"model", name, "context_window", ctxWindow)
 	}
+}
+
+func (cs *ConfigStore) setDetectedContextWindow(name, backend, modelID string, ctxWindow int) bool {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if cs.config == nil {
+		return false
+	}
+
+	modelIndex := -1
+	for i := range cs.config.Models {
+		m := &cs.config.Models[i]
+		if m.Name == name && m.Backend == backend && m.Model == modelID {
+			modelIndex = i
+			break
+		}
+	}
+	if modelIndex < 0 {
+		return false
+	}
+
+	next := *cs.config
+	next.Models = append([]ModelConfig(nil), cs.config.Models...)
+	next.Models[modelIndex].ContextWindow = ctxWindow
+	cs.config = &next
+	return true
 }
 
 // detectOpenAI queries GET /models on an OpenAI-compatible backend and

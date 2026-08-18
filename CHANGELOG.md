@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.6.1 — 2026-08-18
+
+### Fixed
+
+- Context-window auto-detection no longer mutates the live config snapshot
+  in place; it publishes a new immutable snapshot instead, and discards a
+  detection result if the target model changed backend while the request
+  was in flight.
+- `UsageLogger` now owns a single writer goroutine reading from an internal
+  queue, replacing the previous pattern of spawning an unsynchronized
+  goroutine per logged request — removes a data race between concurrent
+  logging calls and `Close()`.
+- SSE keepalive writes during pipeline processing now use a channel +
+  `WaitGroup` handshake instead of a mutex shared with the main response
+  goroutine, guaranteeing the keepalive goroutine has fully stopped before
+  the caller writes the real response.
+- `usage.db` query performance: added a composite `(timestamp, key_hash,
+  total_tokens)` index and used it explicitly for the per-key activity
+  query (API Keys page) and the usage dashboard's per-user summary. The
+  prior single-column indexes let the planner fall back to a full scan
+  across every row ever logged rather than bounding to the requested
+  window — increasingly expensive as the (unbounded, unpruned) usage table
+  grows over the life of a deployment.
+
 ## v0.6.0 — 2026-08-18
 
 ### Added
@@ -28,6 +52,10 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Usage metrics now flow through a bounded single-writer queue that is drained
+  during shutdown, replacing per-request fire-and-forget SQLite goroutines.
+- Updated the Go and Docker build toolchains to 1.26.6 and
+  `golang.org/x/sys` to 0.44.0 to incorporate current security fixes.
 - Auto-rewrite defaults for the vision/documents/search pipeline stages now
   key off each model's actual capability (`supports_vision`, whether a
   search key resolves) instead of its backend protocol — a vision-incapable
@@ -47,6 +75,12 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Context-window auto-detection now publishes immutable config snapshots
+  instead of mutating models still being read by live requests.
+- Streaming pipeline keepalives are fully joined before the response handler
+  resumes writing, preventing concurrent writes to `http.ResponseWriter`.
+- Usage logging now drains accepted records before SQLite closes, preventing
+  the final requests during graceful shutdown from losing their metrics.
 - OpenAI `POST /v1/chat/completions` requests targeting an Anthropic-type
   backend are now translated to `/v1/messages` instead of being passed to the
   nonexistent upstream `/v1/chat/completions` route. Request and response

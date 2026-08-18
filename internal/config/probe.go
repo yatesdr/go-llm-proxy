@@ -21,16 +21,9 @@ type ProbeResult struct {
 	Error         string `json:"error,omitempty"`
 }
 
-// ProbeBackend checks a backend URL: reachability first (same HEAD probe the
-// health checker uses), then best-effort engine and context-window detection
-// for OpenAI-compatible backends. Never blocks longer than ~10s.
-func ProbeBackend(backendURL, apiKey, backendType string) ProbeResult {
-	return ProbeBackendForModel(backendURL, apiKey, backendType, "")
-}
-
-// ProbeBackendForModel is ProbeBackend with a model ID hint, needed for
-// Anthropic (queries /v1/models/{id}) and Bedrock (looks up a static table
-// keyed by model ID) context-window detection.
+// ProbeBackendForModel checks a backend URL for reachability, engine details,
+// and context-window metadata. The model ID hint is needed for Anthropic
+// (/v1/models/{id}) and Bedrock (static model-ID lookup) detection.
 func ProbeBackendForModel(backendURL, apiKey, backendType, modelForDetection string) ProbeResult {
 	client := httputil.NewHTTPClient()
 	client.Timeout = 10 * time.Second

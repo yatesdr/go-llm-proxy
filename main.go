@@ -284,7 +284,9 @@ func main() {
 			dashRl.Close()
 		}
 		if ul != nil {
-			ul.Close()
+			if err := ul.Close(); err != nil {
+				slog.Error("closing usage database", "error", err)
+			}
 		}
 		healthStore.Stop()
 

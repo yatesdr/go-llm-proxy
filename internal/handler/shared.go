@@ -127,8 +127,8 @@ func sendChatCompletionsRequest(ctx context.Context, client *http.Client, chatRe
 
 // runPipelineWithKeepalives runs pipeline processing while sending SSE keepalives
 // to prevent client timeouts. Starts streaming headers, runs the pipeline, and
-// uses a mutex to prevent concurrent writes between the keepalive goroutine and
-// the main goroutine.
+// waits for the keepalive goroutine to exit before returning control to code
+// that may write the actual response.
 //
 // Returns the processed chatReq, whether headers were sent, and any error.
 func runPipelineWithKeepalives(ctx context.Context, w http.ResponseWriter, pl *pipeline.Pipeline,
@@ -143,35 +143,37 @@ func runPipelineWithKeepalives(ctx context.Context, w http.ResponseWriter, pl *p
 		f.Flush()
 	}
 
-	// Mutex protects writes to w between the keepalive goroutine and the
-	// main goroutine after processing completes.
-	var mu sync.Mutex
+	stopKeepalives := startPipelineKeepalives(w, 5*time.Second)
+	defer stopKeepalives()
+
+	result, err := pl.ProcessRequest(ctx, chatReq, model)
+
+	return result, true, err
+}
+
+func startPipelineKeepalives(w http.ResponseWriter, interval time.Duration) (stop func()) {
 	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
-		ticker := time.NewTicker(5 * time.Second)
+		defer wg.Done()
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-done:
 				return
 			case <-ticker.C:
-				mu.Lock()
-				fmt.Fprintf(w, ": keepalive\n\n")
+				_, _ = fmt.Fprintf(w, ": keepalive\n\n")
 				if f, ok := w.(http.Flusher); ok {
 					f.Flush()
 				}
-				mu.Unlock()
 			}
 		}
 	}()
 
-	result, err := pl.ProcessRequest(ctx, chatReq, model)
-
-	// Signal the goroutine to stop writing, then take the lock to ensure
-	// it has finished any in-progress write before we return.
-	close(done)
-	mu.Lock()
-	mu.Unlock()
-
-	return result, true, err
+	return func() {
+		close(done)
+		wg.Wait()
+	}
 }

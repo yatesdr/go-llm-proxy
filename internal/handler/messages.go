@@ -66,7 +66,6 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	cleanPath := path.Clean(r.URL.Path)
 	requireAnthropic := false
 	if strings.HasPrefix(cleanPath, "/anthropic/") {
-		cleanPath = strings.TrimPrefix(cleanPath, "/anthropic")
 		requireAnthropic = true
 	}
 

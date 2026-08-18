@@ -145,7 +145,7 @@ func (h *ResponsesHandler) tryNativePassthrough(ctx context.Context, w http.Resp
 				RequestBytes: int64(len(body)), ResponseBytes: int64(len(errBody)),
 				DurationMS: time.Since(startTime).Milliseconds(),
 			}
-			go h.usage.Log(rec)
+			h.usage.Log(rec)
 		}
 		return true
 	}
@@ -193,7 +193,7 @@ func (h *ResponsesHandler) tryNativePassthrough(ctx context.Context, w http.Resp
 			ResponseBytes: totalBytes,
 			DurationMS:    time.Since(startTime).Milliseconds(),
 		}
-		go h.usage.Log(rec)
+		h.usage.Log(rec)
 	}
 
 	return true

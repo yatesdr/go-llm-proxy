@@ -73,8 +73,8 @@ type usageLogInput struct {
 }
 
 // logUsage writes a single usage record. Safe to call with ul==nil.
-// Emission is deferred to a goroutine so the caller's hot path is not
-// blocked by SQLite contention.
+// UsageLogger queues the record to its owned writer so request goroutines do
+// not contend directly on SQLite.
 func logUsage(ul *usage.UsageLogger, in usageLogInput) {
 	// Update backend health from the outcome first — this must run even when
 	// usage logging is disabled (ul == nil).
@@ -97,7 +97,7 @@ func logUsage(ul *usage.UsageLogger, in usageLogInput) {
 		TotalTokens:   in.totalTokens,
 		DurationMS:    time.Since(in.startTime).Milliseconds(),
 	}
-	go ul.Log(rec)
+	ul.Log(rec)
 }
 
 // logUsageChat is the Chat-Completions adapter: extract tokens from

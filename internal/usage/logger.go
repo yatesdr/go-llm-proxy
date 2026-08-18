@@ -21,10 +21,17 @@ import (
 // UsageLogger records per-request metrics to a SQLite database.
 // All methods are safe for concurrent use.
 type UsageLogger struct {
-	db     *sql.DB
-	readDB *sql.DB
-	mu     sync.Mutex
+	db        *sql.DB
+	readDB    *sql.DB
+	records   chan UsageRecord
+	queueMu   sync.RWMutex
+	closed    bool
+	worker    sync.WaitGroup
+	closeOnce sync.Once
+	closeErr  error
 }
+
+const usageQueueSize = 1024
 
 // UsageRecord holds the metrics for a single proxied request.
 type UsageRecord struct {
@@ -64,6 +71,7 @@ CREATE TABLE IF NOT EXISTS usage (
 CREATE INDEX IF NOT EXISTS idx_usage_timestamp ON usage(timestamp);
 CREATE INDEX IF NOT EXISTS idx_usage_key_hash  ON usage(key_hash);
 CREATE INDEX IF NOT EXISTS idx_usage_model     ON usage(model);
+CREATE INDEX IF NOT EXISTS idx_usage_ts_key    ON usage(timestamp, key_hash, total_tokens);
 `
 
 // NewUsageLogger opens (or creates) the SQLite database at the given path.
@@ -95,15 +103,38 @@ func NewUsageLogger(dbPath string) (*UsageLogger, error) {
 	}
 	readDB.SetMaxOpenConns(1)
 
-	return &UsageLogger{db: db, readDB: readDB}, nil
+	ul := &UsageLogger{
+		db:      db,
+		readDB:  readDB,
+		records: make(chan UsageRecord, usageQueueSize),
+	}
+	ul.worker.Add(1)
+	go ul.runWriter()
+	return ul, nil
 }
 
-// Log records a usage entry. Non-blocking failures are logged but do not
-// propagate to the caller — usage logging must never break request handling.
+// Log queues a usage entry for the logger's single writer goroutine. The
+// buffered queue keeps the request path non-blocking under normal load and
+// applies backpressure instead of spawning an unbounded number of goroutines
+// if SQLite falls behind. Calls racing with Close are either accepted and
+// drained or safely ignored after the queue has closed.
 func (ul *UsageLogger) Log(rec UsageRecord) {
-	ul.mu.Lock()
-	defer ul.mu.Unlock()
+	ul.queueMu.RLock()
+	defer ul.queueMu.RUnlock()
+	if ul.closed {
+		return
+	}
+	ul.records <- rec
+}
 
+func (ul *UsageLogger) runWriter() {
+	defer ul.worker.Done()
+	for rec := range ul.records {
+		ul.write(rec)
+	}
+}
+
+func (ul *UsageLogger) write(rec UsageRecord) {
 	_, err := ul.db.Exec(`
 		INSERT INTO usage (timestamp, key_hash, key_name, model, backend, endpoint,
 			status_code, request_bytes, response_bytes,
@@ -128,14 +159,25 @@ func (ul *UsageLogger) Log(rec UsageRecord) {
 	}
 }
 
-// Close closes the underlying database.
+// Close stops accepting records, drains every record already queued, and then
+// closes the underlying databases. It is safe to call more than once.
 func (ul *UsageLogger) Close() error {
-	err1 := ul.readDB.Close()
-	err2 := ul.db.Close()
-	if err2 != nil {
-		return err2
-	}
-	return err1
+	ul.closeOnce.Do(func() {
+		ul.queueMu.Lock()
+		ul.closed = true
+		close(ul.records)
+		ul.queueMu.Unlock()
+
+		ul.worker.Wait()
+		err1 := ul.readDB.Close()
+		err2 := ul.db.Close()
+		if err2 != nil {
+			ul.closeErr = err2
+		} else {
+			ul.closeErr = err1
+		}
+	})
+	return ul.closeErr
 }
 
 type DashboardData struct {
@@ -250,7 +292,7 @@ func (ul *UsageLogger) QueryDashboardData(days int) (*DashboardData, error) {
 			COALESCE(SUM(total_tokens), 0),
 			COUNT(DISTINCT date(timestamp)) AS active_days,
 			MAX(timestamp)  AS last_seen
-		FROM usage
+		FROM usage INDEXED BY idx_usage_ts_key
 		WHERE timestamp >= date('now', ?)
 		GROUP BY key_hash
 		ORDER BY total_tokens DESC
@@ -371,7 +413,7 @@ func (ul *UsageLogger) QueryKeyActivity(days int) (map[string]KeyActivity, error
 	}
 	rows, err := ul.readDB.Query(`
 		SELECT key_hash, COUNT(*), COALESCE(SUM(total_tokens), 0), MAX(timestamp)
-		FROM usage
+		FROM usage INDEXED BY idx_usage_ts_key
 		WHERE timestamp >= date('now', ?)
 		GROUP BY key_hash
 	`, fmt.Sprintf("-%d days", days))

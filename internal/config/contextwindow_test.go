@@ -107,3 +107,46 @@ func TestDetectContextWindows_SkipsConfigured(t *testing.T) {
 		t.Fatalf("expected configured value preserved, got %d", cs.Get().Models[0].ContextWindow)
 	}
 }
+
+func TestDetectContextWindowsPublishesImmutableSnapshot(t *testing.T) {
+	requested := make(chan struct{})
+	release := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/props" {
+			close(requested)
+			<-release
+			json.NewEncoder(w).Encode(map[string]any{})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"id": "test-model", "max_model_len": 131072},
+			},
+		})
+	}))
+	defer ts.Close()
+
+	cs := NewTestConfigStore(&Config{Models: []ModelConfig{{
+		Name: "test-model", Backend: ts.URL + "/v1", Model: "test-model",
+	}}})
+	DetectContextWindows(cs)
+
+	select {
+	case <-requested:
+	case <-time.After(2 * time.Second):
+		t.Fatal("context-window probe did not reach backend")
+	}
+	oldSnapshot := cs.Get()
+	close(release)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for cs.Get().Models[0].ContextWindow != 131072 {
+		if time.Now().After(deadline) {
+			t.Fatal("context-window probe did not publish its result")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if got := oldSnapshot.Models[0].ContextWindow; got != 0 {
+		t.Fatalf("previous config snapshot was mutated in place: got context window %d", got)
+	}
+}
