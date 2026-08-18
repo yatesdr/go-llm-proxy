@@ -1,0 +1,17 @@
+.git
+.github
+.DS_Store
+go-llm
+go-llm-proxy
+go-llm-proxy-*
+config.yaml
+.env
+dist
+
+# Unrelated vendored/sibling project trees checked into this repo checkout.
+qwen-code-main
+codex-main
+claude-code-main
+opencode-dev
+rtx6kpro
+cloudflare-counter

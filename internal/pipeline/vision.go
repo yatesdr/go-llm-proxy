@@ -59,7 +59,20 @@ const (
 // PDF page images (detected via tool result heuristics) use the OCR model with a
 // text-extraction prompt. ocrModel may be nil, in which case visionModel is used.
 func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
-	visionModel *config.ModelConfig, ocrModel *config.ModelConfig) (map[string]any, error) {
+	visionModels []*config.ModelConfig, ocrModel *config.ModelConfig) (map[string]any, error) {
+
+	var visionModel *config.ModelConfig
+	if len(visionModels) > 0 {
+		visionModel = visionModels[0]
+	}
+	// cascadeFor expands the primary vision model into the full cascade;
+	// any other model (OCR) runs alone.
+	cascadeFor := func(m *config.ModelConfig) []*config.ModelConfig {
+		if m != nil && visionModel != nil && m.Name == visionModel.Name {
+			return visionModels
+		}
+		return []*config.ModelConfig{m}
+	}
 
 	// Normalize messages to []any — translation layers may produce []map[string]any.
 	var messages []any
@@ -215,7 +228,7 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
-				desc, err := p.describeImage(ctx, j.model, j.url, j.prompt, j.maxTokens)
+				desc, err := p.describeImageAny(ctx, cascadeFor(j.model), j.url, j.prompt, j.maxTokens)
 				// Cascade: if the primary attempt failed or came back empty,
 				// and a fallback is configured, retry with the fallback.
 				if (err != nil || strings.TrimSpace(desc) == "") && j.fallbackModel != nil {
@@ -224,7 +237,7 @@ func (p *Pipeline) processImages(ctx context.Context, chatReq map[string]any,
 						"primary_model", j.model.Name,
 						"fallback_model", j.fallbackModel.Name,
 						"error", err)
-					desc, err = p.describeImage(ctx, j.fallbackModel, j.url, j.fallbackPrompt, j.maxTokens)
+					desc, err = p.describeImageAny(ctx, cascadeFor(j.fallbackModel), j.url, j.fallbackPrompt, j.maxTokens)
 					if err == nil && strings.TrimSpace(desc) != "" {
 						slog.Info("image pipeline fallback succeeded",
 							"fallback_model", j.fallbackModel.Name)
@@ -471,6 +484,37 @@ var extraPrivateCIDRs = func() []*net.IPNet {
 	}
 	return out
 }()
+
+// describeImageAny walks a model cascade in priority order, returning the
+// first successful, non-empty description. Later entries only run when an
+// earlier one errors or returns nothing.
+func (p *Pipeline) describeImageAny(ctx context.Context, models []*config.ModelConfig,
+	imageURL, prompt string, maxTokens int) (string, error) {
+	var lastErr error
+	for i, m := range models {
+		if m == nil {
+			continue
+		}
+		desc, err := p.describeImage(ctx, m, imageURL, prompt, maxTokens)
+		if err == nil && strings.TrimSpace(desc) != "" {
+			if i > 0 {
+				slog.Info("vision cascade fallback succeeded", "model", m.Name, "position", i+1)
+			}
+			return desc, nil
+		}
+		if err == nil {
+			err = fmt.Errorf("model %s returned empty description", m.Name)
+		}
+		lastErr = err
+		if i < len(models)-1 {
+			slog.Warn("vision cascade stage failed, trying next", "model", m.Name, "error", err)
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no vision model available")
+	}
+	return "", lastErr
+}
 
 // describeImage sends an image to a vision-capable model and returns a text description.
 // The prompt and maxTokens control the style of description (general vs OCR).

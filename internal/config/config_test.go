@@ -390,3 +390,45 @@ func TestApplySamplingDefaults_NilDefaults(t *testing.T) {
 		t.Error("should not add temperature when defaults is nil")
 	}
 }
+
+func TestApplyPasswordEnvDefaults_YAMLWinsOverEnv(t *testing.T) {
+	t.Setenv("GO_LLM_ADMIN_PASSWORD", "from-env")
+	t.Setenv("GO_LLM_USAGE_DASHBOARD_PASSWORD", "from-env")
+
+	cfg := &Config{AdminPassword: "from-yaml", UsageDashboardPassword: "from-yaml"}
+	applyPasswordEnvDefaults(cfg)
+
+	if cfg.AdminPassword != "from-yaml" {
+		t.Errorf("expected YAML value to win, got %q", cfg.AdminPassword)
+	}
+	if cfg.UsageDashboardPassword != "from-yaml" {
+		t.Errorf("expected YAML value to win, got %q", cfg.UsageDashboardPassword)
+	}
+}
+
+func TestApplyPasswordEnvDefaults_EnvFillsEmpty(t *testing.T) {
+	t.Setenv("GO_LLM_ADMIN_PASSWORD", "from-env")
+	t.Setenv("GO_LLM_USAGE_DASHBOARD_PASSWORD", "from-env")
+
+	cfg := &Config{}
+	applyPasswordEnvDefaults(cfg)
+
+	if cfg.AdminPassword != "from-env" {
+		t.Errorf("expected env fallback, got %q", cfg.AdminPassword)
+	}
+	if cfg.UsageDashboardPassword != "from-env" {
+		t.Errorf("expected env fallback, got %q", cfg.UsageDashboardPassword)
+	}
+}
+
+func TestApplyPasswordEnvDefaults_BothUnsetStaysEmpty(t *testing.T) {
+	cfg := &Config{}
+	applyPasswordEnvDefaults(cfg)
+
+	if cfg.AdminPassword != "" {
+		t.Errorf("expected empty admin password, got %q", cfg.AdminPassword)
+	}
+	if cfg.UsageDashboardPassword != "" {
+		t.Errorf("expected empty usage dashboard password, got %q", cfg.UsageDashboardPassword)
+	}
+}

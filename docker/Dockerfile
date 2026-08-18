@@ -23,11 +23,14 @@ WORKDIR /app
 
 COPY --from=builder /out/go-llm-proxy /usr/local/bin/go-llm-proxy
 
-RUN mkdir -p /config && chown app:app /config
+RUN mkdir -p /config /data && chown app:app /config /data
 
 USER app
 
 EXPOSE 8080
 
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1
+
 ENTRYPOINT ["/usr/local/bin/go-llm-proxy"]
-CMD ["-config", "/config/config.yaml"]
+CMD ["-config", "/config/config.yaml", "-usage-db", "/data/usage.db"]

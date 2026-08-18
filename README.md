@@ -10,12 +10,12 @@ You need data security and self-host models or have upstream secure vendors (Azu
 
 ## What it does
 
-- **Protocol translation** — Claude Code speaks Anthropic Messages. Codex speaks OpenAI Responses. Your vLLM speaks Chat Completions. AWS Bedrock speaks Converse with SigV4. The proxy translates between them automatically.
+- **Protocol translation** — Claude Code speaks Anthropic Messages. Codex speaks OpenAI Responses. Your vLLM speaks Chat Completions. Anthropic-compatible providers speak Messages. AWS Bedrock speaks Converse with SigV4. The proxy translates between them automatically in either direction.
 - **Model multiplexing** — Aggregate local GPU servers, cloud APIs, and third-party providers behind one endpoint. Clients see one model list.
 - **API key management** — Issue proxy keys with per-key model restrictions. Backend credentials stay on the server.
 - **Vision pipeline** — Images sent to text-only models are described by a vision-capable model and replaced with text. Transparent to the client.
 - **Document processing** — Text extraction for native PDFs plus an official PaddleOCR `/layout-parsing` route for scanned and layout-heavy documents. The original PDF goes to the configured layout service; vision remains a fallback.
-- **Audio routing** — Dedicated, load-balanced Whisper transcription/translation and text-to-speech routes using the OpenAI audio contracts.
+- **Audio routing** — Dedicated, load-balanced Whisper transcription/translation and text-to-speech routes, including TTS voice discovery for compatible backends such as Kokoro-FastAPI.
 - **Web search** — When coding assistants request web search, the proxy executes it via Tavily or Brave Search (auto-detected from key prefix) and injects the results. No client-side MCP setup needed.
 - **MCP endpoint** — `/mcp/sse` exposes web search for OpenCode, Qwen Code, and any MCP-compatible agent.
 - **Qdrant proxy** — `/qdrant/*` proxies to a Qdrant vector database with separate app key auth and automatic multi-tenant isolation.
@@ -31,11 +31,21 @@ You need data security and self-host models or have upstream secure vendors (Azu
 ./go-llm-proxy -config config.yaml
 ```
 
-Or with Docker (limited testing):
+Or with Docker:
 
 ```bash
+mkdir -p config
+cp config.yaml.example config/config.yaml
+cp docker/.env.example docker/.env
+# edit docker/.env — set GO_LLM_ADMIN_PASSWORD
 docker compose -f docker/docker-compose.yml up -d
 ```
+
+Boots with a placeholder model/key so `docker compose ps` shows healthy
+immediately, and the admin console at `/admin` is already usable with the
+password from `.env` — no YAML editing required to log in and replace the
+placeholders through the UI. Full walkthrough (first login, enabling the
+usage dashboard, telemetry retention): [docs/docker.md](docs/docker.md).
 
 ## Minimum config
 

@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,10 +15,55 @@ import (
 )
 
 type ProcessorsConfig struct {
-	Vision       string `yaml:"vision"`         // model name for vision processing (empty = disabled)
+	Vision       string `yaml:"vision"`         // legacy single vision model (superseded by vision_models; kept in sync with its head)
 	Audio        string `yaml:"audio"`          // model name for audio transcription (empty = disabled; pipeline integration pending)
 	OCR          string `yaml:"ocr"`            // model name for OCR/text extraction from PDF page images (falls back to vision)
-	WebSearchKey string `yaml:"web_search_key"` // web search API key — Tavily or Brave (empty = web search disabled)
+	WebSearchKey string `yaml:"web_search_key"` // legacy single web search key (superseded by web_search_keys; kept in sync with its head)
+
+	// VisionModels is the priority-ordered vision cascade: the first model is
+	// tried first; on failure or empty output the next takes over.
+	VisionModels []string `yaml:"vision_models,omitempty"`
+	// WebSearchKeys is the priority-ordered search-provider cascade.
+	WebSearchKeys []WebSearchKeyEntry `yaml:"web_search_keys,omitempty"`
+}
+
+// WebSearchKeyEntry is one provider+key pair in the web-search cascade.
+type WebSearchKeyEntry struct {
+	Provider string `yaml:"provider" json:"provider"` // "tavily" or "brave"
+	Key      string `yaml:"key" json:"key"`
+}
+
+// InferSearchProvider guesses the provider from a key's prefix, for legacy
+// single-key configs written before providers were explicit.
+func InferSearchProvider(key string) string {
+	if strings.HasPrefix(key, "BSA") {
+		return "brave"
+	}
+	return "tavily"
+}
+
+// EffectiveVisionModels returns the priority-ordered vision cascade, falling
+// back to the legacy single vision field for configs that predate lists.
+func (p ProcessorsConfig) EffectiveVisionModels() []string {
+	if len(p.VisionModels) > 0 {
+		return p.VisionModels
+	}
+	if p.Vision != "" {
+		return []string{p.Vision}
+	}
+	return nil
+}
+
+// EffectiveSearchKeys returns the priority-ordered web-search cascade, falling
+// back to the legacy single key field for configs that predate lists.
+func (p ProcessorsConfig) EffectiveSearchKeys() []WebSearchKeyEntry {
+	if len(p.WebSearchKeys) > 0 {
+		return p.WebSearchKeys
+	}
+	if p.WebSearchKey != "" {
+		return []WebSearchKeyEntry{{Provider: InferSearchProvider(p.WebSearchKey), Key: p.WebSearchKey}}
+	}
+	return nil
 }
 
 // AudioConfig groups the OpenAI-compatible audio workloads exposed by the
@@ -30,7 +76,7 @@ type AudioConfig struct {
 
 // AudioModelConfig describes one client-facing audio model and its replicas.
 // Whisper is served on the OpenAI transcription/translation routes; TTS is
-// served on the OpenAI speech route.
+// served on the OpenAI speech route and the voice discovery extension.
 type AudioModelConfig struct {
 	Name     string          `yaml:"name"`
 	Model    string          `yaml:"model,omitempty"`
@@ -113,19 +159,22 @@ type SamplingDefaults struct {
 }
 
 type ModelConfig struct {
-	Name           string            `yaml:"name"`
-	Backends       []BackendConfig   `yaml:"backends"`        // all replicas serving this logical model
-	Model          string            `yaml:"model"`           // model name to send to the backend (if different from Name)
-	Timeout        int               `yaml:"timeout"`         // request timeout in seconds (default 300)
-	Type           string            `yaml:"type"`            // backend type: "" or "openai" (default), "anthropic"
-	ResponsesMode  string            `yaml:"responses_mode"`  // "auto" (default), "native", or "translate"
-	MessagesMode   string            `yaml:"messages_mode"`   // "auto" (default), "native", or "translate"
-	ContextWindow  int               `yaml:"context_window"`  // max context tokens (0 = auto-detect from backend)
-	SupportsVision bool              `yaml:"supports_vision"` // model handles images natively
-	SupportsAudio  bool              `yaml:"supports_audio"`  // model handles audio (transcription or audio input)
-	ForcePipeline  bool              `yaml:"force_pipeline"`  // run pipeline even on native backends
-	Processors     *ProcessorsConfig `yaml:"processors"`      // per-model processor overrides (nil = use global)
-	Defaults       *SamplingDefaults `yaml:"defaults"`        // default sampling parameters (nil = use backend defaults)
+	Name             string            `yaml:"name"`
+	Backends         []BackendConfig   `yaml:"backends"`                     // all replicas serving this logical model
+	Model            string            `yaml:"model"`                        // model name to send to the backend (if different from Name)
+	Timeout          int               `yaml:"timeout"`                      // request timeout in seconds (default 300)
+	Type             string            `yaml:"type"`                         // backend type: "" or "openai" (default), "anthropic"
+	ResponsesMode    string            `yaml:"responses_mode"`               // "auto" (default), "native", or "translate"
+	MessagesMode     string            `yaml:"messages_mode"`                // "auto" (default), "native", or "translate"
+	ContextWindow    int               `yaml:"context_window"`               // max context tokens (0 = auto-detect from backend)
+	SupportsVision   bool              `yaml:"supports_vision"`              // model handles images natively
+	SupportsAudio    bool              `yaml:"supports_audio"`               // model handles audio (transcription or audio input)
+	ForcePipeline    bool              `yaml:"force_pipeline,omitempty"`     // deprecated: use RewriteVision/RewriteWebSearch "on" instead; still honored as legacy "force both on"
+	RewriteVision    string            `yaml:"rewrite_vision,omitempty"`     // "" (auto by protocol), "on", or "off" — image_url content only
+	RewriteDocuments string            `yaml:"rewrite_documents,omitempty"`  // "" (auto by protocol), "on", or "off" — pdf_data content only
+	RewriteWebSearch string            `yaml:"rewrite_web_search,omitempty"` // "" (auto by protocol), "on", or "off"
+	Processors       *ProcessorsConfig `yaml:"processors"`                   // per-model processor overrides (nil = use global)
+	Defaults         *SamplingDefaults `yaml:"defaults"`                     // default sampling parameters (nil = use backend defaults)
 
 	// AWS Bedrock fields (only used when type: "bedrock").
 	// If api_key is set, it is sent as a Bedrock API key bearer token and the
@@ -333,11 +382,28 @@ func applyBedrockDefaults(m *ModelConfig) {
 	}
 }
 
+// applyPasswordEnvDefaults fills admin_password / usage_dashboard_password
+// from the environment when the config file leaves them unset — lets a
+// first-time Docker deployment bootstrap credentials via a .env file instead
+// of hand-editing YAML. The YAML value always wins when set; the env var is
+// only a fallback for an empty field, same precedence as the Bedrock AWS
+// credential fallback below.
+func applyPasswordEnvDefaults(cfg *Config) {
+	if cfg.AdminPassword == "" {
+		cfg.AdminPassword = os.Getenv("GO_LLM_ADMIN_PASSWORD")
+	}
+	if cfg.UsageDashboardPassword == "" {
+		cfg.UsageDashboardPassword = os.Getenv("GO_LLM_USAGE_DASHBOARD_PASSWORD")
+	}
+}
+
 // finalizeConfig applies defaults, validates the whole config, and bridges
 // each model's first configured replica into request-scoped compatibility
 // fields used by protocol adapters before the load balancer selects a replica.
 // Shared by Load() and the admin save path so both enforce identical rules.
 func finalizeConfig(cfg *Config) error {
+	applyPasswordEnvDefaults(cfg)
+
 	for i := range cfg.Models {
 		m := &cfg.Models[i]
 		if m.Timeout == 0 {
@@ -468,6 +534,21 @@ func validateConfig(cfg *Config) error {
 			return fmt.Errorf("model %q has unknown type %q (must be %q, %q, or %q)", m.Name, m.Type, BackendOpenAI, BackendAnthropic, BackendBedrock)
 		}
 
+		switch m.RewriteVision {
+		case "", "on", "off":
+		default:
+			return fmt.Errorf("model %q has unknown rewrite_vision %q (must be \"on\", \"off\", or omitted)", m.Name, m.RewriteVision)
+		}
+		switch m.RewriteDocuments {
+		case "", "on", "off":
+		default:
+			return fmt.Errorf("model %q has unknown rewrite_documents %q (must be \"on\", \"off\", or omitted)", m.Name, m.RewriteDocuments)
+		}
+		switch m.RewriteWebSearch {
+		case "", "on", "off":
+		default:
+			return fmt.Errorf("model %q has unknown rewrite_web_search %q (must be \"on\", \"off\", or omitted)", m.Name, m.RewriteWebSearch)
+		}
 		switch m.ResponsesMode {
 		case "", "auto", ResponsesModeNative, ResponsesModeTranslate:
 		default:
@@ -543,6 +624,19 @@ func validateConfig(cfg *Config) error {
 			return fmt.Errorf("global processors.vision references unknown model %q", v)
 		}
 	}
+	for _, v := range cfg.Processors.VisionModels {
+		if !names[v] {
+			return fmt.Errorf("processors.vision_models references unknown model %q", v)
+		}
+	}
+	for i, e := range cfg.Processors.WebSearchKeys {
+		if e.Provider != "tavily" && e.Provider != "brave" {
+			return fmt.Errorf("processors.web_search_keys[%d]: provider must be tavily or brave", i)
+		}
+		if e.Key == "" {
+			return fmt.Errorf("processors.web_search_keys[%d]: key is empty", i)
+		}
+	}
 
 	// Validate global OCR processor references a defined model.
 	if v := cfg.Processors.OCR; v != "" && v != "none" {
@@ -577,6 +671,9 @@ func validateConfig(cfg *Config) error {
 	visionModels := make(map[string]bool)
 	if cfg.Processors.Vision != "" {
 		visionModels[cfg.Processors.Vision] = true
+	}
+	for _, v := range cfg.Processors.VisionModels {
+		visionModels[v] = true
 	}
 	for _, m := range cfg.Models {
 		if m.Processors != nil && m.Processors.Vision != "" && m.Processors.Vision != "none" {

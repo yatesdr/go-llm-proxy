@@ -21,28 +21,45 @@ var awsRegions = []string{
 // ModelsPage is the Chat workload editor. /admin/models remains an alias so
 // bookmarks from earlier releases continue to work.
 func (h *AdminHandler) ModelsPage(w http.ResponseWriter, r *http.Request) {
-	body := `<div class="toolbar">
-  <div><h2>Chat</h2><p class="helper-text">Each model owns its backend servers. Add another backend to add capacity; requests are balanced automatically.</p></div>
-  <button class="btn btn-primary btn-sm" type="button" onclick="openModel(null)">+ Add Chat Model</button>
+	body := `<div class="subtabs">
+  <button class="subtab active" id="subtabModels" type="button" onclick="switchLLMTab('models')">Models</button>
+  <button class="subtab" id="subtabHelpers" type="button" onclick="switchLLMTab('helpers')">Model Helpers</button>
 </div>
+<div id="pane-models">
 <div class="card">
+  <div class="card-header">
+    <h2>LLM Models</h2>
+    <div class="card-tools">
+      <input id="modelFilter" class="filter-input" type="search" placeholder="Filter models&hellip;" autocomplete="off">
+      <button class="btn btn-primary" type="button" onclick="openModel(null)">+ Add Model</button>
+    </div>
+  </div>
   <div class="table-wrap"><table class="data-table">
-    <thead><tr><th>Name</th><th>Protocol</th><th>Upstream model</th><th>Backends</th><th>Vision</th><th>Health</th><th style="text-align:right">Actions</th></tr></thead>
+    <thead><tr><th>Name</th><th style="width:90px">Protocol</th><th>Upstream model</th><th style="width:180px" title="One dot per backend server — click the row for detail">Backends</th><th style="width:110px" title="Native input the model accepts beyond text">Multi-Modal</th><th style="width:130px" title="Intercepts applied by the proxy for this model">Augmented</th><th style="width:130px;text-align:right">Actions</th></tr></thead>
     <tbody id="modelsBody"><tr><td colspan="7" class="empty-cell">Loading…</td></tr></tbody>
   </table></div>
 </div>
-<div class="card" style="margin-top:16px">
-  <h3 style="margin-top:0">Chat helpers</h3>
-  <p class="helper-text">Choose a vision-capable chat model for image descriptions. Web search is optional.</p>
-  <form id="helpersForm" onsubmit="saveHelpers(event)">
-    <div class="field-grid">
-      <div class="field"><label>Vision fallback</label><select id="helperVision"><option value="">Disabled</option></select></div>
-      <div class="field"><label>Web search API key</label><div class="secret-row"><span id="searchMask" class="mono">—</span><button type="button" class="btn btn-secondary btn-sm" onclick="editSearchKey()">Change</button><button type="button" class="btn btn-danger btn-sm" onclick="clearSearchKey()">Clear</button></div><input id="searchKey" type="password" style="display:none;margin-top:6px" placeholder="Tavily or Brave key"></div>
-    </div>
-    <div style="margin-top:12px"><button class="btn btn-primary btn-sm" type="submit">Save helpers</button></div>
-  </form>
+</div>
+<div id="pane-helpers" style="display:none">
+<div class="card">
+  <h2>Vision</h2>
+  <p class="helper-text" style="margin:0 0 10px">Images sent to a model without native vision support are described by the first model below, in order. On failure or an empty result, the proxy tries the next.</p>
+  <div id="visionCascade" class="cascade-list"></div>
+  <div class="cascade-add"><select id="visionAddSelect"></select><button type="button" class="btn btn-secondary btn-sm" onclick="addVisionModel()">+ Add</button></div>
+</div>
+<div class="card">
+  <h2>Web Search</h2>
+  <p class="helper-text" style="margin:0 0 10px">Search providers are tried in order; the proxy falls back to the next on failure. Supports Tavily and Brave.</p>
+  <div id="searchCascade" class="cascade-list"></div>
+  <div class="cascade-add">
+    <select id="searchAddProvider"><option value="tavily">Tavily</option><option value="brave">Brave</option></select>
+    <input id="searchAddKey" type="password" placeholder="API key" style="max-width:260px">
+    <button type="button" class="btn btn-secondary btn-sm" onclick="addSearchKey()">+ Add</button>
+  </div>
+</div>
+<div class="btn-row"><button class="btn btn-primary" type="button" onclick="saveHelpers()">Save helpers</button></div>
 </div>` + modelModalHTML()
-	h.renderShell(w, "chat", "Admin · Chat", body, modelsPageJS())
+	h.renderShell(w, "chat", "Admin · LLM", body, modelsPageJS())
 }
 
 func (h *AdminHandler) ModelsData(w http.ResponseWriter, r *http.Request) {
@@ -58,8 +75,8 @@ func (h *AdminHandler) ModelsData(w http.ResponseWriter, r *http.Request) {
 		backends := backendData(m.Backends, backendHealth)
 		entry := map[string]any{
 			"name": m.Name, "type": m.Type, "model": m.Model, "timeout": m.Timeout,
-			"context_window": m.ContextWindow, "supports_vision": m.SupportsVision,
-			"force_pipeline": m.ForcePipeline, "responses_mode": m.ResponsesMode,
+			"context_window": m.ContextWindow, "supports_vision": m.SupportsVision, "supports_audio": m.SupportsAudio,
+			"force_pipeline": m.ForcePipeline, "rewrite_vision": m.RewriteVision, "rewrite_documents": m.RewriteDocuments, "rewrite_web_search": m.RewriteWebSearch, "responses_mode": m.ResponsesMode,
 			"messages_mode": m.MessagesMode, "backends": backends,
 			"region": m.Region, "aws_access_key": m.AWSAccessKey,
 			"has_aws_secret": m.AWSSecretKey != "", "aws_secret_mask": config.MaskSecret(m.AWSSecretKey),
@@ -87,8 +104,18 @@ func (h *AdminHandler) ModelsData(w http.ResponseWriter, r *http.Request) {
 			"vision": cfg.Processors.Vision, "has_search_key": cfg.Processors.WebSearchKey != "",
 			"search_key_mask": config.MaskSecret(cfg.Processors.WebSearchKey),
 			"legacy_audio":    cfg.Processors.Audio, "legacy_ocr": cfg.Processors.OCR,
+			"vision_models":   cfg.Processors.EffectiveVisionModels(),
+			"web_search_keys": searchKeyEntriesJSON(cfg.Processors.EffectiveSearchKeys()),
 		},
 	})
+}
+
+func searchKeyEntriesJSON(entries []config.WebSearchKeyEntry) []map[string]any {
+	out := make([]map[string]any, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, map[string]any{"provider": e.Provider, "key_mask": config.MaskKey(e.Key)})
+	}
+	return out
 }
 
 func backendData(backends []config.BackendConfig, health map[string]config.BackendHealth) []map[string]any {
@@ -191,6 +218,7 @@ func (h *AdminHandler) ModelsMutate(w http.ResponseWriter, r *http.Request) {
 func (h *AdminHandler) BackendsProbe(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		URL, Model, Type string
+		UpstreamModel    string  `json:"upstream_model"`
 		APIKey           *string `json:"api_key"`
 	}
 	if err := decodeJSONBody(r, &req, 16*1024); err != nil {
@@ -212,7 +240,11 @@ func (h *AdminHandler) BackendsProbe(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, config.ProbeBackend(req.URL, key, req.Type))
+	detectModel := req.UpstreamModel
+	if detectModel == "" {
+		detectModel = req.Model
+	}
+	writeJSON(w, http.StatusOK, config.ProbeBackendForModel(req.URL, key, req.Type, detectModel))
 }
 
 type modelInputDTO struct {
@@ -220,13 +252,16 @@ type modelInputDTO struct {
 	Backend          string              `json:"backend"` // legacy admin client
 	Type             string              `json:"type"`
 	Model            string              `json:"model"`
-	ResponsesMode    string              `json:"responses_mode"`
-	MessagesMode     string              `json:"messages_mode"`
+	ResponsesMode    *string             `json:"responses_mode"` // preserved when omitted; the admin UI no longer surfaces this
+	MessagesMode     *string             `json:"messages_mode"`  // preserved when omitted; the admin UI no longer surfaces this
 	Timeout          int                 `json:"timeout"`
 	ContextWindow    int                 `json:"context_window"`
 	SupportsVision   bool                `json:"supports_vision"`
 	SupportsAudio    *bool               `json:"supports_audio"` // legacy capability; hidden in the new UI
 	ForcePipeline    bool                `json:"force_pipeline"`
+	RewriteVision     string              `json:"rewrite_vision"`
+	RewriteDocuments  string              `json:"rewrite_documents"`
+	RewriteWebSearch  string              `json:"rewrite_web_search"`
 	Backends         []backendInputDTO   `json:"backends"`
 	APIKey           *string             `json:"api_key"` // legacy admin client
 	Region           string              `json:"region"`
@@ -270,7 +305,7 @@ func (d *modelInputDTO) toConfig(cfg *config.Config, originalName string) (confi
 	m := config.ModelConfig{
 		Name: d.Name, Backends: resolveBackendRows(existingBackends, rows), Type: d.Type, Model: d.Model,
 		Timeout: d.Timeout, ContextWindow: d.ContextWindow, SupportsVision: d.SupportsVision,
-		ForcePipeline: d.ForcePipeline, ResponsesMode: d.ResponsesMode, MessagesMode: d.MessagesMode,
+		ForcePipeline: d.ForcePipeline, RewriteVision: d.RewriteVision, RewriteDocuments: d.RewriteDocuments, RewriteWebSearch: d.RewriteWebSearch,
 		Region: d.Region, AWSAccessKey: d.AWSAccessKey, GuardrailID: d.GuardrailID,
 		GuardrailVersion: d.GuardrailVersion, GuardrailTrace: d.GuardrailTrace,
 	}
@@ -291,6 +326,19 @@ func (d *modelInputDTO) toConfig(cfg *config.Config, originalName string) (confi
 		if m.GuardrailTrace == "" {
 			m.GuardrailTrace = existing.GuardrailTrace
 		}
+	}
+	// responses_mode/messages_mode are advanced escape hatches no longer
+	// surfaced in the admin UI; preserve a hand-edited value unless the
+	// caller explicitly supplies a replacement (nil = omitted).
+	if d.ResponsesMode != nil {
+		m.ResponsesMode = *d.ResponsesMode
+	} else if existing != nil {
+		m.ResponsesMode = existing.ResponsesMode
+	}
+	if d.MessagesMode != nil {
+		m.MessagesMode = *d.MessagesMode
+	} else if existing != nil {
+		m.MessagesMode = existing.MessagesMode
 	}
 	m.AWSSecretKey = resolveModelSecret(d.AWSSecretKey, existing, func(x *config.ModelConfig) string { return x.AWSSecretKey })
 	m.AWSSessionToken = resolveModelSecret(d.AWSSession, existing, func(x *config.ModelConfig) string { return x.AWSSessionToken })
@@ -361,29 +409,39 @@ func samplingDefaultsToMap(d *config.SamplingDefaults) map[string]any {
 func modelModalHTML() string {
 	return `<div id="modelModal" class="modal-backdrop" onclick="if(event.target.id==='modelModal')closeModel()">
   <div class="modal" style="max-width:920px;width:calc(100vw - 32px)" role="dialog">
-    <div class="modal-header"><h2 id="modelTitle">Chat model</h2><button class="modal-close" onclick="closeModel()" type="button">&times;</button></div>
+    <div class="modal-header"><h2 id="modelTitle">Model</h2><button class="modal-close" onclick="closeModel()" type="button">&times;</button></div>
     <form id="modelForm" onsubmit="saveModel(event)"><div class="modal-body">
-      <div class="section section-required"><h3>Model</h3><div class="field-grid">
-        <div class="field"><label>Client-facing name</label><input name="name" required placeholder="GLM-5.2"></div>
-        <div class="field"><label>Protocol</label><select name="type" onchange="toggleBedrock()"><option value="">OpenAI</option><option value="anthropic">Anthropic</option><option value="bedrock">AWS Bedrock</option></select></div>
-        <div class="field"><label>Upstream model ID</label><input name="model" placeholder="same as client-facing name"></div>
-        <div class="field"><label>Timeout (seconds)</label><input name="timeout" type="number" min="1" placeholder="300"></div>
-        <div class="field"><label>Context window</label><input name="context_window" type="number" min="0" placeholder="auto-detect"></div>
-        <div class="field checkbox-row"><input id="supportsVision" name="supports_vision" type="checkbox"><label for="supportsVision">Accepts images directly</label></div>
+      <div class="section"><h3>Model</h3><div class="field-grid">
+        <div class="field"><label title="The model name clients send in their requests, e.g. &quot;model&quot;: &quot;glm-5.2&quot;. This is what the proxy publishes &mdash; it can differ from the upstream model ID set below with the backends.">Published model ID</label><input name="name" type="text" required placeholder="GLM-5.2"></div>
+        <div class="field"><label title="How long the proxy waits for the backend to respond before giving up.">Timeout (seconds)</label><input name="timeout" type="number" min="1" placeholder="300"></div>
+        <div class="field"><label title="Max input+output tokens the model supports. Shown to clients and used for capacity checks; leave blank to auto-detect where possible.">Context window</label><div class="secret-row"><input name="context_window" type="number" min="0" placeholder="auto-detect" style="flex:1"><button type="button" class="btn btn-secondary btn-sm" onclick="detectContextWindow(this)">Detect</button></div><div class="hint" id="ctxDetectStatus" style="display:none;margin-top:4px"></div></div>
+        <div class="field">
+          <div class="grid-3">
+            <div class="field"><label title="Images are described by the vision helper cascade before reaching this model, instead of being forwarded as-is.">Vision</label><select name="rewrite_vision" id="rewriteVisionSelect"><option value="">Auto</option><option value="on">Rewrite</option><option value="off">None</option></select></div>
+            <div class="field"><label title="PDFs are handled by the proxy before reaching this model: native text extraction first, then the Documents-tab processor, an OCR model, or vision-PDF fallback.">Documents</label><select name="rewrite_documents" id="rewriteDocumentsSelect"><option value="">Auto</option><option value="on">Rewrite</option><option value="off">None</option></select></div>
+            <div class="field"><label title="The web_search tool is added to requests for this model when a search key is configured, and the proxy executes it server-side.">Web search</label><select name="rewrite_web_search" id="rewriteSearchSelect"><option value="">Auto</option><option value="on">Rewrite</option><option value="off">None</option></select></div>
+          </div>
+        </div>
       </div></div>
-      <div class="section"><div class="toolbar"><div><h3>Backends</h3><p class="helper-text">All servers here must serve the same upstream model.</p></div><button type="button" class="btn btn-secondary btn-sm" onclick="addBackend(null)">+ Add Backend</button></div><div id="backendRows"></div></div>
-      <details class="section"><summary><strong>Advanced model settings</strong></summary><div class="field-grid" style="margin-top:12px">
-        <div class="field"><label>Responses API</label><select name="responses_mode"><option value="">Auto</option><option value="native">Native</option><option value="translate">Translate</option></select></div>
-        <div class="field"><label>Anthropic Messages</label><select name="messages_mode"><option value="">Auto</option><option value="native">Native</option><option value="translate">Translate</option></select></div>
-        <div class="field checkbox-row"><input id="forcePipeline" name="force_pipeline" type="checkbox"><label for="forcePipeline">Always run helper pipeline</label></div>
-        <div class="field"><label>Temperature default</label><input name="temperature" type="number" step="0.05" min="0" max="2"></div>
-        <div class="field"><label>Top-p default</label><input name="top_p" type="number" step="0.05" min="0" max="1"></div>
-        <div class="field"><label>Top-k default</label><input name="top_k" type="number" min="0"></div>
-        <div class="field"><label>Reasoning effort default</label><select name="reasoning_effort"><option value="">Backend default</option><option>low</option><option>medium</option><option>high</option></select></div>
-      </div></details>
+      <div class="section">
+        <h3 style="margin-bottom:6px">Backends</h3>
+        <div class="field-grid" style="margin-bottom:12px">
+          <div class="field"><label title="The model name sent to every backend below (leave blank to reuse the published model ID), and the API shape they all speak. All backends in this pool must serve the same upstream model.">Upstream model ID</label><div class="secret-row"><input name="model" type="text" placeholder="same as published model ID" style="flex:1"><select name="type" onchange="toggleBedrock()" style="max-width:140px" title="Upstream protocol"><option value="">OpenAI</option><option value="anthropic">Anthropic</option><option value="bedrock">Bedrock</option></select></div></div>
+          <div class="field checkbox-row"><input id="supportsVision" name="supports_vision" type="checkbox" onchange="updateAutoHints()"><label for="supportsVision">Vision capable</label></div>
+        </div>
+        <div class="be-head"><span></span><span>Server URL</span><span>API key</span><span title="Load-balancing weight — higher gets more traffic relative to other backends">Wt</span><span title="Max concurrent requests to this backend (0 = unlimited)">Max</span><span title="Temporarily disabled — kept in the list but never routed to">Off</span><span></span></div>
+        <div id="backendRows"></div>
+        <div style="display:flex;justify-content:flex-end;margin-top:2px"><button type="button" class="btn btn-secondary btn-sm" onclick="addBackend(null)">+ Add Backend</button></div>
+      </div>
+      <div class="section"><h3>Sampling defaults</h3><div class="grid-4">
+        <div class="field"><label title="Higher = more random/creative output, lower = more focused and deterministic. Leave blank to use the backend's own default.">Temperature</label><input name="temperature" type="number" step="0.05" min="0" max="2" placeholder="backend default"></div>
+        <div class="field"><label title="Nucleus sampling: only considers tokens within this cumulative probability mass. Leave blank to use the backend's own default.">Top-p</label><input name="top_p" type="number" step="0.05" min="0" max="1" placeholder="backend default"></div>
+        <div class="field"><label title="Only considers the k most likely next tokens at each step. Leave blank to use the backend's own default.">Top-k</label><input name="top_k" type="number" min="0" placeholder="backend default"></div>
+        <div class="field"><label title="Requested thinking depth for reasoning-capable models. Ignored by models that don't support it.">Reasoning effort</label><select name="reasoning_effort"><option value="">Backend default</option><option>low</option><option>medium</option><option>high</option></select></div>
+      </div></div>
       <div id="bedrockFields" class="section" style="display:none"><h3>Bedrock</h3><div class="field-grid">
-        <div class="field"><label>Region</label><input name="region" placeholder="us-east-1"></div><div class="field"><label>AWS access key ID</label><input name="aws_access_key"></div>
-        <div class="field"><label>AWS secret key</label><input name="aws_secret_key" type="password" placeholder="leave blank to keep"></div><div class="field"><label>Session token</label><input name="aws_session_token" type="password" placeholder="leave blank to keep"></div>
+        <div class="field"><label title="AWS region hosting this Bedrock model, e.g. us-east-1.">Region</label><input name="region" type="text" placeholder="us-east-1"></div><div class="field"><label title="IAM access key with bedrock:InvokeModel permission for this model.">AWS access key ID</label><input name="aws_access_key" type="text"></div>
+        <div class="field"><label>AWS secret key</label><input name="aws_secret_key" type="password" placeholder="leave blank to keep"></div><div class="field"><label title="Only needed for temporary/STS credentials, not long-lived IAM keys.">Session token</label><input name="aws_session_token" type="password" placeholder="leave blank to keep"></div>
       </div></div>
       <div id="modelErr" class="inline-err" style="display:none"></div>
     </div><div class="modal-footer"><button type="button" class="btn btn-secondary" onclick="closeModel()">Cancel</button><button id="modelSave" class="btn btn-primary">Save model</button></div></form>
@@ -395,19 +453,190 @@ func modelsPageJS() string {
 	return `
 var chatState={models:[],editing:null,helpers:{},searchAction:null};
 function loadModels(){apiGet('/admin/models/data').then(function(d){chatState.models=d.models||[];chatState.helpers=d.helpers||{};renderModels();renderHelpers();}).catch(function(e){flash('Load failed: '+e.message,'error');});}
-function renderModels(){var el=document.getElementById('modelsBody');if(!chatState.models.length){el.innerHTML='<tr><td colspan="7" class="empty-cell">No chat models configured</td></tr>';return;}el.innerHTML=chatState.models.map(function(m){var active=(m.backends||[]).filter(function(b){return !b.disabled;}).length;var h=m.health||{};var hs=h.online?'<span class="health-dot health-online"></span>online':(h.error?'<span class="health-dot health-offline"></span>offline':'—');return '<tr><td><strong>'+esc(m.name)+'</strong></td><td><code>'+esc(m.type||'openai')+'</code></td><td class="mono">'+esc(m.model||m.name)+'</td><td>'+active+' active / '+(m.backends||[]).length+'</td><td>'+(m.supports_vision?'Yes':'—')+'</td><td>'+hs+'</td><td class="row-actions"><div class="action-group"><button class="btn btn-secondary btn-sm" onclick="openModel(\''+escAttr(m.name)+'\')">Edit</button><button class="btn btn-danger btn-sm" onclick="deleteModel(\''+escAttr(m.name)+'\')">Delete</button></div></td></tr>';}).join('');}
-function renderHelpers(){var s=document.getElementById('helperVision');s.innerHTML='<option value="">Disabled</option>'+chatState.models.filter(function(m){return m.supports_vision;}).map(function(m){return '<option value="'+escAttr(m.name)+'">'+esc(m.name)+'</option>';}).join('');s.value=chatState.helpers.vision||'';document.getElementById('searchMask').textContent=chatState.helpers.has_search_key?(chatState.helpers.search_key_mask||'(set)'):'(not set)';}
-function editSearchKey(){chatState.searchAction='set';var i=document.getElementById('searchKey');i.style.display='block';i.focus();}
-function clearSearchKey(){chatState.searchAction='clear';document.getElementById('searchMask').textContent='(will clear on save)';document.getElementById('searchKey').style.display='none';}
-function saveHelpers(e){e.preventDefault();var body={vision:document.getElementById('helperVision').value,audio:chatState.helpers.legacy_audio||'',ocr:chatState.helpers.legacy_ocr||''};if(chatState.searchAction==='clear')body.web_search_key='';if(chatState.searchAction==='set'&&document.getElementById('searchKey').value)body.web_search_key=document.getElementById('searchKey').value;apiPost('/admin/processors/mutate',body).then(function(r){if(!r.ok){flash(r.json.error&&r.json.error.message||'Save failed','error');return;}chatState.searchAction=null;flash('Chat helpers saved','success');loadModels();});}
-function openModel(name){var m=name?chatState.models.find(function(x){return x.name===name;}):null;chatState.editing=name;var f=document.getElementById('modelForm');f.reset();document.getElementById('modelTitle').textContent=m?'Edit '+name:'Add chat model';document.getElementById('backendRows').innerHTML='';if(m){['name','type','model','timeout','context_window','responses_mode','messages_mode','region','aws_access_key'].forEach(function(k){if(f.elements[k])f.elements[k].value=m[k]||'';});f.elements.supports_vision.checked=!!m.supports_vision;f.elements.force_pipeline.checked=!!m.force_pipeline;var d=m.defaults||{};['temperature','top_p','top_k','reasoning_effort'].forEach(function(k){f.elements[k].value=d[k]==null?'':d[k];});(m.backends||[]).forEach(addBackend);}else{f.elements.timeout.value=300;addBackend(null);}toggleBedrock();document.getElementById('modelErr').style.display='none';document.getElementById('modelModal').classList.add('open');}
+function backendDot(b){
+  var cls='health-unknown',label='no health data';
+  if(b.disabled){cls='health-unknown';label='disabled';}
+  else if(b.online===true){cls='health-online';label='online';}
+  else if(b.online===false){cls='health-offline';label='offline'+(b.error?': '+b.error:'');}
+  return '<span class="health-dot '+cls+'" title="'+escAttr(b.url)+' — '+escAttr(label)+'"></span>';
+}
+function modelDot(m){
+  var h=m.health||{};
+  if(h.online){
+    var down=(m.backends||[]).filter(function(b){return !b.disabled&&b.online===false;}).length;
+    if(down>0)return '<span class="health-dot health-degraded" title="Degraded: '+down+' backend(s) down"></span>';
+    return '<span class="health-dot health-online" title="Online"></span>';
+  }
+  if(h.error)return '<span class="health-dot health-offline" title="Offline: '+escAttr(h.error)+'"></span>';
+  return '<span class="health-dot health-unknown" title="No health data"></span>';
+}
+function renderModels(){var el=document.getElementById('modelsBody');if(!chatState.models.length){el.innerHTML='<tr><td colspan="7" class="empty-cell">No models configured</td></tr>';return;}el.innerHTML=chatState.models.map(function(m){var bs=m.backends||[];var active=bs.filter(function(b){return !b.disabled;}).length;var dots=bs.map(backendDot).join('');return '<tr>'+
+  '<td>'+modelDot(m)+'<strong>'+esc(m.name)+'</strong></td>'+
+  '<td class="mono">'+esc(m.type||'openai')+'</td>'+
+  '<td class="mono">'+esc(m.model||m.name)+' <button class="copy-icon" type="button" title="Copy upstream model id" onclick="event.stopPropagation();copyToClipboard(\''+escAttr(m.model||m.name)+'\').then(function(){flash(\'Copied\',\'success\');})"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9"/><path d="M11 5V2H2v9h3"/></svg></button></td>'+
+  '<td>'+dots+' <span class="mono">'+active+'/'+bs.length+'</span></td>'+
+  '<td class="mono">'+(function(){var c=[];if(m.supports_vision)c.push('vision');if(m.supports_audio)c.push('audio');return c.length?c.join(' \u00b7 '):'\u2014';})()+'</td>'+
+  '<td class="mono">'+(function(){var g=[];if(m.force_pipeline)g.push('pipeline');if(chatState.helpers.vision&&!m.supports_vision)g.push('vision');if(chatState.helpers.has_search_key)g.push('search');return g.length?g.join(' \u00b7 '):'\u2014';})()+'</td>'+
+  '<td class="row-actions"><div class="action-group"><button class="btn btn-secondary btn-sm btn-icon" onclick="openModel(\''+escAttr(m.name)+'\')" title="Edit model"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.3 2.2l2.5 2.5L5.5 13H3v-2.5z"/><path d="M9.8 3.7l2.5 2.5"/></svg></button><button class="btn btn-danger btn-sm btn-icon" onclick="deleteModel(\''+escAttr(m.name)+'\')" title="Delete model"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2.5 4h11M5.5 4V2.5h5V4M4 4l.7 9.5h6.6L12 4M6.5 6.8v4.4M9.5 6.8v4.4"/></svg></button></div></td></tr>';}).join('');reapplyFilter('modelFilter','modelsBody');}
+function renderHelpers(){
+  chatState.visionList=(chatState.helpers.vision_models||[]).slice();
+  chatState.searchList=(chatState.helpers.web_search_keys||[]).map(function(e){return {provider:e.provider,keyMask:e.key_mask,keepIndex:0,newKey:null};});
+  chatState.searchList.forEach(function(e,i){e.keepIndex=i;});
+  renderVisionCascade();
+  renderSearchCascade();
+}
+function renderVisionCascade(){
+  var el=document.getElementById('visionCascade');
+  var list=chatState.visionList;
+  el.innerHTML=list.length?list.map(function(name,i){
+    return '<div class="cascade-row"><span class="cascade-rank">'+(i+1)+'</span>'+
+      '<span class="cascade-label">'+esc(name)+'</span>'+
+      '<span class="cascade-actions">'+
+      (i>0?'<button type="button" class="btn-link" title="Move up" onclick="moveVision('+i+',-1)">&uarr;</button>':'<span class="cascade-spacer"></span>')+
+      (i<list.length-1?'<button type="button" class="btn-link" title="Move down" onclick="moveVision('+i+',1)">&darr;</button>':'<span class="cascade-spacer"></span>')+
+      '<button type="button" class="btn-link" style="color:var(--red)" title="Remove" onclick="removeVision('+i+')">&times;</button>'+
+      '</span></div>';
+  }).join(''):'<p class="hint">No vision models configured — images sent to non-vision models will be rejected.</p>';
+  var sel=document.getElementById('visionAddSelect');
+  var avail=chatState.models.filter(function(m){return m.supports_vision&&list.indexOf(m.name)<0;});
+  sel.innerHTML=avail.length?avail.map(function(m){return '<option value="'+escAttr(m.name)+'">'+esc(m.name)+'</option>';}).join(''):'<option value="">No vision-capable models available</option>';
+}
+function addVisionModel(){
+  var sel=document.getElementById('visionAddSelect');
+  if(!sel.value)return;
+  chatState.visionList.push(sel.value);
+  renderVisionCascade();
+}
+function moveVision(i,dir){
+  var list=chatState.visionList,j=i+dir;
+  if(j<0||j>=list.length)return;
+  var t=list[i];list[i]=list[j];list[j]=t;
+  renderVisionCascade();
+}
+function removeVision(i){ chatState.visionList.splice(i,1); renderVisionCascade(); }
+
+function renderSearchCascade(){
+  var el=document.getElementById('searchCascade');
+  var list=chatState.searchList;
+  el.innerHTML=list.length?list.map(function(e,i){
+    return '<div class="cascade-row"><span class="cascade-rank">'+(i+1)+'</span>'+
+      '<span class="tag" style="text-transform:capitalize">'+esc(e.provider)+'</span>'+
+      '<code class="cascade-label">'+esc(e.newKey?maskNewKey(e.newKey):e.keyMask)+'</code>'+
+      '<span class="cascade-actions">'+
+      (i>0?'<button type="button" class="btn-link" title="Move up" onclick="moveSearch('+i+',-1)">&uarr;</button>':'<span class="cascade-spacer"></span>')+
+      (i<list.length-1?'<button type="button" class="btn-link" title="Move down" onclick="moveSearch('+i+',1)">&darr;</button>':'<span class="cascade-spacer"></span>')+
+      '<button type="button" class="btn-link" title="Replace key" onclick="rotateSearch('+i+')">Change</button>'+
+      '<button type="button" class="btn-link" style="color:var(--red)" title="Remove" onclick="removeSearch('+i+')">&times;</button>'+
+      '</span></div>';
+  }).join(''):'<p class="hint">No web search providers configured — search tools are disabled.</p>';
+}
+function maskNewKey(k){ return k.length>9?k.slice(0,7)+'...'+k.slice(-2):k; }
+function addSearchKey(){
+  var provider=document.getElementById('searchAddProvider').value;
+  var key=document.getElementById('searchAddKey').value.trim();
+  if(!key){flash('Enter an API key','error');return;}
+  chatState.searchList.push({provider:provider,keyMask:'',keepIndex:null,newKey:key});
+  document.getElementById('searchAddKey').value='';
+  renderSearchCascade();
+}
+function moveSearch(i,dir){
+  var list=chatState.searchList,j=i+dir;
+  if(j<0||j>=list.length)return;
+  var t=list[i];list[i]=list[j];list[j]=t;
+  renderSearchCascade();
+}
+function removeSearch(i){ chatState.searchList.splice(i,1); renderSearchCascade(); }
+function rotateSearch(i){
+  var k=prompt('New API key for this entry:');
+  if(!k)return;
+  chatState.searchList[i].newKey=k.trim();
+  renderSearchCascade();
+}
+function saveHelpers(){
+  var body={
+    audio:chatState.helpers.legacy_audio||'',ocr:chatState.helpers.legacy_ocr||'',
+    vision_models:chatState.visionList,
+    web_search_keys:chatState.searchList.map(function(e){return {provider:e.provider,key:e.newKey||null,keep_index:e.newKey?null:e.keepIndex};})
+  };
+  apiPost('/admin/processors/mutate',body).then(function(r){
+    if(!r.ok){flash(r.json.error&&r.json.error.message||'Save failed','error');return;}
+    flash('Model helpers saved','success');loadModels();
+  });
+}
+function openModel(name){var m=name?chatState.models.find(function(x){return x.name===name;}):null;chatState.editing=name;var f=document.getElementById('modelForm');f.reset();document.getElementById('modelTitle').textContent=m?name:'Add model';document.getElementById('backendRows').innerHTML='';if(m){['name','type','model','timeout','context_window','region','aws_access_key'].forEach(function(k){if(f.elements[k])f.elements[k].value=m[k]||'';});f.elements.supports_vision.checked=!!m.supports_vision;f.elements.rewrite_vision.value=m.rewrite_vision||(m.force_pipeline?'on':'');f.elements.rewrite_documents.value=m.rewrite_documents||(m.force_pipeline?'on':'');f.elements.rewrite_web_search.value=m.rewrite_web_search||(m.force_pipeline?'on':'');var d=m.defaults||{};['temperature','top_p','top_k','reasoning_effort'].forEach(function(k){f.elements[k].value=d[k]==null?'':d[k];});(m.backends||[]).forEach(addBackend);}else{f.elements.timeout.value=300;addBackend(null);}toggleBedrock();updateAutoHints();document.getElementById('modelErr').style.display='none';document.getElementById('modelModal').classList.add('open');}
 function closeModel(){document.getElementById('modelModal').classList.remove('open');chatState.editing=null;}
 function toggleBedrock(){document.getElementById('bedrockFields').style.display=document.getElementById('modelForm').elements.type.value==='bedrock'?'':'none';}
-function addBackend(b){b=b||{url:'',weight:1,max_inflight:0,disabled:false};var row=document.createElement('div');row.className='card backend-row';row.style.marginBottom='10px';row.innerHTML='<div class="field-grid"><div class="field field-full"><label>Server URL</label><input class="be-url" type="url" placeholder="http://server:8000/v1" value="'+escAttr(b.url||'')+'"></div><div class="field"><label>API key</label><div class="secret-row"><input class="be-key" type="password" placeholder="'+escAttr(b.has_api_key?(b.api_key_mask+' — leave blank to keep'):'optional')+'"><button type="button" class="btn btn-danger btn-sm" onclick="clearBackendKey(this)">Clear</button></div></div><div class="field"><label>Weight</label><input class="be-weight" type="number" min="1" value="'+(b.weight||1)+'"></div><div class="field"><label>Max concurrent (0 = unlimited)</label><input class="be-max" type="number" min="0" value="'+(b.max_inflight||0)+'"></div><div class="field checkbox-row"><input class="be-disabled" type="checkbox" '+(b.disabled?'checked':'')+'><label>Temporarily disabled</label></div></div><div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button type="button" class="btn btn-secondary btn-sm be-test">Test</button><button type="button" class="btn btn-danger btn-sm be-remove">Remove</button><span class="be-status mono"></span></div>';row.dataset.originalUrl=b.url||'';row.dataset.hasKey=b.has_api_key?'1':'0';row.dataset.clearKey='0';row.querySelector('.be-remove').onclick=function(){row.remove();};row.querySelector('.be-key').oninput=function(){row.dataset.clearKey='0';};row.querySelector('.be-test').onclick=function(){testBackend(row);};document.getElementById('backendRows').appendChild(row);}
-function clearBackendKey(btn){var row=btn.closest('.backend-row'),input=row.querySelector('.be-key');input.value='';input.placeholder='will be cleared on save';row.dataset.clearKey='1';}
-function testBackend(row){var u=row.querySelector('.be-url').value.trim(),key=row.querySelector('.be-key').value,s=row.querySelector('.be-status');if(!u){s.textContent='Enter a URL';return;}s.textContent='Testing…';var body={url:u,model:chatState.editing||'',type:document.getElementById('modelForm').elements.type.value};if(key)body.api_key=key;apiPost('/admin/backends/probe',body).then(function(r){s.textContent=r.ok?(r.json.engine?'Connected · '+r.json.engine:'Connected'):(r.json.error&&r.json.error.message||'Failed');s.style.color=r.ok?'var(--success)':'var(--danger)';});}
-function collectBackends(){return Array.from(document.querySelectorAll('#backendRows .backend-row')).map(function(r){var b={url:r.querySelector('.be-url').value.trim(),weight:parseInt(r.querySelector('.be-weight').value,10)||1,max_inflight:parseInt(r.querySelector('.be-max').value,10)||0,disabled:r.querySelector('.be-disabled').checked};var k=r.querySelector('.be-key').value;if(k)b.api_key=k;else if(r.dataset.clearKey==='1')b.api_key='';return b;});}
-function saveModel(e){e.preventDefault();var f=e.target,backends=collectBackends(),err=document.getElementById('modelErr');err.style.display='none';if(!f.elements.name.value.trim()||!backends.length||backends.some(function(b){return !b.url;})){err.textContent='Name and at least one backend URL are required.';err.style.display='block';return;}var body={name:f.elements.name.value.trim(),type:f.elements.type.value,model:f.elements.model.value.trim(),timeout:parseInt(f.elements.timeout.value,10)||300,context_window:parseInt(f.elements.context_window.value,10)||0,supports_vision:f.elements.supports_vision.checked,force_pipeline:f.elements.force_pipeline.checked,responses_mode:f.elements.responses_mode.value,messages_mode:f.elements.messages_mode.value,region:f.elements.region.value.trim(),aws_access_key:f.elements.aws_access_key.value.trim(),backends:backends};var d={};['temperature','top_p'].forEach(function(k){if(f.elements[k].value!=='')d[k]=parseFloat(f.elements[k].value);});if(f.elements.top_k.value!=='')d.top_k=parseInt(f.elements.top_k.value,10);if(f.elements.reasoning_effort.value)d.reasoning_effort=f.elements.reasoning_effort.value;body.defaults=d;if(f.elements.aws_secret_key.value)body.aws_secret_key=f.elements.aws_secret_key.value;if(f.elements.aws_session_token.value)body.aws_session_token=f.elements.aws_session_token.value;var payload=chatState.editing?{action:'update',original_name:chatState.editing,model:body}:{action:'add',model:body};var btn=document.getElementById('modelSave');btn.disabled=true;apiPost('/admin/models/mutate',payload).then(function(r){btn.disabled=false;if(!r.ok){err.textContent=r.json.error&&r.json.error.message||'Save failed';err.style.display='block';return;}closeModel();flash('Chat model saved','success');loadModels();});}
-function deleteModel(name){if(!confirm('Delete chat model "'+name+'"?'))return;apiPost('/admin/models/mutate',{action:'delete',name:name}).then(function(r){if(!r.ok){flash(r.json.error&&r.json.error.message||'Delete failed','error');return;}flash('Deleted','success');loadModels();});}
-document.addEventListener('keydown',function(e){if(e.key==='Escape')closeModel();});loadModels();`
+function updateAutoHints(){
+  var visionAuto=document.getElementById('modelForm').elements.supports_vision.checked?'off':'on';
+  ['rewriteVisionSelect','rewriteDocumentsSelect'].forEach(function(id){var sel=document.getElementById(id);if(sel&&sel.options[0])sel.options[0].textContent='Auto ('+visionAuto+')';});
+  var searchSel=document.getElementById('rewriteSearchSelect');
+  if(searchSel&&searchSel.options[0]){var searchAuto=(chatState.helpers&&chatState.helpers.has_search_key)?'on':'off';searchSel.options[0].textContent='Auto ('+searchAuto+')';}
+}
+function addBackend(b){b=b||{url:'',weight:1,max_inflight:0,disabled:false};var row=document.createElement('div');row.className='be-row-wrap';row.dataset.originalUrl=b.url||'';row.dataset.hasKey=b.has_api_key?'1':'0';row.dataset.clearKey='0';
+var dotTitle=b.url?(b.disabled?'disabled':(b.online===true?('online \u00b7 '+(b.inflight||0)+' in-flight \u00b7 breaker '+(b.breaker||'closed')):(b.online===false?('offline: '+(b.error||'')):'no health data'))):'new backend';
+var dotCls=b.disabled?'health-unknown':(b.online===true?'health-online':(b.online===false?'health-offline':'health-unknown'));
+row.innerHTML='<div class="be-row">'+
+ '<span><span class="health-dot '+dotCls+'" title="'+escAttr(dotTitle)+'"></span></span>'+
+ '<input class="be-url" type="url" placeholder="http://server:8000/v1" value="'+escAttr(b.url||'')+'">'+
+ '<span class="be-keywrap"><input class="be-key" type="password" placeholder="'+escAttr(b.has_api_key?(b.api_key_mask+' \u2014 blank keeps'):'optional')+'"><button type="button" class="copy-icon be-clearkey" title="Clear the stored key on save">&times;</button></span>'+
+ '<input class="be-weight" type="number" min="1" value="'+(b.weight||1)+'" title="Load-balancing weight">'+
+ '<input class="be-max" type="number" min="0" value="'+(b.max_inflight||0)+'" title="Max concurrent (0 = unlimited)">'+
+ '<span style="text-align:center"><input class="be-disabled" type="checkbox" '+(b.disabled?'checked':'')+' title="Temporarily disabled"></span>'+
+ '<span class="be-actions"><button type="button" class="btn btn-secondary btn-sm be-test">Test</button><button type="button" class="btn btn-danger btn-sm btn-icon be-remove" title="Remove backend"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2.5 4h11M5.5 4V2.5h5V4M4 4l.7 9.5h6.6L12 4M6.5 6.8v4.4M9.5 6.8v4.4"/></svg></button></span>'+
+ '</div>'+
+ '<div class="be-note"><span class="be-status mono"'+((b.online===false&&b.error)?' style="color:var(--red)"':'')+'>'+((b.online===false&&b.error)?esc(b.error):'')+'</span></div>';
+if(!(b.online===false&&b.error))row.querySelector('.be-note').style.display='none';
+row.querySelector('.be-remove').onclick=function(){row.remove();};
+row.querySelector('.be-key').oninput=function(){row.dataset.clearKey='0';};
+row.querySelector('.be-clearkey').onclick=function(){var i=row.querySelector('.be-key');i.value='';i.placeholder='will be cleared on save';row.dataset.clearKey='1';};
+row.querySelector('.be-test').onclick=function(){testBackend(row);};
+document.getElementById('backendRows').appendChild(row);}
+function testBackend(row){var u=row.querySelector('.be-url').value.trim(),key=row.querySelector('.be-key').value,s=row.querySelector('.be-status');row.querySelector('.be-note').style.display='';if(!u){s.textContent='Enter a URL';return;}s.textContent='Testing\u2026';var body={url:u,model:chatState.editing||'',upstream_model:(document.getElementById('modelForm').elements.model.value.trim()||document.getElementById('modelForm').elements.name.value.trim()),type:document.getElementById('modelForm').elements.type.value};if(key)body.api_key=key;apiPost('/admin/backends/probe',body).then(function(r){
+  if(!r.ok){s.innerHTML='';s.textContent=(r.json.error&&r.json.error.message)||'Failed';s.style.color='var(--danger)';return;}
+  var txt=r.json.engine?'Connected \u00b7 '+r.json.engine:'Connected';
+  if(r.json.context_window){
+    txt+=' \u00b7 context '+Number(r.json.context_window).toLocaleString();
+    s.innerHTML=esc(txt)+' <button type="button" class="btn-link" onclick="applyContextWindow('+r.json.context_window+')">Use</button>';
+  } else {
+    s.textContent=txt;
+  }
+  s.style.color='var(--success)';
+});}
+function applyContextWindow(n){ document.getElementById('modelForm').elements.context_window.value=n; flash('Context window set to '+Number(n).toLocaleString(),'success'); }
+function detectContextWindow(btn){
+  var rows=Array.from(document.querySelectorAll('#backendRows .be-row-wrap'));
+  var row=rows.find(function(r){return r.querySelector('.be-url').value.trim();});
+  var status=document.getElementById('ctxDetectStatus');
+  status.style.display='';
+  if(!row){status.textContent='Add a backend URL first.';status.style.color='var(--red)';return;}
+  var u=row.querySelector('.be-url').value.trim(),key=row.querySelector('.be-key').value;
+  var body={url:u,model:chatState.editing||'',upstream_model:(document.getElementById('modelForm').elements.model.value.trim()||document.getElementById('modelForm').elements.name.value.trim()),type:document.getElementById('modelForm').elements.type.value};
+  if(key)body.api_key=key;
+  btn.disabled=true;status.textContent='Checking '+u+'\u2026';status.style.color='var(--steel)';
+  apiPost('/admin/backends/probe',body).then(function(r){
+    btn.disabled=false;
+    if(!r.ok){status.textContent=(r.json.error&&r.json.error.message)||'Probe failed';status.style.color='var(--red)';return;}
+    if(r.json.context_window){
+      document.getElementById('modelForm').elements.context_window.value=r.json.context_window;
+      status.textContent='Detected '+Number(r.json.context_window).toLocaleString()+' from '+u;
+      status.style.color='var(--ok)';
+    } else {
+      status.textContent='This backend\u2019s API does not publish a context window \u2014 enter it manually from the provider\u2019s docs.';
+      status.style.color='var(--steel)';
+    }
+  });
+}
+function collectBackends(){return Array.from(document.querySelectorAll('#backendRows .be-row-wrap')).map(function(r){var b={url:r.querySelector('.be-url').value.trim(),weight:parseInt(r.querySelector('.be-weight').value,10)||1,max_inflight:parseInt(r.querySelector('.be-max').value,10)||0,disabled:r.querySelector('.be-disabled').checked};var k=r.querySelector('.be-key').value;if(k)b.api_key=k;else if(r.dataset.clearKey==='1')b.api_key='';return b;});}
+function saveModel(e){e.preventDefault();var f=e.target,backends=collectBackends(),err=document.getElementById('modelErr');err.style.display='none';if(!f.elements.name.value.trim()||!backends.length||backends.some(function(b){return !b.url;})){err.textContent='Name and at least one backend URL are required.';err.style.display='block';return;}var body={name:f.elements.name.value.trim(),type:f.elements.type.value,model:f.elements.model.value.trim(),timeout:parseInt(f.elements.timeout.value,10)||300,context_window:parseInt(f.elements.context_window.value,10)||0,supports_vision:f.elements.supports_vision.checked,rewrite_vision:f.elements.rewrite_vision.value,rewrite_documents:f.elements.rewrite_documents.value,rewrite_web_search:f.elements.rewrite_web_search.value,region:f.elements.region.value.trim(),aws_access_key:f.elements.aws_access_key.value.trim(),backends:backends};var d={};['temperature','top_p'].forEach(function(k){if(f.elements[k].value!=='')d[k]=parseFloat(f.elements[k].value);});if(f.elements.top_k.value!=='')d.top_k=parseInt(f.elements.top_k.value,10);if(f.elements.reasoning_effort.value)d.reasoning_effort=f.elements.reasoning_effort.value;body.defaults=d;if(f.elements.aws_secret_key.value)body.aws_secret_key=f.elements.aws_secret_key.value;if(f.elements.aws_session_token.value)body.aws_session_token=f.elements.aws_session_token.value;var payload=chatState.editing?{action:'update',original_name:chatState.editing,model:body}:{action:'add',model:body};var btn=document.getElementById('modelSave');btn.disabled=true;apiPost('/admin/models/mutate',payload).then(function(r){btn.disabled=false;if(!r.ok){err.textContent=r.json.error&&r.json.error.message||'Save failed';err.style.display='block';return;}closeModel();flash('Model saved','success');loadModels();});}
+function deleteModel(name){openConfirm('Delete model','Delete model <strong>'+esc(name)+'</strong>? Its backends are removed from the running config immediately.','','Delete model',function(){apiPost('/admin/models/mutate',{action:'delete',name:name}).then(function(r){if(!r.ok){flash(r.json.error&&r.json.error.message||'Delete failed','error');return;}flash('Deleted','success');loadModels();});});}
+function switchLLMTab(t){
+var h=t==='helpers';
+document.getElementById('pane-models').style.display=h?'none':'';
+document.getElementById('pane-helpers').style.display=h?'':'none';
+document.getElementById('subtabModels').classList.toggle('active',!h);
+document.getElementById('subtabHelpers').classList.toggle('active',h);
+if(history.replaceState)history.replaceState(null,'',h?'?tab=helpers':location.pathname);
+}
+if(location.search.indexOf('tab=helpers')>=0)switchLLMTab('helpers');
+document.addEventListener('keydown',function(e){if(e.key==='Escape')closeModel();});attachFilter('modelFilter','modelsBody');loadModels();`
 }

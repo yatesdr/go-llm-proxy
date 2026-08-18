@@ -17,10 +17,11 @@ import (
 	"go-llm-proxy/internal/lb"
 )
 
-// AudioHandler exposes the standard OpenAI audio routes while keeping their
-// capacity separate from chat models. If a route has not been configured in
-// the dedicated audio section, requests fall back to the generic proxy so old
-// model-based audio configurations continue working during migration.
+// AudioHandler exposes OpenAI-compatible audio routes and TTS voice discovery
+// while keeping their capacity separate from chat models. If a model-bearing
+// route has not been configured in the dedicated audio section, requests fall
+// back to the generic proxy so old model-based audio configurations continue
+// working during migration.
 type AudioHandler struct {
 	config   *config.ConfigStore
 	fallback http.Handler
@@ -33,17 +34,42 @@ func NewAudioHandler(cs *config.ConfigStore, fallback http.Handler) *AudioHandle
 func (h *AudioHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	cfg := h.config.Get()
 	var audio *config.AudioModelConfig
+	isVoiceDiscovery := false
 	switch r.URL.Path {
 	case "/v1/audio/transcriptions", "/v1/audio/translations":
 		audio = cfg.Audio.Whisper
 	case "/v1/audio/speech":
 		audio = cfg.Audio.TTS
+	case "/v1/audio/voices":
+		audio = cfg.Audio.TTS
+		isVoiceDiscovery = true
 	default:
 		httputil.WriteError(w, http.StatusNotFound, "unsupported audio endpoint")
 		return
 	}
+	if isVoiceDiscovery && r.Method != http.MethodGet {
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
 	if audio == nil {
+		// Voice discovery has no model field, so it cannot use the legacy
+		// model-based proxy fallback to select a backend.
+		if isVoiceDiscovery {
+			httputil.WriteError(w, http.StatusServiceUnavailable, "text-to-speech is not configured")
+			return
+		}
 		h.fallback.ServeHTTP(w, r)
+		return
+	}
+	if isVoiceDiscovery {
+		if !auth.KeyAllowsModel(auth.KeyFromContext(r.Context()), audio.Name) {
+			httputil.WriteError(w, http.StatusForbidden, "not authorized for requested model")
+			return
+		}
+		proxyWorkload(w, r, workloadRequest{
+			Name: audio.Name, Backends: audio.Backends,
+			UpstreamPath: "/audio/voices", Timeout: audio.Timeout, BackendType: config.BackendOpenAI,
+		})
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -171,21 +197,56 @@ func proxyWorkload(w http.ResponseWriter, r *http.Request, wr workloadRequest) {
 	defer resp.Body.Close()
 	lb.RecordOutcome(selected.URL, resp.StatusCode < 500)
 
+	contentType := resp.Header.Get("Content-Type")
+	isAudioResponse := strings.HasPrefix(strings.ToLower(contentType), "audio/")
 	for _, header := range []string{"Content-Type", "Content-Disposition", "X-Request-ID", "Request-Id"} {
 		if value := resp.Header.Get(header); value != "" {
 			w.Header().Set(header, value)
 		}
 	}
 	httputil.SetSecurityHeaders(w)
+	if isAudioResponse {
+		// Kokoro emits this header on streaming responses. Set it explicitly
+		// for every audio response so nginx does not buffer the first chunks.
+		w.Header().Set("X-Accel-Buffering", "no")
+	}
 	w.WriteHeader(resp.StatusCode)
-	if _, err := io.Copy(w, io.LimitReader(resp.Body, api.MaxResponseBodySize)); err != nil {
+	if err := copyWorkloadResponse(w, resp.Body, isAudioResponse); err != nil && r.Context().Err() == nil {
 		slog.Warn("processor response interrupted", "workload", wr.Name, "error", err)
 	}
 }
 
+type flushingWriter struct {
+	w       io.Writer
+	flusher http.Flusher
+}
+
+func (w flushingWriter) Write(p []byte) (int, error) {
+	n, err := w.w.Write(p)
+	if n > 0 {
+		w.flusher.Flush()
+	}
+	return n, err
+}
+
+// copyWorkloadResponse preserves the response-size bound used by all workload
+// adapters. Audio responses flush their headers immediately and every copied
+// chunk so interactive playback can begin before synthesis completes.
+func copyWorkloadResponse(w http.ResponseWriter, body io.Reader, flush bool) error {
+	var dst io.Writer = w
+	if flush {
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+			dst = flushingWriter{w: w, flusher: flusher}
+		}
+	}
+	_, err := io.Copy(dst, io.LimitReader(body, api.MaxResponseBodySize))
+	return err
+}
+
 func doWorkloadRequest(ctx context.Context, client *http.Client, original *http.Request, backend *config.BackendConfig, wr workloadRequest) (*http.Response, error) {
 	upstreamURL := strings.TrimRight(backend.URL, "/") + "/" + strings.TrimLeft(wr.UpstreamPath, "/")
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(wr.Body))
+	req, err := http.NewRequestWithContext(ctx, original.Method, upstreamURL, bytes.NewReader(wr.Body))
 	if err != nil {
 		return nil, fmt.Errorf("create upstream request: %w", err)
 	}

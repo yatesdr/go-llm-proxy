@@ -196,6 +196,23 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Anthropic backends expose Messages rather than Chat Completions. The
+	// dedicated bridge translates both request and response shapes while
+	// preserving the Chat pipeline, model defaults, sticky backend selection,
+	// failover, tools, and streaming semantics.
+	if model.Type == config.BackendAnthropic && isChatCompletions {
+		keyName, keyHash := "", ""
+		if key != nil {
+			keyName = key.Name
+			keyHash = usage.HashKey(key.Key)
+		}
+		slog.Info("proxying chat completions request (anthropic translation)",
+			"model", modelName, "key", keyName)
+		p.handleAnthropicChat(w, r, body, modelName, model, cfg, parsedChatReq,
+			searchEnabled, keyName, keyHash, time.Now())
+		return
+	}
+
 	// Build the upstream URL.
 	relPath := cleanPath
 	if model.Type != config.BackendAnthropic {
@@ -667,6 +684,15 @@ func (p *ProxyHandler) reStreamFromBackend(ctx context.Context, w http.ResponseW
 	newBody, err := json.Marshal(chatReq)
 	if err != nil {
 		slog.Error("proxy search re-stream: marshal failed", "error", err)
+		return
+	}
+	flush := func() {
+		if canFlush {
+			flusher.Flush()
+		}
+	}
+	if model.Type == config.BackendAnthropic {
+		p.reStreamFromAnthropic(ctx, w, newBody, model, flush)
 		return
 	}
 

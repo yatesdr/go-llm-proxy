@@ -49,29 +49,89 @@ func (p *Pipeline) BodyNeedsProcessing(body []byte) bool {
 	return false
 }
 
-// ShouldProcess returns whether the pipeline should run for the given model.
-// Native Anthropic backends skip the pipeline unless force_pipeline is set.
+// ShouldProcess returns whether any pipeline stage should run for the given
+// model — a fast pre-check so handlers can skip the pipeline entirely when
+// no interception stage is enabled.
 func (p *Pipeline) ShouldProcess(model *config.ModelConfig) bool {
-	if model.Type == config.BackendAnthropic && !model.ForcePipeline {
-		return false
-	}
-	return true
+	return p.shouldRewriteVision(model) || p.shouldRewriteDocuments(model) || p.shouldRewriteSearch(model)
 }
 
-// resolveVisionProcessor returns the model name to use for vision processing
-// for the given target model. Returns "" if vision processing is disabled.
-func (p *Pipeline) resolveVisionProcessor(targetModel *config.ModelConfig) string {
+// shouldRewriteVision reports whether the proxy should intercept image_url
+// content for this model (describe it via the vision cascade) rather than
+// forwarding it as-is. Auto follows the "Vision capable" flag — a model that
+// can't accept images itself gets the fallback; one that can is left alone.
+// Upstream protocol plays no part: an Anthropic-shaped backend is not
+// necessarily real Claude, and a non-vision-capable model needs the same
+// help regardless of which protocol it speaks.
+func (p *Pipeline) shouldRewriteVision(model *config.ModelConfig) bool {
+	switch model.RewriteVision {
+	case "on":
+		return true
+	case "off":
+		return false
+	default:
+		return model.ForcePipeline || !model.SupportsVision
+	}
+}
+
+// shouldRewriteDocuments reports whether the proxy should intercept pdf_data
+// content for this model (native text extraction, the Documents-tab
+// processor, OCR, or vision-PDF fallback) rather than forwarding it as-is.
+// Auto shares the "Vision capable" signal with shouldRewriteVision: native PDF
+// understanding is built on vision capability in practice, so a model that
+// can't accept images natively is assumed unable to handle raw PDFs either.
+func (p *Pipeline) shouldRewriteDocuments(model *config.ModelConfig) bool {
+	switch model.RewriteDocuments {
+	case "on":
+		return true
+	case "off":
+		return false
+	default:
+		return model.ForcePipeline || !model.SupportsVision
+	}
+}
+
+// shouldRewriteSearch reports whether the proxy should inject/convert the
+// web_search tool for this model. Auto activates only when a search key
+// actually resolves for this model — protocol plays no part, since a
+// third-party Anthropic-shaped backend has no native search tool of its own
+// any more than an OpenAI-shaped one does. Force off opts a specific model
+// out even when a search key is configured; force on has no separate effect
+// beyond auto today, since there is nothing to force without a key.
+func (p *Pipeline) shouldRewriteSearch(model *config.ModelConfig) bool {
+	switch model.RewriteWebSearch {
+	case "on":
+		return true
+	case "off":
+		return false
+	default:
+		return len(p.ResolveSearchEntries(model)) > 0
+	}
+}
+
+// resolveVisionProcessors returns the priority-ordered vision cascade for the
+// given target model. A per-model override (single model, or "none") beats the
+// global cascade. Empty result = vision processing disabled.
+func (p *Pipeline) resolveVisionProcessors(targetModel *config.ModelConfig) []string {
 	// Per-model override takes precedence.
 	if targetModel.Processors != nil {
 		if targetModel.Processors.Vision == "none" {
-			return ""
+			return nil
 		}
 		if targetModel.Processors.Vision != "" {
-			return targetModel.Processors.Vision
+			return []string{targetModel.Processors.Vision}
 		}
 	}
-	// Fall back to global config.
-	return p.config.Get().Processors.Vision
+	// Fall back to the global cascade.
+	return p.config.Get().Processors.EffectiveVisionModels()
+}
+
+// resolveVisionProcessor returns the head of the vision cascade ("" = disabled).
+func (p *Pipeline) resolveVisionProcessor(targetModel *config.ModelConfig) string {
+	if l := p.resolveVisionProcessors(targetModel); len(l) > 0 {
+		return l[0]
+	}
+	return ""
 }
 
 // resolveOCRProcessor returns the model name to use for OCR processing
@@ -95,18 +155,27 @@ func (p *Pipeline) resolveOCRProcessor(targetModel *config.ModelConfig) string {
 	return p.resolveVisionProcessor(targetModel)
 }
 
-// ResolveWebSearchKey returns the Tavily API key for the given target model.
-// Returns "" if web search is disabled for this model.
-func (p *Pipeline) ResolveWebSearchKey(targetModel *config.ModelConfig) string {
-	// Per-model override takes precedence.
+// ResolveSearchEntries returns the priority-ordered web-search cascade for the
+// given target model. A per-model override (single key, or "none") beats the
+// global cascade. Empty result = web search disabled.
+func (p *Pipeline) ResolveSearchEntries(targetModel *config.ModelConfig) []config.WebSearchKeyEntry {
 	if targetModel.Processors != nil && targetModel.Processors.WebSearchKey != "" {
 		if targetModel.Processors.WebSearchKey == "none" {
-			return ""
+			return nil
 		}
-		return targetModel.Processors.WebSearchKey
+		k := targetModel.Processors.WebSearchKey
+		return []config.WebSearchKeyEntry{{Provider: config.InferSearchProvider(k), Key: k}}
 	}
-	// Fall back to global config.
-	return p.config.Get().Processors.WebSearchKey
+	return p.config.Get().Processors.EffectiveSearchKeys()
+}
+
+// ResolveWebSearchKey returns the head key of the search cascade ("" = disabled).
+// Kept for enablement checks; execution should use the cascade.
+func (p *Pipeline) ResolveWebSearchKey(targetModel *config.ModelConfig) string {
+	if e := p.ResolveSearchEntries(targetModel); len(e) > 0 {
+		return e[0].Key
+	}
+	return ""
 }
 
 // ProcessRequest runs pre-send processors on a translated Chat Completions request.
@@ -114,17 +183,26 @@ func (p *Pipeline) ResolveWebSearchKey(targetModel *config.ModelConfig) string {
 func (p *Pipeline) ProcessRequest(ctx context.Context, chatReq map[string]any,
 	targetModel *config.ModelConfig) (map[string]any, error) {
 
-	if !p.ShouldProcess(targetModel) {
+	rewriteVisionEnabled := p.shouldRewriteVision(targetModel)
+	rewriteDocumentsEnabled := p.shouldRewriteDocuments(targetModel)
+	rewriteSearchEnabled := p.shouldRewriteSearch(targetModel)
+	if !rewriteVisionEnabled && !rewriteDocumentsEnabled && !rewriteSearchEnabled {
 		return chatReq, nil
 	}
 
 	cfg := p.config.Get()
 
-	// Resolve the vision model once (used by both image and PDF processing).
-	visionModelName := p.resolveVisionProcessor(targetModel)
+	// Resolve the vision cascade once (used by both image and PDF processing).
+	// Entries that are the target itself are dropped (pointless round-trip).
+	var visionModels []*config.ModelConfig
+	for _, name := range p.resolveVisionProcessors(targetModel) {
+		if m := config.FindModel(cfg, name); m != nil && m.Name != targetModel.Name {
+			visionModels = append(visionModels, m)
+		}
+	}
 	var visionModel *config.ModelConfig
-	if visionModelName != "" {
-		visionModel = config.FindModel(cfg, visionModelName)
+	if len(visionModels) > 0 {
+		visionModel = visionModels[0]
 	}
 
 	// Resolve the OCR model (used for PDF page images). Falls back to vision model.
@@ -138,13 +216,17 @@ func (p *Pipeline) ProcessRequest(ctx context.Context, chatReq map[string]any,
 	// Runs before both image and PDF processors so that Chat Completions and
 	// Responses API clients (which have no structured PDF input) converge on
 	// the same internal shape as Anthropic's document blocks.
-	NormalizePDFDataURLs(chatReq)
+	if rewriteDocumentsEnabled {
+		NormalizePDFDataURLs(chatReq)
+	}
 
-	// Vision: route images to processor if target can't handle them natively.
-	// Skip if the vision model IS the target (avoid pointless round-trip).
-	if visionModel != nil && visionModel.Name != targetModel.Name && (!targetModel.SupportsVision || targetModel.ForcePipeline) {
+	// Vision: route images to processor if target can't handle them natively,
+	// or if rewrite_vision is explicitly "on" (force describing even though
+	// the model could accept the image directly). Gated independently of PDF
+	// handling — image_url content only.
+	if rewriteVisionEnabled && visionModel != nil && (!targetModel.SupportsVision || targetModel.RewriteVision == "on") {
 		var err error
-		chatReq, err = p.processImages(ctx, chatReq, visionModel, ocrModel)
+		chatReq, err = p.processImages(ctx, chatReq, visionModels, ocrModel)
 		if err != nil {
 			slog.Warn("vision processing error", "error", err)
 		}
@@ -152,16 +234,19 @@ func (p *Pipeline) ProcessRequest(ctx context.Context, chatReq map[string]any,
 
 	// PDF: text extraction (always attempted) with OCR/vision fallback for scanned pages.
 	// Prefers ocrModel for scanned PDFs; falls back to visionModel if no OCR model configured.
-	{
+	// Gated independently of image handling — pdf_data content only.
+	if rewriteDocumentsEnabled {
 		var err error
-		chatReq, err = p.processPDFs(ctx, chatReq, visionModel, ocrModel)
+		chatReq, err = p.processPDFs(ctx, chatReq, visionModels, ocrModel)
 		if err != nil {
 			slog.Warn("PDF processing error", "error", err)
 		}
 	}
 
 	// Web search: convert stripped server tools to function tools, or inject.
-	chatReq = p.convertOrInjectSearchTool(chatReq, targetModel)
+	if rewriteSearchEnabled {
+		chatReq = p.convertOrInjectSearchTool(chatReq, targetModel)
+	}
 
 	// Clean up internal metadata that shouldn't be sent to the backend.
 	delete(chatReq, InternalKeyStrippedTools)

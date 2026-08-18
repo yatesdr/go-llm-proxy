@@ -172,6 +172,48 @@ func (p *Pipeline) ExecuteWebSearch(ctx context.Context, apiKey, query string) (
 	return p.executeTavilySearch(ctx, apiKey, query)
 }
 
+// executeEntrySearch runs one cascade entry against its provider.
+func (p *Pipeline) executeEntrySearch(ctx context.Context, e config.WebSearchKeyEntry, query string) (string, []SearchHit, error) {
+	switch e.Provider {
+	case "brave":
+		return p.executeBraveSearch(ctx, e.Key, query)
+	case "tavily":
+		return p.executeTavilySearch(ctx, e.Key, query)
+	default:
+		return p.ExecuteWebSearch(ctx, e.Key, query)
+	}
+}
+
+// executeWebSearchCascade walks the search cascade in priority order,
+// returning the first provider's successful result. Later entries only run
+// when an earlier provider errors.
+func (p *Pipeline) executeWebSearchCascade(ctx context.Context, entries []config.WebSearchKeyEntry, query string) (string, []SearchHit, error) {
+	if len(entries) == 0 {
+		return "", nil, fmt.Errorf("no web search key configured")
+	}
+	var lastErr error
+	for i, e := range entries {
+		text, hits, err := p.executeEntrySearch(ctx, e, query)
+		if err == nil {
+			if i > 0 {
+				slog.Info("web search cascade fallback succeeded", "provider", e.Provider, "position", i+1)
+			}
+			return text, hits, nil
+		}
+		lastErr = err
+		if i < len(entries)-1 {
+			slog.Warn("web search provider failed, trying next", "provider", e.Provider, "position", i+1, "error", err)
+		}
+	}
+	return "", nil, lastErr
+}
+
+// ExecuteGlobalSearch runs the global web-search cascade (used by the MCP endpoint).
+func (p *Pipeline) ExecuteGlobalSearch(ctx context.Context, query string) (string, error) {
+	text, _, err := p.executeWebSearchCascade(ctx, p.config.Get().Processors.EffectiveSearchKeys(), query)
+	return text, err
+}
+
 // ExecuteTavilySearch calls the Tavily search API and returns formatted text results.
 // Wrapper for callers that don't need structured hits.
 func (p *Pipeline) ExecuteTavilySearch(ctx context.Context, apiKey, query string) (string, error) {
@@ -361,7 +403,7 @@ func appendMessagesToSlice(existing any, additional ...any) []any {
 // (toolResultMessages, searchResults, hasClientToolCalls). The searchResults
 // contain structured data for each search call, used by streaming handlers
 // to emit search result blocks to clients.
-func (p *Pipeline) executeSearchCalls(ctx context.Context, searchKey string,
+func (p *Pipeline) executeSearchCalls(ctx context.Context, entries []config.WebSearchKeyEntry,
 	toolCalls []api.ChatChoiceToolCall) (toolResults []any, searchResults []SearchCallResult, hasClientTools bool) {
 
 	for _, tc := range toolCalls {
@@ -383,7 +425,7 @@ func (p *Pipeline) executeSearchCalls(ctx context.Context, searchKey string,
 			args.Query = tc.Function.Arguments // best-effort fallback
 		}
 
-		result, hits, err := p.ExecuteWebSearch(ctx, searchKey, args.Query)
+		result, hits, err := p.executeWebSearchCascade(ctx, entries, args.Query)
 		scr := SearchCallResult{ToolUseID: tc.ID, Query: args.Query, Hits: hits}
 		if err != nil {
 			slog.Warn("web search failed", "query", args.Query, "error", err)
@@ -406,7 +448,7 @@ func (p *Pipeline) executeSearchCalls(ctx context.Context, searchKey string,
 // chatReq with updated messages, the structured search results, and whether
 // client-side tool calls were present.
 func (p *Pipeline) buildSearchContinuation(ctx context.Context, chatReq map[string]any,
-	searchKey string, toolCalls []api.ChatChoiceToolCall, assistantContent string) (map[string]any, []SearchCallResult, bool, error) {
+	entries []config.WebSearchKeyEntry, toolCalls []api.ChatChoiceToolCall, assistantContent string) (map[string]any, []SearchCallResult, bool, error) {
 
 	assistantMsg := map[string]any{
 		"role":       "assistant",
@@ -417,7 +459,7 @@ func (p *Pipeline) buildSearchContinuation(ctx context.Context, chatReq map[stri
 	}
 
 	newMessages := appendMessagesToSlice(chatReq["messages"], assistantMsg)
-	toolResults, searchResults, hasClientTools := p.executeSearchCalls(ctx, searchKey, toolCalls)
+	toolResults, searchResults, hasClientTools := p.executeSearchCalls(ctx, entries, toolCalls)
 	newMessages = append(newMessages, toolResults...)
 
 	newReq := make(map[string]any, len(chatReq))
@@ -439,8 +481,8 @@ func (p *Pipeline) HandleNonStreamingSearchLoop(ctx context.Context, chatReq map
 	sendRequest func(map[string]any) (*api.ChatResponse, error),
 	maxIterations int) (*api.ChatResponse, error) {
 
-	searchKey := p.ResolveWebSearchKey(model)
-	if searchKey == "" {
+	entries := p.ResolveSearchEntries(model)
+	if len(entries) == 0 {
 		return firstResp, nil
 	}
 
@@ -457,7 +499,7 @@ func (p *Pipeline) HandleNonStreamingSearchLoop(ctx context.Context, chatReq map
 		}
 
 		newReq, _, hasClientTools, err := p.buildSearchContinuation(
-			ctx, chatReq, searchKey, choice.Message.ToolCalls, content)
+			ctx, chatReq, entries, choice.Message.ToolCalls, content)
 		if err != nil {
 			return nil, fmt.Errorf("search continuation: %w", err)
 		}
@@ -491,12 +533,12 @@ func (p *Pipeline) HandleNonStreamingSearchLoop(ctx context.Context, chatReq map
 func (p *Pipeline) ExecuteSearchAndResend(ctx context.Context, chatReq map[string]any,
 	model *config.ModelConfig, toolCalls []api.ChatChoiceToolCall, assistantContent string) (map[string]any, []SearchCallResult, error) {
 
-	searchKey := p.ResolveWebSearchKey(model)
-	if searchKey == "" {
+	entries := p.ResolveSearchEntries(model)
+	if len(entries) == 0 {
 		return nil, nil, fmt.Errorf("no search key configured")
 	}
 
-	newReq, searchResults, _, err := p.buildSearchContinuation(ctx, chatReq, searchKey, toolCalls, assistantContent)
+	newReq, searchResults, _, err := p.buildSearchContinuation(ctx, chatReq, entries, toolCalls, assistantContent)
 	return newReq, searchResults, err
 }
 

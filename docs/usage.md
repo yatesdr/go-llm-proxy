@@ -38,6 +38,7 @@ Every proxied request logs a single row with:
 | `key_hash` | First 16 hex chars of SHA-256 of the API key (identifies the user without storing the key) |
 | `key_name` | Friendly name from config (e.g., "admin", "guest") |
 | `model` | Model name from the request |
+| `backend` | Upstream backend URL that served the request |
 | `endpoint` | Request path (e.g., `/v1/chat/completions`, `/v1/responses`, `/v1/messages`) |
 | `status_code` | HTTP status returned to the client |
 | `request_bytes` | Size of the request body forwarded upstream |
@@ -183,6 +184,7 @@ CREATE TABLE usage (
     key_hash       TEXT    NOT NULL,
     key_name       TEXT    NOT NULL DEFAULT '',
     model          TEXT    NOT NULL,
+    backend        TEXT    NOT NULL DEFAULT '',
     endpoint       TEXT    NOT NULL DEFAULT '',
     status_code    INTEGER NOT NULL DEFAULT 0,
     request_bytes  INTEGER NOT NULL DEFAULT 0,
@@ -195,3 +197,30 @@ CREATE TABLE usage (
 ```
 
 Indexed on `timestamp`, `key_hash`, and `model` for efficient reporting queries. The database uses WAL journaling and a 5-second busy timeout for safe concurrent access between the proxy writer and report/dashboard readers.
+
+## Growth over time
+
+**There is no automatic retention or pruning.** Every row logged stays in the
+database forever — the dashboard's 7/30/90-day range picker (and the
+`?days=N` parameter) only controls what's *displayed*; it never deletes
+anything. A fresh install starts at 0 bytes and grows for as long as logging
+stays on.
+
+Growth is driven by request volume, not elapsed time. As a real-world data
+point: a moderately busy deployment (~9,000 requests/day average) reached
+269,645 rows / 81MB after 30 days — roughly **300 bytes per logged request**
+(table + all three indexes). A quiet personal deployment might add a few MB
+a year; a busy shared one could add hundreds of MB to a few GB a year.
+
+SQLite handles multi-GB files fine, and WAL mode keeps the writer from
+blocking readers as it grows. There's currently no built-in command to prune
+old rows — if you want to cap disk usage, do it manually. Stop the proxy
+first (SQLite file operations aren't safe against a live writer):
+
+```bash
+sqlite3 /path/to/usage.db "DELETE FROM usage WHERE timestamp < datetime('now', '-180 days'); VACUUM;"
+```
+
+`VACUUM` is required after a bulk delete — SQLite doesn't shrink the file on
+disk on its own; without it the freed space stays allocated inside the file
+for reuse by future rows.

@@ -2,6 +2,7 @@ go-llm
 go-llm-proxy
 go-llm-proxy-*
 config.yaml
+.env
 .DS_Store
 claude-code-main/
 codex-main/

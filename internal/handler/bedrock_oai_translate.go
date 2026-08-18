@@ -43,9 +43,11 @@ type chatRequest struct {
 	MaxCompletionTokens *int              `json:"max_completion_tokens,omitempty"`
 	Temperature         *float64          `json:"temperature,omitempty"`
 	TopP                *float64          `json:"top_p,omitempty"`
+	TopK                *int              `json:"top_k,omitempty"`
 	Stop                json.RawMessage   `json:"stop,omitempty"`
 	Stream              bool              `json:"stream,omitempty"`
 	StreamOptions       json.RawMessage   `json:"stream_options,omitempty"`
+	ParallelToolCalls   *bool             `json:"parallel_tool_calls,omitempty"`
 	User                string            `json:"user,omitempty"`
 }
 

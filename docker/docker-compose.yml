@@ -5,8 +5,16 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:8080"
+    environment:
+      # Bootstrap credentials from .env — only used if config.yaml doesn't
+      # already set admin_password / usage_dashboard_password. See .env.example.
+      - GO_LLM_ADMIN_PASSWORD=${GO_LLM_ADMIN_PASSWORD:-}
+      - GO_LLM_USAGE_DASHBOARD_PASSWORD=${GO_LLM_USAGE_DASHBOARD_PASSWORD:-}
     volumes:
-      - ./config.yaml:/config/config.yaml:ro
+      # Mount the directory, not the file: the admin UI saves config changes
+      # via an atomic write+rename, which fails with "device or resource busy"
+      # against a single-file bind mount. Put config.yaml inside ./config/.
+      - ./config:/config
       - proxy-data:/data
 
 volumes:

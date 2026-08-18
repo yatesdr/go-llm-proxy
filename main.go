@@ -170,6 +170,10 @@ func main() {
 	}()
 
 	mux := http.NewServeMux()
+	mux.Handle("GET /healthz", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	}))
 	if *serveConfigPage || cfg.ServeConfigGenerator {
 		configPage := handler.NewConfigPageHandler(cs, healthStore)
 		mux.Handle("GET /{$}", configPage)
@@ -184,7 +188,7 @@ func main() {
 		slog.Info("usage dashboard enabled at /usage")
 	}
 	{
-		admin := handler.NewAdminHandler(cs, dashRl, healthStore)
+		admin := handler.NewAdminHandler(cs, dashRl, healthStore, ul)
 		mux.Handle("GET /admin", http.HandlerFunc(admin.Root))
 		mux.Handle("GET /admin/", http.HandlerFunc(admin.Root))
 		mux.Handle("GET /admin/login", http.HandlerFunc(admin.LoginPage))
@@ -230,6 +234,7 @@ func main() {
 	mux.Handle("POST /v1/audio/transcriptions", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, audio)))
 	mux.Handle("POST /v1/audio/translations", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, audio)))
 	mux.Handle("POST /v1/audio/speech", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, audio)))
+	mux.Handle("GET /v1/audio/voices", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, audio)))
 	mux.Handle("POST /layout-parsing", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, documents)))
 	mux.Handle("/v1/", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, proxy)))
 	mux.Handle("/anthropic/", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, proxy)))

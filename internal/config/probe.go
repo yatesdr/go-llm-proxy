@@ -25,6 +25,13 @@ type ProbeResult struct {
 // health checker uses), then best-effort engine and context-window detection
 // for OpenAI-compatible backends. Never blocks longer than ~10s.
 func ProbeBackend(backendURL, apiKey, backendType string) ProbeResult {
+	return ProbeBackendForModel(backendURL, apiKey, backendType, "")
+}
+
+// ProbeBackendForModel is ProbeBackend with a model ID hint, needed for
+// Anthropic (queries /v1/models/{id}) and Bedrock (looks up a static table
+// keyed by model ID) context-window detection.
+func ProbeBackendForModel(backendURL, apiKey, backendType, modelForDetection string) ProbeResult {
 	client := httputil.NewHTTPClient()
 	client.Timeout = 10 * time.Second
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
@@ -58,7 +65,20 @@ func ProbeBackend(backendURL, apiKey, backendType string) ProbeResult {
 	}
 	res.Reachable = true
 
-	if backendType == BackendAnthropic || backendType == BackendBedrock {
+	if backendType == BackendAnthropic {
+		if ctx, err := detectAnthropic(client, backendURL, modelForDetection, apiKey); err == nil && ctx > 0 {
+			res.Engine = "anthropic"
+			res.ContextWindow = ctx
+		} else {
+			res.Engine = "anthropic"
+		}
+		return res
+	}
+	if backendType == BackendBedrock {
+		res.Engine = "bedrock"
+		if ctx := lookupBedrockContextWindow(modelForDetection); ctx > 0 {
+			res.ContextWindow = ctx
+		}
 		return res
 	}
 

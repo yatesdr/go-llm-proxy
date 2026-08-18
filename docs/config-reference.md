@@ -12,8 +12,24 @@ go-llm-proxy is configured via a single YAML file (default: `config.yaml`). See 
 | `log_metrics` | `false` | Enable per-request usage logging to SQLite |
 | `usage_db` | `"usage.db"` | Path to the SQLite usage database |
 | `usage_dashboard` | `false` | Enable the usage dashboard at `/usage` |
-| `usage_dashboard_password` | — | Required when dashboard is enabled |
-| `admin_password` | — | Enables the admin UI at `/admin` on its own; when unset, `/admin` uses the dashboard password (and requires the dashboard to be enabled) |
+| `usage_dashboard_password` | — | Required when dashboard is enabled. Falls back to `GO_LLM_USAGE_DASHBOARD_PASSWORD` if unset — see below |
+| `admin_password` | — | Enables the admin UI at `/admin` on its own; when unset, `/admin` uses the dashboard password (and requires the dashboard to be enabled). Falls back to `GO_LLM_ADMIN_PASSWORD` if unset — see below |
+
+### Environment variable overrides
+
+`admin_password` and `usage_dashboard_password` can be set via environment
+variables instead of the config file — mainly useful for Docker, so a fresh
+deployment can bootstrap the admin console without any YAML editing. The
+YAML value always wins when set; the environment variable only fills in a
+field left empty in the config file.
+
+| Env var | Overrides |
+|---|---|
+| `GO_LLM_ADMIN_PASSWORD` | `admin_password` |
+| `GO_LLM_USAGE_DASHBOARD_PASSWORD` | `usage_dashboard_password` |
+
+See [docs/docker.md](docker.md) for the full first-time setup walkthrough.
+
 ## Model backend lists
 
 Every logical model owns the servers that serve it. Add another entry to the
@@ -141,14 +157,19 @@ audio:
     backends:
       - url: http://192.168.13.30:8007/v1
   tts:
-    name: tts-1
+    name: kokoro
     backends:
-      - url: http://192.168.13.30:8008/v1
+      - url: http://192.168.13.30:8009/v1
 ```
 
 Whisper is exposed on `/v1/audio/transcriptions` and
-`/v1/audio/translations`; TTS is exposed on `/v1/audio/speech`. These retain
-the OpenAI request/response contracts. Either workload may be omitted.
+`/v1/audio/translations`; TTS is exposed on `POST /v1/audio/speech`. Backends
+that provide voice discovery, such as Kokoro-FastAPI, are also exposed through
+`GET /v1/audio/voices`. Voice discovery is routed to the configured TTS
+backends and returned without changing the upstream JSON. These retain the
+upstream request/response contracts. Configured Whisper and TTS names also
+appear in the proxy's aggregated `GET /v1/models` response, subject to the
+requesting API key's model restrictions. Either workload may be omitted.
 
 ## Document workloads
 
@@ -258,7 +279,14 @@ The proxy appends the request path to the backend URL. How the path is construct
 
 **OpenAI backends** (`type: openai` or default): The proxy strips `/v1` from the client path. A client request to `POST /v1/chat/completions` with backend `http://host:8000/v1` is sent to `http://host:8000/v1/chat/completions`.
 
-**Anthropic backends** (`type: anthropic`): The proxy keeps `/v1` in the path. A client request to `POST /v1/messages` with backend `https://api.anthropic.com` is sent to `https://api.anthropic.com/v1/messages`.
+**Anthropic backends** (`type: anthropic`): A client request to `POST /v1/messages`
+is passed through natively to the backend's `/v1/messages` route. A client
+request to `POST /v1/chat/completions` is translated to Anthropic Messages,
+sent to the same `/v1/messages` route, and translated back to an OpenAI
+ChatCompletion response. Streaming, images, tools/tool results, model defaults,
+sticky backend selection, and one-shot 5xx/transport failover are preserved.
+For example, backend `https://api.minimax.io/anthropic` receives both client
+protocols at `https://api.minimax.io/anthropic/v1/messages`.
 
 ### Examples
 

@@ -140,6 +140,8 @@ func (h *ConfigPageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Pass processors config as separate JS variables.
 	type tmplData struct {
+		Mark         template.HTML
+		BaseCSS      template.CSS
 		Models       template.JS
 		Health       template.JS
 		HasVision    bool
@@ -147,11 +149,13 @@ func (h *ConfigPageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		HasMCP       bool
 	}
 	td := tmplData{
+		Mark:         template.HTML(eidonixMark("brand-mark")),
+		BaseCSS:      template.CSS(dashboardCSS() + adminCSS()),
 		Models:       template.JS(data),
 		Health:       template.JS(healthData),
-		HasVision:    cfg.Processors.Vision != "",
-		HasWebSearch: cfg.Processors.WebSearchKey != "",
-		HasMCP:       cfg.Processors.WebSearchKey != "",
+		HasVision:    len(cfg.Processors.EffectiveVisionModels()) > 0,
+		HasWebSearch: len(cfg.Processors.EffectiveSearchKeys()) > 0,
+		HasMCP:       len(cfg.Processors.EffectiveSearchKeys()) > 0,
 	}
 
 	var buf bytes.Buffer
@@ -163,7 +167,7 @@ func (h *ConfigPageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	httputil.SetSecurityHeaders(w)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-ancestors 'none'")
+	w.Header().Set("Content-Security-Policy", cspWithFonts)
 	if _, err := buf.WriteTo(w); err != nil {
 		slog.Error("failed to write config page response", "error", err)
 	}
@@ -174,148 +178,98 @@ const configPageHTML = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Go-LLM-Proxy Config Generator</title>
-<style>
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-:root{
-  --bg:#f4f6f9;--surface:#fff;--border:#d8dde5;
-  --text:#1b2033;--muted:#5c6377;
-  --blue:#1a56db;--blue-hover:#1648b8;--blue-light:#e8effc;
-  --green:#047857;--green-bg:#ecfdf5;
-  --amber:#b45309;--amber-bg:#fffbeb;
-  --indigo:#4338ca;--indigo-bg:#eef2ff;
-  --slate-bg:#0f172a;--slate-text:#e2e8f0;--slate-muted:#94a3b8;
-  --radius:8px;
-  --shadow:0 1px 3px rgba(0,0,0,.07),0 1px 2px rgba(0,0,0,.05);
-}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;min-height:100vh}
-
-/* ---- Header ---- */
-.header{background:var(--slate-bg);color:#f1f5f9;padding:28px 0;text-align:center}
-.header-inner{display:flex;align-items:center;justify-content:center;gap:16px;flex-wrap:wrap}
-.header-logo{height:56px;width:auto;filter:brightness(0) invert(1);opacity:.92}
-.header-text h1{font-size:1.6rem;font-weight:700;letter-spacing:-.02em}
-.header-text p{color:var(--slate-muted);font-size:.9rem;margin-top:2px}
-
-/* ---- Layout ---- */
-.container{max-width:840px;margin:0 auto;padding:28px 20px 60px}
-.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px;margin-bottom:22px;box-shadow:var(--shadow)}
-.card h2{font-size:1.05rem;font-weight:600;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border)}
-
-/* ---- Form ---- */
-label{display:block;font-size:.78rem;font-weight:600;color:var(--muted);margin-bottom:3px;text-transform:uppercase;letter-spacing:.04em}
-select,input[type="text"],input[type="password"]{width:100%;padding:9px 11px;font-size:.92rem;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);transition:border-color .15s;font-family:inherit}
-select:focus,input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(26,86,219,.1)}
-.field{margin-bottom:14px}
-.field-row{display:flex;gap:14px}
-.field-row .field{flex:1}
-.hint{font-size:.78rem;color:var(--muted);margin-top:2px}
-
-/* ---- Table ---- */
-.model-table{width:100%;border-collapse:collapse;font-size:.88rem;margin-top:6px}
-.model-table th{text-align:left;font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);padding:7px 10px;border-bottom:2px solid var(--border)}
-.model-table td{padding:9px 10px;border-bottom:1px solid var(--border);vertical-align:middle}
+<title>Eidonix · Client Setup</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>{{.BaseCSS}}
+body{overflow:auto}
+/* ---- Setup page ---- */
+.gen-section{margin-top:20px;border-top:1px solid var(--hairline);padding-top:14px}
+.gen-section h3{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px}
+.endpoints{margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.endpoints code{background:var(--panel);border:1px solid var(--hairline);padding:2px 8px;font-family:var(--mono);font-size:12px;white-space:nowrap}
+.login-icon{display:inline-flex;align-items:center;color:#8a8a8e;padding:4px}
+.login-icon:hover{color:#fff;text-decoration:none}
+.container{max-width:1280px;margin:0 auto;padding:16px}
+.model-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px}
+.model-table th{text-align:left;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--black);padding:6px 10px;border-bottom:2px solid var(--black)}
+.model-table td{padding:8px 10px;border-bottom:1px solid var(--hairline);vertical-align:middle;font-variant-numeric:tabular-nums}
 .model-table tr:last-child td{border-bottom:none}
-.model-table tr:hover td{background:#f9fafb}
-
-/* ---- Badges ---- */
-.badge{display:inline-block;font-size:.72rem;font-weight:600;padding:2px 8px;border-radius:99px;white-space:nowrap}
-.badge-safe{background:var(--green-bg);color:var(--green)}
-.badge-warn{background:var(--amber-bg);color:var(--amber)}
-.badge-online{background:#ecfdf5;color:#047857}
-.badge-offline{background:#fef2f2;color:#b91c1c}
-.badge-error{background:#fef2f2;color:#b91c1c;margin-left:4px}
-.badge-proto-oai{background:#f0fdf4;color:#166534}
-.badge-proto-ant{background:var(--indigo-bg);color:var(--indigo)}
-.badge-vision{background:#dbeafe;color:#1e40af}
-.badge-audio{background:#ede9fe;color:#5b21b6}
-
-/* ---- Checkboxes ---- */
-.checkbox-group{margin-top:6px}
-.checkbox-group label{display:flex;align-items:center;gap:8px;font-size:.88rem;font-weight:400;text-transform:none;letter-spacing:0;color:var(--text);padding:5px 0;cursor:pointer}
-.checkbox-group input[type="checkbox"]{width:16px;height:16px;accent-color:var(--blue)}
-
-/* ---- Buttons ---- */
-.btn{display:inline-flex;align-items:center;gap:6px;padding:10px 22px;font-size:.92rem;font-weight:600;border:none;border-radius:6px;cursor:pointer;transition:background .15s,transform .1s;font-family:inherit}
-.btn:active{transform:scale(.98)}
-.btn-primary{background:var(--blue);color:#fff}
-.btn-primary:hover{background:var(--blue-hover)}
-.btn-primary:disabled{opacity:.5;cursor:not-allowed}
+.model-table tr:hover td{background:var(--panel)}
+.tag{display:inline-block;font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:0 6px;border:1px solid var(--hairline);color:var(--steel);background:var(--paper);white-space:nowrap;vertical-align:1px}
+.tag-warn{border-color:var(--red);color:var(--red);background:var(--red-wash)}
+.tag-local{background:#E9F5EC;border-color:#BFDFC9;color:#1E6B3C}
+.tag-bedrock{background:#1E8E5A;border-color:#1E8E5A;color:#fff}
+.tag-3p{background:#FCE9CB;border-color:#E3A94E;color:#8A5400}
+.copy-icon{background:none;border:none;cursor:pointer;color:var(--steel);padding:2px;vertical-align:middle;line-height:1}
+.copy-icon:hover{color:var(--black)}
+.st-word{font-size:12px}
+.model-table code{font-family:var(--mono);font-size:12px;background:var(--panel);padding:1px 6px}
+.tag-cap{border-style:dashed;background:transparent}
+.field-row{display:flex;gap:12px}
+.field-row .field{flex:1}
+select,input[type="text"]{width:100%;font-family:inherit}
+.checkbox-group{margin-top:4px}
+.checkbox-group label{display:flex;align-items:center;gap:8px;font-size:.82rem;font-weight:400;text-transform:none;letter-spacing:0;color:var(--text);padding:3px 0;cursor:pointer}
+.checkbox-group input[type="checkbox"]{width:14px;height:14px;accent-color:var(--ink)}
+.btn-primary:disabled{opacity:.4;cursor:not-allowed}
 .btn-row{display:flex;gap:12px;align-items:center;margin-top:6px}
-
-/* ---- Output ---- */
 .output-area{display:none}
 .output-area.visible{display:block}
-.code-block{position:relative;background:var(--slate-bg);color:var(--slate-text);border-radius:6px;padding:16px 16px 16px 16px;font-family:"SF Mono","Cascadia Code","Fira Code",Consolas,monospace;font-size:.8rem;line-height:1.55;overflow-x:auto;white-space:pre;margin-top:8px}
-.copy-btn{position:absolute;top:8px;right:8px;background:rgba(255,255,255,.1);color:var(--slate-muted);border:none;border-radius:4px;padding:4px 10px;font-size:.72rem;cursor:pointer;font-family:inherit;transition:background .15s}
-.copy-btn:hover{background:rgba(255,255,255,.2);color:#e2e8f0}
-.file-path{display:inline-block;background:#f1f5f9;padding:2px 10px;border-radius:4px;font-family:"SF Mono",Consolas,monospace;font-size:.8rem;color:var(--text);margin:4px 0}
-
-/* ---- Tabs ---- */
-.tabs{display:flex;border-bottom:2px solid var(--border);margin-bottom:14px;gap:0}
-.tab{padding:7px 18px;font-size:.88rem;font-weight:500;color:var(--muted);cursor:pointer;border:none;background:none;border-bottom:2px solid transparent;margin-bottom:-2px;transition:color .15s,border-color .15s;font-family:inherit}
-.tab:hover{color:var(--text)}
-.tab.active{color:var(--blue);border-bottom-color:var(--blue);font-weight:600}
+.code-block{position:relative;background:var(--ink);color:#e8e8e8;border-radius:2px;padding:14px;font-family:var(--mono);font-size:.76rem;line-height:1.55;overflow-x:auto;white-space:pre;margin-top:8px}
+.copy-btn{position:absolute;top:8px;right:8px;background:rgba(255,255,255,.12);color:#bdbdbd;border:none;border-radius:2px;padding:3px 10px;font-size:.64rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;cursor:pointer;font-family:inherit;transition:background .15s}
+.copy-btn:hover{background:rgba(255,255,255,.25);color:#fff}
+.file-path{display:inline-block;background:#f2f2f2;border:1px solid var(--border);padding:2px 8px;border-radius:2px;font-family:var(--mono);font-size:.76rem;color:var(--text);margin:4px 0}
+.tabs{display:flex;border-bottom:1px solid var(--hairline);margin-bottom:12px;gap:4px}
+.tab{padding:6px 12px;font-size:12px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--steel);cursor:pointer;border:none;background:none;font-family:inherit;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab:hover{color:var(--black)}
+.tab.active{color:var(--black);border-bottom-color:var(--black)}
 .tab-content{display:none}
 .tab-content.active{display:block}
 .cmd-tab{display:none}
 .cmd-tab.active{display:block}
-
-/* ---- Install steps ---- */
-.install-steps{font-size:.88rem;line-height:1.7}
+.install-steps{font-size:.82rem;line-height:1.7}
 .install-steps ol{padding-left:20px}
 .install-steps li{margin-bottom:8px}
-.install-steps code{background:#f1f5f9;padding:1px 6px;border-radius:3px;font-family:"SF Mono",Consolas,monospace;font-size:.8rem}
-
-.dl-btn{display:inline-flex;align-items:center;gap:5px;padding:6px 14px;font-size:.82rem;font-weight:600;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--blue);cursor:pointer;font-family:inherit;transition:background .15s;text-decoration:none;margin-top:8px;margin-right:6px}
-.dl-btn:hover{background:#f1f5f9}
-.dl-btn svg{width:14px;height:14px;fill:currentColor}
+.install-steps code{background:#f2f2f2;border:1px solid var(--hairline);padding:1px 5px;border-radius:2px;font-family:var(--mono);font-size:.74rem}
+.dl-btn{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;font-size:.7rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;border:1px solid #c8c8c8;border-radius:2px;background:var(--surface);color:var(--text);cursor:pointer;font-family:inherit;transition:border-color .15s;text-decoration:none;margin-top:8px;margin-right:6px}
+.dl-btn:hover{border-color:var(--ink)}
+.dl-btn svg{width:13px;height:13px;fill:currentColor}
 .hidden{display:none}
-@media(max-width:600px){.field-row{flex-direction:column;gap:0}.container{padding:14px 12px 48px}.card{padding:16px}.header-inner{flex-direction:column;gap:8px}}
+@media(max-width:600px){.field-row{flex-direction:column;gap:0}}
 </style>
 </head>
 <body>
 
-<div class="header">
-  <div class="header-inner">
-    <svg class="header-logo" viewBox="0 0 240 160" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <linearGradient id="sky" x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stop-color="#f59e0b"/>
-          <stop offset="60%" stop-color="#ea580c"/>
-          <stop offset="100%" stop-color="#7c2d12"/>
-        </linearGradient>
-        <linearGradient id="mtn" x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stop-color="#94a3b8"/>
-          <stop offset="100%" stop-color="#64748b"/>
-        </linearGradient>
-      </defs>
-      <circle cx="120" cy="90" r="24" fill="url(#sky)" opacity=".9"/>
-      <path d="M0 150 L60 40 L105 105 L120 90" fill="url(#mtn)" opacity=".85"/>
-      <path d="M120 90 L135 105 L180 40 L240 150" fill="url(#mtn)" opacity=".85"/>
-      <line x1="0" y1="150" x2="240" y2="150" stroke="#475569" stroke-width="2"/>
-    </svg>
-    <div class="header-text">
-      <h1>Go-LLM-Proxy Config Generator</h1>
-      <p>Generate configuration files for your coding assistant</p>
+<div class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="/">
+      {{.Mark}}
+      <span class="brand-name">EIDONIX</span><span class="brand-sub">LLM Proxy · Client Setup</span>
+    </a>
+    <div class="topbar-right">
+      <a class="login-icon" href="/admin" title="Sign in" aria-label="Sign in"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"/></svg></a>
     </div>
   </div>
 </div>
 
 <div class="container">
 
-  <!-- Models overview -->
+  <!-- Models reference -->
   <div class="card">
-    <h2>Available Models</h2>
+    <div class="card-header"><h2>Available Models</h2><div class="card-tools"><input id="modelTableFilter" class="filter-input" type="search" placeholder="Filter models&hellip;" autocomplete="off"><button class="btn btn-primary" type="button" onclick="openGen()">Generate Config</button></div></div>
     <table class="model-table">
-      <thead><tr><th>Model</th><th>Protocol</th><th>Data Safety</th><th>Context</th></tr></thead>
+      <thead><tr><th>Model</th><th style="width:110px">Status</th><th style="width:100px">Protocol</th><th style="width:180px">URL</th><th style="width:110px">Context</th><th style="width:130px">Data Safety</th></tr></thead>
       <tbody id="modelTableBody"></tbody>
     </table>
+    <div class="endpoints"><code>OpenAI&nbsp;&middot;&nbsp;<span id="epOai"></span></code> <code>Anthropic&nbsp;&middot;&nbsp;<span id="epAnt"></span></code></div>
   </div>
 
-  <!-- Configuration form -->
-  <div class="card">
-    <h2>Generate Configuration</h2>
+
+  <!-- Config generator (modal) -->
+  <div id="genModal" class="modal-backdrop" onclick="if(event.target.id==='genModal')closeGen()">
+    <div class="modal" style="max-width:900px" role="dialog">
+      <div class="modal-header"><h2>Generate Configuration</h2><button class="modal-close" type="button" onclick="closeGen()">&times;</button></div>
+      <div class="modal-body">
 
     <div class="field">
       <label for="harness">Coding Assistant</label>
@@ -346,17 +300,17 @@ select:focus,input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 
         <div class="field">
           <label for="sonnetModel">Sonnet <span style="font-weight:400;text-transform:none">(default model)</span></label>
           <select id="sonnetModel"></select>
-          <label style="display:inline-flex;align-items:center;gap:5px;margin-top:5px;font-size:.82rem;font-weight:400;text-transform:none;letter-spacing:0;cursor:pointer"><input type="checkbox" id="sonnetThinking" checked style="width:14px;height:14px;accent-color:var(--blue)"> Thinking</label>
+          <label style="display:inline-flex;align-items:center;gap:5px;margin-top:5px;font-size:.82rem;font-weight:400;text-transform:none;letter-spacing:0;cursor:pointer"><input type="checkbox" id="sonnetThinking" checked style="width:14px;height:14px;accent-color:var(--ink)"> Thinking</label>
         </div>
         <div class="field">
           <label for="opusModel">Opus <span style="font-weight:400;text-transform:none">(large model)</span></label>
           <select id="opusModel"></select>
-          <label style="display:inline-flex;align-items:center;gap:5px;margin-top:5px;font-size:.82rem;font-weight:400;text-transform:none;letter-spacing:0;cursor:pointer"><input type="checkbox" id="opusThinking" checked style="width:14px;height:14px;accent-color:var(--blue)"> Thinking</label>
+          <label style="display:inline-flex;align-items:center;gap:5px;margin-top:5px;font-size:.82rem;font-weight:400;text-transform:none;letter-spacing:0;cursor:pointer"><input type="checkbox" id="opusThinking" checked style="width:14px;height:14px;accent-color:var(--ink)"> Thinking</label>
         </div>
         <div class="field">
           <label for="haikuModel">Haiku <span style="font-weight:400;text-transform:none">(fast model)</span></label>
           <select id="haikuModel"></select>
-          <label style="display:inline-flex;align-items:center;gap:5px;margin-top:5px;font-size:.82rem;font-weight:400;text-transform:none;letter-spacing:0;cursor:pointer"><input type="checkbox" id="haikuThinking" style="width:14px;height:14px;accent-color:var(--blue)"> Thinking</label>
+          <label style="display:inline-flex;align-items:center;gap:5px;margin-top:5px;font-size:.82rem;font-weight:400;text-transform:none;letter-spacing:0;cursor:pointer"><input type="checkbox" id="haikuThinking" style="width:14px;height:14px;accent-color:var(--ink)"> Thinking</label>
         </div>
       </div>
     </div>
@@ -431,11 +385,11 @@ select:focus,input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 
         <label>Output Format</label>
         <div style="display:flex;gap:8px;margin-top:4px">
           <label class="checkbox-group" style="padding:0;display:inline-flex;cursor:pointer">
-            <input type="radio" name="outputFormat" value="config" checked style="width:16px;height:16px;accent-color:var(--blue)">
+            <input type="radio" name="outputFormat" value="config" checked style="width:16px;height:16px;accent-color:var(--ink)">
             <span style="font-size:.9rem">Configuration file</span>
           </label>
           <label class="checkbox-group" style="padding:0;display:inline-flex;cursor:pointer;margin-left:12px">
-            <input type="radio" name="outputFormat" value="command" style="width:16px;height:16px;accent-color:var(--blue)">
+            <input type="radio" name="outputFormat" value="command" style="width:16px;height:16px;accent-color:var(--ink)">
             <span style="font-size:.9rem">Start command (shell script)</span>
           </label>
         </div>
@@ -445,17 +399,16 @@ select:focus,input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 
     <div class="btn-row">
       <button class="btn btn-primary" id="generateBtn" disabled onclick="generate()">Generate Config</button>
     </div>
-  </div>
 
   <!-- Output -->
   <div class="output-area" id="outputArea">
-    <div class="card">
-      <h2 id="configTitle">Configuration File</h2>
+    <div class="gen-section">
+      <h3 id="configTitle">Configuration File</h3>
       <div id="configOutput"></div>
     </div>
 
-    <div class="card">
-      <h2>Installation Instructions</h2>
+    <div class="gen-section">
+      <h3>Installation Instructions</h3>
       <div class="tabs" id="osTabs">
         <button class="tab active" data-os="macos" onclick="switchOS('macos')">macOS</button>
         <button class="tab" data-os="linux" onclick="switchOS('linux')">Linux</button>
@@ -467,20 +420,8 @@ select:focus,input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 
     </div>
   </div>
 
-  <div class="card" style="margin-top:24px">
-    <h2>Web Search</h2>
-    <p style="margin-bottom:10px"><b>Claude Code</b> and <b>Codex</b> get web search automatically when the proxy has a search key configured (<a href="https://tavily.com">Tavily</a> or <a href="https://brave.com/search/api/">Brave Search</a>). No client-side setup needed.</p>
-    <p style="margin-bottom:10px"><b>OpenCode</b> connects to the proxy's MCP endpoint for search &mdash; this is included in the generated config automatically.</p>
-    <p style="margin-bottom:10px"><b>Qwen Code</b> uses proxy search via MCP when the proxy has a search key configured (Tavily or Brave). For client-side search, enter a Tavily key above. Qwen Code also supports Google Custom Search and DashScope:</p>
-    <pre style="background:var(--slate-bg);color:var(--slate-text);padding:14px;border-radius:6px;font-size:.82rem;overflow-x:auto;line-height:1.5">"webSearch": {
-  "provider": [
-    { "type": "tavily", "apiKey": "tvly-..." },
-    { "type": "google", "apiKey": "...", "searchEngineId": "..." },
-    { "type": "dashscope" }
-  ],
-  "default": "tavily"
-}</pre>
-    <p class="hint" style="margin-top:8px">DashScope is available automatically for Qwen OAuth users. Google requires a <a href="https://developers.google.com/custom-search/v1/overview">Custom Search API</a> key and engine ID.</p>
+      </div>
+    </div>
   </div>
 
 </div>
@@ -502,32 +443,57 @@ var PROXY_URL = PROXY_ORIGIN + "/v1";
     var m = MODELS[i];
     var row = document.createElement("tr");
     var badges = "";
-    if (m.supports_vision) badges += ' <span class="badge badge-vision">vision</span>';
-    if (m.supports_audio) badges += ' <span class="badge badge-audio">audio</span>';
+    if (m.supports_vision) badges += ' <span class="tag tag-cap">vision</span>';
+    if (m.supports_audio) badges += ' <span class="tag tag-cap">audio</span>';
     var healthStatus = HEALTH[m.id] || { online: true, error: '' };
-    var statusClass = healthStatus.online ? 'online' : 'offline';
-    var statusText = healthStatus.online ? 'Online' : 'Offline';
+    var status = healthStatus.online
+      ? '<span class="health-dot health-online"></span><span class="st-word">online</span>'
+      : '<span class="health-dot health-offline"></span><span class="st-word" style="color:var(--red)" title="' + esc(healthStatus.error || '') + '">offline</span>';
+    var path = m.protocol === "anthropic" ? "/anthropic" : "/v1";
+    var fullURL = PROXY_ORIGIN + path;
+    var urlCell = '<code>' + path + '</code> <button class="copy-icon" type="button" title="Copy ' + esc(fullURL) + '" onclick="copyText(\'' + esc(fullURL) + '\', this)"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9"/><path d="M11 5V2H2v9h3"/></svg></button>';
     var safety;
     if (m.local) {
-      safety = '<span class="badge badge-safe" title="Runs on your own infrastructure. No third party sees your data.">Local &mdash; Safe for data</span>';
+      safety = '<span class="tag tag-local" title="Runs on your own infrastructure. No third party sees your data.">Local &middot; safe</span>';
     } else if (m.type === 'bedrock') {
-      safety = '<span class="badge badge-safe" title="Hosted by AWS Bedrock. Model provider has no access to your data. AWS does not log or train on prompts. Data stays in the configured region.">Bedrock &mdash; Safe for data</span>';
+      safety = '<span class="tag tag-bedrock" title="Hosted by AWS Bedrock. Model provider has no access to your data. AWS does not log or train on prompts.">Bedrock &middot; safe</span>';
     } else {
-      safety = '<span class="badge badge-warn" title="Sent directly to the model provider. Subject to their terms of service.">3rd Party &mdash; Warning</span>';
+      safety = '<span class="tag tag-3p" title="Sent directly to the model provider. Subject to their terms of service.">3rd party</span>';
     }
-    var statusBadge = '<span class="badge badge-' + statusClass + '">' + statusText + '</span>';
-    if (!healthStatus.online && healthStatus.error) {
-      statusBadge += ' <span class="badge badge-error" title="' + esc(healthStatus.error) + '">Error</span>';
-    }
-    row.innerHTML = '<td><strong>' + esc(m.id) + '</strong>' + badges + statusBadge + '</td>' +
-      '<td><span class="badge ' + (m.protocol === "anthropic" ? "badge-proto-ant" : "badge-proto-oai") + '">' + m.protocol + '</span></td>' +
-      '<td>' + safety + '</td>' +
-      '<td>' + (m.context_window > 0 ? m.context_window.toLocaleString() : "unknown") + '</td>';
+    row.innerHTML = '<td><strong>' + esc(m.id) + '</strong>' + badges + '</td>' +
+      '<td>' + status + '</td>' +
+      '<td><span class="mono">' + m.protocol + '</span></td>' +
+      '<td>' + urlCell + '</td>' +
+      '<td>' + (m.context_window > 0 ? m.context_window.toLocaleString() : '<span class="mono">&mdash;</span>') + '</td>' +
+      '<td>' + safety + '</td>';
     tbody.appendChild(row);
   }
 })();
 
 function esc(s){ var d=document.createElement("div"); d.textContent=s; return d.innerHTML; }
+function copyText(txt, btn){
+  function done(){ if(btn){ var t = btn.innerHTML; btn.innerHTML = "&check;"; setTimeout(function(){ btn.innerHTML = t; }, 1200); } }
+  if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(txt).then(done); return; }
+  var ta = document.createElement("textarea");
+  ta.value = txt; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand("copy"); done(); } finally { document.body.removeChild(ta); }
+}
+function openGen(){ document.getElementById("genModal").classList.add("open"); }
+function closeGen(){ document.getElementById("genModal").classList.remove("open"); }
+document.addEventListener("keydown", function(e){ if(e.key === "Escape") closeGen(); });
+document.getElementById("epOai").textContent = PROXY_URL;
+document.getElementById("epAnt").textContent = PROXY_ORIGIN + "/anthropic";
+(function(){
+  var inp = document.getElementById("modelTableFilter");
+  inp.addEventListener("input", function(){
+    var q = inp.value.toLowerCase();
+    var rows = document.getElementById("modelTableBody").rows;
+    for(var i=0;i<rows.length;i++){
+      rows[i].style.display = (!q || rows[i].textContent.toLowerCase().indexOf(q) >= 0) ? "" : "none";
+    }
+  });
+})();
 function getModel(id){ for(var i=0;i<MODELS.length;i++) if(MODELS[i].id===id) return MODELS[i]; return null; }
 
 // ---- Harness change ----
@@ -558,7 +524,7 @@ harnessEl.addEventListener("change", function(){
     input.placeholder = "tvly-...";
     if(HAS_MCP){
       hint.textContent = "Proxy search will be added via MCP. Enter a Tavily key to also enable client-side search.";
-      hint.style.color = "var(--green)";
+      hint.style.color = "var(--text)";
     } else {
       hint.textContent = "Enter a Tavily key for client-side search, or configure web_search_key on the proxy.";
       hint.style.color = "var(--muted)";
@@ -568,7 +534,7 @@ harnessEl.addEventListener("change", function(){
     input.placeholder = "tvly-...";
     if(HAS_MCP){
       hint.textContent = "Proxy has web search configured. Optionally enter a Tavily key to use client-side search and disable proxy MCP search.";
-      hint.style.color = "var(--green)";
+      hint.style.color = "var(--text)";
     } else {
       hint.textContent = "Enter a Tavily key for client-side search, or configure web_search_key on the proxy (supports Tavily and Brave).";
       hint.style.color = "var(--muted)";
@@ -578,7 +544,7 @@ harnessEl.addEventListener("change", function(){
     input.placeholder = "tvly-...";
     if(HAS_WEB_SEARCH){
       hint.textContent = "Proxy has web search configured. Enter a Tavily key to also enable client-side search with your own key.";
-      hint.style.color = "var(--green)";
+      hint.style.color = "var(--text)";
     } else {
       hint.textContent = "Enter a Tavily key for client-side search, or configure web_search_key on the proxy (supports Tavily and Brave).";
       hint.style.color = "var(--muted)";
@@ -596,8 +562,11 @@ function optionText(m){
   var tags=[];
   if(m.protocol==="anthropic") tags.push("Anthropic API");
   if(!m.local) tags.push("3rd party");
+  var h=HEALTH[m.id];
+  if(h && !h.online) tags.push("OFFLINE");
   return m.id + (tags.length ? "  ["+tags.join(", ")+"]" : "");
 }
+
 
 function populateSelects(ids, defaults){
   var cms = chatModels();
@@ -640,8 +609,8 @@ function updateCodexCtxHint(){
     sel.style.borderColor = "";
   } else {
     hint.textContent = "Not detected \u2014 set manually for best results";
-    hint.style.color = "var(--amber)";
-    sel.style.borderColor = "var(--amber)";
+    hint.style.color = "var(--danger)";
+    sel.style.borderColor = "var(--danger)";
   }
 }
 
@@ -678,14 +647,14 @@ function buildCheckboxGroup(containerId, selectIds){
     label.appendChild(cb);
     var safety;
     if (m.local) {
-      safety = ' <span class="badge badge-safe" style="margin-left:4px">Local</span>';
+      safety = ' <span class="tag" style="margin-left:4px">Local</span>';
     } else if (m.type === 'bedrock') {
-      safety = ' <span class="badge badge-safe" style="margin-left:4px">Bedrock</span>';
+      safety = ' <span class="tag" style="margin-left:4px">Bedrock</span>';
     } else {
-      safety = ' <span class="badge badge-warn" style="margin-left:4px">3rd party</span>';
+      safety = ' <span class="tag tag-warn" style="margin-left:4px">3rd party</span>';
     }
     var proto = m.protocol==="anthropic"
-      ? ' <span class="badge badge-proto-ant" style="margin-left:4px">Anthropic</span>' : '';
+      ? ' <span class="tag tag-cap" style="margin-left:4px">Anthropic</span>' : '';
     var span=document.createElement("span");
     span.innerHTML = esc(m.id) + safety + proto;
     label.appendChild(span);

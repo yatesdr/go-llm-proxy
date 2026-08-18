@@ -616,6 +616,19 @@ func (cs *ConfigStore) UpdateProcessors(p ProcessorsConfig) error {
 	if p.Vision != "" && !names[p.Vision] {
 		return fmt.Errorf("vision processor references unknown model %q", p.Vision)
 	}
+	for _, v := range p.VisionModels {
+		if !names[v] {
+			return fmt.Errorf("vision cascade references unknown model %q", v)
+		}
+	}
+	for i, e := range p.WebSearchKeys {
+		if e.Provider != "tavily" && e.Provider != "brave" {
+			return fmt.Errorf("web search key %d: provider must be tavily or brave", i+1)
+		}
+		if e.Key == "" {
+			return fmt.Errorf("web search key %d: key is empty", i+1)
+		}
+	}
 	if p.Audio != "" && p.Audio != "none" && !names[p.Audio] {
 		return fmt.Errorf("audio processor references unknown model %q", p.Audio)
 	}
@@ -642,6 +655,27 @@ func (cs *ConfigStore) UpdateProcessors(p ProcessorsConfig) error {
 		writeField("audio", p.Audio)
 		writeField("ocr", p.OCR)
 		writeField("web_search_key", p.WebSearchKey)
+		if len(p.VisionModels) == 0 {
+			deleteMappingValue(procs, "vision_models")
+		} else {
+			seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+			for _, v := range p.VisionModels {
+				seq.Content = append(seq.Content, stringNode(v))
+			}
+			setMappingValue(procs, "vision_models", seq)
+		}
+		if len(p.WebSearchKeys) == 0 {
+			deleteMappingValue(procs, "web_search_keys")
+		} else {
+			seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+			for _, e := range p.WebSearchKeys {
+				m := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+				m.Content = append(m.Content, stringNode("provider"), stringNode(e.Provider))
+				m.Content = append(m.Content, stringNode("key"), stringNode(e.Key))
+				seq.Content = append(seq.Content, m)
+			}
+			setMappingValue(procs, "web_search_keys", seq)
+		}
 		return nil
 	})
 }
@@ -685,6 +719,12 @@ func modelConfigNode(m ModelConfig) *yaml.Node {
 	}
 	if m.ForcePipeline {
 		add("force_pipeline", boolNode(true))
+	}
+	if m.RewriteVision != "" {
+		add("rewrite_vision", stringNode(m.RewriteVision))
+	}
+	if m.RewriteWebSearch != "" {
+		add("rewrite_web_search", stringNode(m.RewriteWebSearch))
 	}
 	if m.Region != "" {
 		add("region", stringNode(m.Region))

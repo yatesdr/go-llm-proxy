@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -78,15 +79,31 @@ func (h *AdminHandler) ProcessorsData(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// searchKeyDTO is one entry of the web-search cascade as sent by the client.
+// Key carries a freshly-typed secret for a new/changed entry; KeepIndex
+// references an existing cascade position whose stored key should be reused
+// (the client never sees or round-trips a real key it didn't just type).
+type searchKeyDTO struct {
+	Provider  string  `json:"provider"`
+	Key       *string `json:"key"`
+	KeepIndex *int    `json:"keep_index"`
+}
+
 // ProcessorsMutate handles POST /admin/processors/mutate.
-// Body: {"vision":"...","audio":"...","ocr":"...","web_search_key":*string}
+// Body: {"vision":"...","audio":"...","ocr":"...","web_search_key":*string,
+//
+//	"vision_models":[...], "web_search_keys":[searchKeyDTO,...]}
+//
 // web_search_key is a pointer-style field: omit to keep current, empty string to clear.
+// vision_models/web_search_keys, when present, fully replace the cascade.
 func (h *AdminHandler) ProcessorsMutate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Vision       string  `json:"vision"`
-		Audio        string  `json:"audio"`
-		OCR          string  `json:"ocr"`
-		WebSearchKey *string `json:"web_search_key"`
+		Vision        string          `json:"vision"`
+		Audio         string          `json:"audio"`
+		OCR           string          `json:"ocr"`
+		WebSearchKey  *string         `json:"web_search_key"`
+		VisionModels  *[]string       `json:"vision_models"`
+		WebSearchKeys *[]searchKeyDTO `json:"web_search_keys"`
 	}
 	if err := decodeJSONBody(r, &req, 16*1024); err != nil {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid request body")
@@ -94,14 +111,42 @@ func (h *AdminHandler) ProcessorsMutate(w http.ResponseWriter, r *http.Request) 
 	}
 	cur := h.cs.Get().Processors
 	p := config.ProcessorsConfig{
-		Vision: req.Vision,
-		Audio:  req.Audio,
-		OCR:    req.OCR,
+		Vision:       req.Vision,
+		Audio:        req.Audio,
+		OCR:          req.OCR,
+		VisionModels: cur.VisionModels,
 	}
 	if req.WebSearchKey != nil {
 		p.WebSearchKey = *req.WebSearchKey
 	} else {
 		p.WebSearchKey = cur.WebSearchKey
+	}
+	if req.VisionModels != nil {
+		p.VisionModels = *req.VisionModels
+	}
+	if req.WebSearchKeys != nil {
+		// keep_index refers to positions in the list the client was shown —
+		// which includes the legacy single-key fallback — not the raw
+		// (possibly empty) new-style list. Resolving against the raw list
+		// here made every untouched key on a legacy config look "missing".
+		curEntries := cur.EffectiveSearchKeys()
+		entries := make([]config.WebSearchKeyEntry, 0, len(*req.WebSearchKeys))
+		for i, dto := range *req.WebSearchKeys {
+			if dto.Key != nil && *dto.Key != "" {
+				entries = append(entries, config.WebSearchKeyEntry{Provider: dto.Provider, Key: *dto.Key})
+				continue
+			}
+			if dto.KeepIndex != nil && *dto.KeepIndex >= 0 && *dto.KeepIndex < len(curEntries) {
+				kept := curEntries[*dto.KeepIndex]
+				entries = append(entries, config.WebSearchKeyEntry{Provider: dto.Provider, Key: kept.Key})
+				continue
+			}
+			httputil.WriteError(w, http.StatusBadRequest, fmt.Sprintf("web search key %d: missing key", i+1))
+			return
+		}
+		p.WebSearchKeys = entries
+	} else {
+		p.WebSearchKeys = cur.WebSearchKeys
 	}
 	if err := h.cs.UpdateProcessors(p); err != nil {
 		writeMutateError(w, err)
@@ -109,7 +154,7 @@ func (h *AdminHandler) ProcessorsMutate(w http.ResponseWriter, r *http.Request) 
 	}
 	slog.Info("admin: processors updated",
 		"vision", p.Vision, "audio", p.Audio, "ocr", p.OCR,
-		"has_search_key", p.WebSearchKey != "")
+		"vision_cascade", len(p.VisionModels), "search_cascade", len(p.WebSearchKeys))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

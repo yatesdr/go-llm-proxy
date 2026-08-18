@@ -2,6 +2,61 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.6.0 — 2026-08-18
+
+### Added
+
+- Redesigned admin console (Eidonix design system): rebuilt API Keys, LLM,
+  Audio, and Documents pages for higher density and consistent iconography;
+  in-place key reveal/rotate via modal instead of page rearrangement; custom
+  searchable model picker; round health-dot status vocabulary; live
+  Detect-context-window and Test-backend actions in the model editor.
+- Per-model **Vision** / **Documents** / **Web Search** rewrite controls,
+  each independently settable to Auto / Rewrite / None, replacing the old
+  single protocol-wide pipeline toggle.
+- Context-window auto-detection now also probes Anthropic and Bedrock
+  backends (previously OpenAI-compatible only).
+- TTS voice discovery through `GET /v1/audio/voices`, routed across the
+  configured TTS backends with authentication and model restrictions intact.
+- Configured Whisper and TTS workload names in the authenticated
+  `GET /v1/models` discovery response.
+- Docker: `GET /healthz` (unauthenticated) backs a container `HEALTHCHECK`.
+- Docker: `GO_LLM_ADMIN_PASSWORD` / `GO_LLM_USAGE_DASHBOARD_PASSWORD`
+  environment variables bootstrap the admin console and usage dashboard
+  password without editing `config.yaml` — only used when the corresponding
+  YAML field is left unset.
+
+### Changed
+
+- Auto-rewrite defaults for the vision/documents/search pipeline stages now
+  key off each model's actual capability (`supports_vision`, whether a
+  search key resolves) instead of its backend protocol — a vision-incapable
+  model on an Anthropic-protocol backend (e.g. MiniMax) no longer silently
+  skips image/document rewriting.
+- Audio response chunks are flushed immediately and carry
+  `X-Accel-Buffering: no`, allowing interactive TTS playback through nginx.
+- Docker Compose now mounts the `/config` directory rather than the
+  `config.yaml` file directly — a single-file bind mount fails the admin
+  UI's atomic write-then-rename with `device or resource busy`.
+- Docker image now defaults usage logging to `/data/usage.db`, inside the
+  persisted volume, instead of a relative path that landed outside it.
+- Docker build context now respects `.dockerignore` from the repository
+  root (previously ignored, since `docker/.dockerignore` was never read by
+  a build invoked with `context: .`), cutting the published image's build
+  context from ~580MB to under 2MB.
+
+### Fixed
+
+- OpenAI `POST /v1/chat/completions` requests targeting an Anthropic-type
+  backend are now translated to `/v1/messages` instead of being passed to the
+  nonexistent upstream `/v1/chat/completions` route. Request and response
+  translation covers streaming, tools, images, sampling fields, usage, model
+  aliases, proxy-managed search resends, and one-shot backend failover.
+- Saving the web search key configuration no longer fails with "missing key"
+  on a config that only has the legacy singular `web_search_key` field set.
+- `+ Add Key` button no longer wraps onto its own line in the API Keys card
+  header.
+
 ## v0.5.0 — 2026-08-16
 
 ### Added

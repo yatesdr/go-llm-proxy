@@ -69,6 +69,7 @@ type PromptTokensDetails struct {
 
 type ChatResponse struct {
 	ID      string       `json:"id"`
+	Object  string       `json:"object,omitempty"`
 	Model   string       `json:"model"`
 	Created int64        `json:"created"`
 	Choices []ChatChoice `json:"choices"`

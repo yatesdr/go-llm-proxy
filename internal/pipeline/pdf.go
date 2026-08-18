@@ -58,7 +58,12 @@ const maxPDFPages = 20
 // extracts text, and replaces the PDF with text content blocks. Falls back to
 // the OCR model (or vision model) for scanned/image-heavy PDFs.
 func (p *Pipeline) processPDFs(ctx context.Context, chatReq map[string]any,
-	visionModel *config.ModelConfig, ocrModel *config.ModelConfig) (map[string]any, error) {
+	visionModels []*config.ModelConfig, ocrModel *config.ModelConfig) (map[string]any, error) {
+
+	var visionModel *config.ModelConfig
+	if len(visionModels) > 0 {
+		visionModel = visionModels[0]
+	}
 
 	// Normalize messages to []any (same pattern as processImages).
 	var messages []any
@@ -203,7 +208,7 @@ func (p *Pipeline) processPDFs(ctx context.Context, chatReq map[string]any,
 			// Vision models like Qwen3-VL accept data:application/pdf
 			// URLs directly. This covers: no rasterizer installed, no OCR
 			// model configured, or OCR returned nothing useful.
-			if result, ok := p.tryPDFSource(ctx, visionModel, visionPromptOCR, pdfBytes, filename, "vision"); ok {
+			if result, ok := p.tryPDFSourceAny(ctx, visionModels, visionPromptOCR, pdfBytes, filename, "vision"); ok {
 				pdfCache.Store(pdfCacheKey, result)
 				newContent = append(newContent, map[string]any{
 					"type": "text",
@@ -398,6 +403,18 @@ func extractPDFText(data []byte) (text string, err error) {
 //
 // The source label is embedded in the result so operators can see which
 // cascade stage answered the request.
+// tryPDFSourceAny walks a model cascade in priority order until one stage
+// produces a non-empty result.
+func (p *Pipeline) tryPDFSourceAny(ctx context.Context, models []*config.ModelConfig, prompt string,
+	pdfBytes []byte, filename string, source string) (string, bool) {
+	for _, m := range models {
+		if result, ok := p.tryPDFSource(ctx, m, prompt, pdfBytes, filename, source); ok {
+			return result, true
+		}
+	}
+	return "", false
+}
+
 func (p *Pipeline) tryPDFSource(ctx context.Context, model *config.ModelConfig, prompt string,
 	pdfBytes []byte, filename string, source string) (string, bool) {
 	if model == nil {

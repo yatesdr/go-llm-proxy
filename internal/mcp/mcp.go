@@ -61,8 +61,8 @@ type jsonRPCError struct {
 func (h *Handler) ServeSSE(w http.ResponseWriter, r *http.Request) {
 	// MCP is only available when web search is configured.
 	cfg := h.config.Get()
-	if cfg.Processors.WebSearchKey == "" {
-		http.Error(w, "MCP not available: no web_search_key configured", http.StatusNotFound)
+	if len(cfg.Processors.EffectiveSearchKeys()) == 0 {
+		http.Error(w, "MCP not available: no web search key configured", http.StatusNotFound)
 		return
 	}
 
@@ -171,7 +171,7 @@ func (h *Handler) handleToolsList(w http.ResponseWriter, req jsonRPCRequest) {
 	tools := []any{}
 
 	cfg := h.config.Get()
-	if cfg.Processors.WebSearchKey != "" {
+	if len(cfg.Processors.EffectiveSearchKeys()) > 0 {
 		tools = append(tools, map[string]any{
 			"name":        "web_search",
 			"description": "Search the web for current information. Use when the user asks about recent events, current data, or anything that requires up-to-date information.",
@@ -214,8 +214,7 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, ctx context.Context, re
 		return
 	}
 
-	searchKey := h.config.Get().Processors.WebSearchKey
-	if searchKey == "" {
+	if len(h.config.Get().Processors.EffectiveSearchKeys()) == 0 {
 		writeJSONRPCResult(w, req.ID, map[string]any{
 			"content": []any{map[string]any{
 				"type": "text",
@@ -228,7 +227,7 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, ctx context.Context, re
 
 	slog.Debug("MCP web_search call", "query", query)
 
-	result, err := h.pipeline.ExecuteTavilySearch(ctx, searchKey, query)
+	result, err := h.pipeline.ExecuteGlobalSearch(ctx, query)
 	if err != nil {
 		slog.Warn("MCP web_search failed", "query", query, "error", err)
 		writeJSONRPCResult(w, req.ID, map[string]any{

@@ -86,6 +86,7 @@ models:
 
 # ── Audio ─────────────────────────────────────────────────────────────────────
 # OpenAI-compatible audio routes. Configure either service independently.
+# TTS also exposes GET /v1/audio/voices when its backend supports discovery.
 # audio:
 #   whisper:
 #     name: whisper-large-v3-turbo
@@ -94,9 +95,9 @@ models:
 #     backends:
 #       - url: http://192.168.13.30:8007/v1
 #   tts:
-#     name: tts-1
+#     name: kokoro
 #     backends:
-#       - url: http://192.168.13.30:8008/v1
+#       - url: http://192.168.13.30:8009/v1
 
 # ── Documents ─────────────────────────────────────────────────────────────────
 # PaddleOCR uses its official API contract; no model ID is invented.

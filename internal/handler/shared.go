@@ -88,6 +88,9 @@ func sendChatCompletionsRequest(ctx context.Context, client *http.Client, chatRe
 	if err != nil {
 		return nil, fmt.Errorf("marshal chat request: %w", err)
 	}
+	if model.Type == config.BackendAnthropic {
+		return sendAnthropicChatCompletionsRequest(ctx, client, chatBody, model)
+	}
 
 	upstreamURL := strings.TrimRight(model.Backend, "/") + api.ChatCompletionsPath
 	upReq, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(chatBody))

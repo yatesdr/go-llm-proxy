@@ -183,6 +183,7 @@ type ModelRow struct {
 	Users       int     `json:"users"`
 	TotalTokens int64   `json:"total_tokens"`
 	AvgLatency  float64 `json:"avg_latency_ms"`
+	Errors      int     `json:"errors"`
 }
 
 // BackendRow aggregates usage per (model, backend URL) — the load-balancer's
@@ -284,7 +285,8 @@ func (ul *UsageLogger) QueryDashboardData(days int) (*DashboardData, error) {
 			COUNT(*)        AS requests,
 			COUNT(DISTINCT key_hash) AS unique_users,
 			COALESCE(SUM(total_tokens), 0),
-			CAST(AVG(duration_ms) AS REAL) AS avg_duration_ms
+			CAST(AVG(duration_ms) AS REAL) AS avg_duration_ms,
+			SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) AS errors
 		FROM usage
 		WHERE timestamp >= date('now', ?)
 		GROUP BY model
@@ -295,7 +297,7 @@ func (ul *UsageLogger) QueryDashboardData(days int) (*DashboardData, error) {
 	}
 	for modelRows.Next() {
 		var r ModelRow
-		if err := modelRows.Scan(&r.Model, &r.Requests, &r.Users, &r.TotalTokens, &r.AvgLatency); err != nil {
+		if err := modelRows.Scan(&r.Model, &r.Requests, &r.Users, &r.TotalTokens, &r.AvgLatency, &r.Errors); err != nil {
 			continue
 		}
 		data.Models = append(data.Models, r)
@@ -351,6 +353,47 @@ func (ul *UsageLogger) QueryDashboardData(days int) (*DashboardData, error) {
 	dailyModelRows.Close()
 
 	return &data, nil
+}
+
+// KeyActivity summarizes recent traffic for one API key.
+type KeyActivity struct {
+	Requests    int    `json:"requests"`
+	TotalTokens int64  `json:"total_tokens"`
+	LastSeen    string `json:"last_seen"` // YYYY-MM-DD
+}
+
+// QueryKeyActivity returns per-key activity for the trailing window, keyed by
+// key hash. The admin Users page joins this against the configured keys so
+// stale keys are distinguishable from active ones.
+func (ul *UsageLogger) QueryKeyActivity(days int) (map[string]KeyActivity, error) {
+	if days <= 0 {
+		days = 30
+	}
+	rows, err := ul.readDB.Query(`
+		SELECT key_hash, COUNT(*), COALESCE(SUM(total_tokens), 0), MAX(timestamp)
+		FROM usage
+		WHERE timestamp >= date('now', ?)
+		GROUP BY key_hash
+	`, fmt.Sprintf("-%d days", days))
+	if err != nil {
+		return nil, fmt.Errorf("key activity query: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]KeyActivity)
+	for rows.Next() {
+		var hash, lastSeen string
+		var a KeyActivity
+		if err := rows.Scan(&hash, &a.Requests, &a.TotalTokens, &lastSeen); err != nil {
+			continue
+		}
+		if len(lastSeen) >= 10 {
+			a.LastSeen = lastSeen[:10]
+		} else {
+			a.LastSeen = lastSeen
+		}
+		out[hash] = a
+	}
+	return out, nil
 }
 
 // HashKey returns the first 16 hex characters of the SHA-256 hash of a key.

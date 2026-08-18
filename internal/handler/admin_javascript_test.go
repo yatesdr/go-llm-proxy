@@ -13,6 +13,7 @@ func TestAdminJavaScriptSyntax(t *testing.T) {
 		t.Skip("node is not installed")
 	}
 	pages := map[string]string{
+		"users":     adminClientJS() + usersPageJS(),
 		"chat":      adminClientJS() + modelsPageJS(),
 		"audio":     adminClientJS() + audioPageJS(),
 		"documents": adminClientJS() + documentsPageJS(),

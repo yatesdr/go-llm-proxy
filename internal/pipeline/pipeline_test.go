@@ -61,11 +61,25 @@ func TestBodyNeedsProcessing_Document(t *testing.T) {
 
 // --- ShouldProcess tests ---
 
-func TestShouldProcess_AnthropicBackend(t *testing.T) {
+// An Anthropic-shaped backend is not necessarily real Claude (e.g. a
+// third-party Anthropic-compatible API): auto-rewrite must key off the
+// Vision capable flag, not the protocol. A non-vision-capable Anthropic
+// model still needs the vision/document fallback.
+func TestShouldProcess_AnthropicBackend_NotVisionCapable(t *testing.T) {
 	p := &Pipeline{}
 	m := &config.ModelConfig{Type: config.BackendAnthropic}
+	if !p.ShouldProcess(m) {
+		t.Fatal("expected true for a non-vision-capable anthropic backend (auto-rewrite keys off SupportsVision, not protocol)")
+	}
+}
+
+// A vision-capable Anthropic backend (real Claude) with no search key
+// configured has nothing to rewrite and should skip the pipeline.
+func TestShouldProcess_AnthropicBackend_VisionCapable(t *testing.T) {
+	p := &Pipeline{config: config.NewTestConfigStore(&config.Config{})}
+	m := &config.ModelConfig{Type: config.BackendAnthropic, SupportsVision: true}
 	if p.ShouldProcess(m) {
-		t.Fatal("expected false for anthropic backend without force_pipeline")
+		t.Fatal("expected false for a vision-capable anthropic backend with no search key")
 	}
 }
 
@@ -235,7 +249,7 @@ func TestProcessImages_NoImages(t *testing.T) {
 			},
 		},
 	}
-	result, err := p.processImages(context.Background(), chatReq, &config.ModelConfig{}, nil)
+	result, err := p.processImages(context.Background(), chatReq, []*config.ModelConfig{&config.ModelConfig{}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +299,7 @@ func TestDescribeImage_FallsBackToReasoningContent(t *testing.T) {
 			},
 		},
 	}
-	result, err := p.processImages(context.Background(), chatReq, visionModel, nil)
+	result, err := p.processImages(context.Background(), chatReq, []*config.ModelConfig{visionModel}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +350,7 @@ func TestProcessImages_ReplacesImageWithDescription(t *testing.T) {
 		},
 	}
 
-	result, err := p.processImages(context.Background(), chatReq, visionModel, nil)
+	result, err := p.processImages(context.Background(), chatReq, []*config.ModelConfig{visionModel}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,7 +421,7 @@ func TestProcessImages_CacheHit(t *testing.T) {
 	}
 
 	// First call — should hit vision model.
-	result, err := p.processImages(context.Background(), makeChatReq(), visionModel, nil)
+	result, err := p.processImages(context.Background(), makeChatReq(), []*config.ModelConfig{visionModel}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +435,7 @@ func TestProcessImages_CacheHit(t *testing.T) {
 	}
 
 	// Second call — should use cache, NOT call vision model again.
-	result, err = p.processImages(context.Background(), makeChatReq(), visionModel, nil)
+	result, err = p.processImages(context.Background(), makeChatReq(), []*config.ModelConfig{visionModel}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -502,7 +516,7 @@ func TestProcessImages_ConcurrentAndOCRMode(t *testing.T) {
 		},
 	}
 
-	result, err := p.processImages(context.Background(), chatReq, visionModel, nil)
+	result, err := p.processImages(context.Background(), chatReq, []*config.ModelConfig{visionModel}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -564,7 +578,7 @@ func TestProcessImages_VisionModelFailure(t *testing.T) {
 		},
 	}
 
-	result, err := p.processImages(context.Background(), chatReq, visionModel, nil)
+	result, err := p.processImages(context.Background(), chatReq, []*config.ModelConfig{visionModel}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -638,7 +652,7 @@ func TestImageCascade_ToolRole_OCRSuccess_VisionNotCalled(t *testing.T) {
 	visionModel := &config.ModelConfig{Name: "vision-model", Backend: visionSrv.URL, Model: "vision"}
 
 	p := &Pipeline{client: http.DefaultClient}
-	result, err := p.processImages(context.Background(), toolRoleReq(), visionModel, ocrModel)
+	result, err := p.processImages(context.Background(), toolRoleReq(), []*config.ModelConfig{visionModel}, ocrModel)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -669,7 +683,7 @@ func TestImageCascade_ToolRole_OCREmpty_VisionFallback(t *testing.T) {
 	visionModel := &config.ModelConfig{Name: "vision-model", Backend: visionSrv.URL, Model: "vision"}
 
 	p := &Pipeline{client: http.DefaultClient}
-	result, err := p.processImages(context.Background(), toolRoleReq(), visionModel, ocrModel)
+	result, err := p.processImages(context.Background(), toolRoleReq(), []*config.ModelConfig{visionModel}, ocrModel)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -697,7 +711,7 @@ func TestImageCascade_ToolRole_OCRError_VisionFallback(t *testing.T) {
 	visionModel := &config.ModelConfig{Name: "vision-model", Backend: visionSrv.URL, Model: "vision"}
 
 	p := &Pipeline{client: http.DefaultClient}
-	result, err := p.processImages(context.Background(), toolRoleReq(), visionModel, ocrModel)
+	result, err := p.processImages(context.Background(), toolRoleReq(), []*config.ModelConfig{visionModel}, ocrModel)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -726,7 +740,7 @@ func TestImageCascade_ToolRole_BothFail_TTLShortCircuits(t *testing.T) {
 
 	p := &Pipeline{client: http.DefaultClient}
 	// First call: both stages should be attempted.
-	result, err := p.processImages(context.Background(), toolRoleReq(), visionModel, ocrModel)
+	result, err := p.processImages(context.Background(), toolRoleReq(), []*config.ModelConfig{visionModel}, ocrModel)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -740,7 +754,7 @@ func TestImageCascade_ToolRole_BothFail_TTLShortCircuits(t *testing.T) {
 	}
 
 	// Second call within TTL: neither upstream should be re-invoked.
-	_, err = p.processImages(context.Background(), toolRoleReq(), visionModel, ocrModel)
+	_, err = p.processImages(context.Background(), toolRoleReq(), []*config.ModelConfig{visionModel}, ocrModel)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -761,7 +775,7 @@ func TestImageCascade_ToolRole_OnlyVision_NoDuplicateCall(t *testing.T) {
 	visionModel := &config.ModelConfig{Name: "vision-model", Backend: srv.URL, Model: "vision"}
 
 	p := &Pipeline{client: http.DefaultClient}
-	_, err := p.processImages(context.Background(), toolRoleReq(), visionModel, nil)
+	_, err := p.processImages(context.Background(), toolRoleReq(), []*config.ModelConfig{visionModel}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -800,7 +814,7 @@ func TestImageCascade_UserRole_OCRNotCalled(t *testing.T) {
 		},
 	}
 	p := &Pipeline{client: http.DefaultClient}
-	result, err := p.processImages(context.Background(), req, visionModel, ocrModel)
+	result, err := p.processImages(context.Background(), req, []*config.ModelConfig{visionModel}, ocrModel)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1095,12 +1109,22 @@ func TestStreamingSearchState_Empty(t *testing.T) {
 	}
 }
 
-func TestPipeline_ProcessRequest_SkipsAnthropic(t *testing.T) {
+// A non-vision-capable Anthropic-shaped model (e.g. a third-party
+// Anthropic-compatible API, not real Claude) must still get the vision
+// fallback — protocol alone doesn't mean the backend can see images.
+func TestPipeline_ProcessRequest_AnthropicNotVisionCapable_RewritesImages(t *testing.T) {
+	visionServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"content": "A description"}}},
+		})
+	}))
+	defer visionServer.Close()
+
 	cfg := &config.Config{
 		Processors: config.ProcessorsConfig{Vision: "vision-model"},
 		Models: []config.ModelConfig{
 			{Name: "test", Backend: "http://localhost/v1", Type: config.BackendAnthropic},
-			{Name: "vision-model", Backend: "http://localhost/v1"},
+			{Name: "vision-model", Backend: visionServer.URL},
 		},
 	}
 	p := NewPipeline(config.NewTestConfigStore(cfg), http.DefaultClient)
@@ -1121,12 +1145,47 @@ func TestPipeline_ProcessRequest_SkipsAnthropic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Should NOT process — Anthropic backends skip pipeline.
+	msgs := result["messages"].([]any)
+	content := msgs[0].(map[string]any)["content"].([]any)
+	part := content[0].(map[string]any)
+	if part["type"] != "text" {
+		t.Fatalf("expected image_url to be rewritten to text for a non-vision-capable anthropic backend, got %q", part["type"])
+	}
+}
+
+// A vision-capable Anthropic backend (real Claude) should get the raw image
+// passed through untouched — it handles images natively.
+func TestPipeline_ProcessRequest_AnthropicVisionCapable_PreservesImages(t *testing.T) {
+	cfg := &config.Config{
+		Processors: config.ProcessorsConfig{Vision: "vision-model"},
+		Models: []config.ModelConfig{
+			{Name: "test", Backend: "http://localhost/v1", Type: config.BackendAnthropic, SupportsVision: true},
+			{Name: "vision-model", Backend: "http://localhost/v1"},
+		},
+	}
+	p := NewPipeline(config.NewTestConfigStore(cfg), http.DefaultClient)
+	model := &config.ModelConfig{Name: "test", Type: config.BackendAnthropic, SupportsVision: true}
+
+	chatReq := map[string]any{
+		"messages": []any{
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,abc"}},
+				},
+			},
+		},
+	}
+
+	result, err := p.ProcessRequest(context.Background(), chatReq, model)
+	if err != nil {
+		t.Fatal(err)
+	}
 	msgs := result["messages"].([]any)
 	content := msgs[0].(map[string]any)["content"].([]any)
 	part := content[0].(map[string]any)
 	if part["type"] != "image_url" {
-		t.Fatal("expected image_url to be preserved for anthropic backend")
+		t.Fatal("expected image_url to be preserved for a vision-capable anthropic backend")
 	}
 }
 

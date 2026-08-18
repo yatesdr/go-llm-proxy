@@ -36,18 +36,31 @@ func (h *ModelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ContextWindow int    `json:"context_window,omitempty"`
 	}
 
-	models := make([]modelObj, 0, len(cfg.Models))
-	for _, m := range cfg.Models {
-		if !auth.KeyAllowsModel(key, m.Name) {
-			continue
+	models := make([]modelObj, 0, len(cfg.Models)+2)
+	seen := make(map[string]struct{}, len(cfg.Models)+2)
+	appendModel := func(name string, contextWindow int) {
+		if name == "" || !auth.KeyAllowsModel(key, name) {
+			return
 		}
+		if _, exists := seen[name]; exists {
+			return
+		}
+		seen[name] = struct{}{}
 		models = append(models, modelObj{
-			ID:            m.Name,
+			ID:            name,
 			Object:        "model",
 			Created:       0,
 			OwnedBy:       "organization",
-			ContextWindow: m.ContextWindow,
+			ContextWindow: contextWindow,
 		})
+	}
+	for _, m := range cfg.Models {
+		appendModel(m.Name, m.ContextWindow)
+	}
+	for _, audio := range []*config.AudioModelConfig{cfg.Audio.Whisper, cfg.Audio.TTS} {
+		if audio != nil {
+			appendModel(audio.Name, 0)
+		}
 	}
 
 	httputil.SetSecurityHeaders(w)

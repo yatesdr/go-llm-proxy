@@ -45,7 +45,7 @@ func newAdminTestHandler(t *testing.T) (*AdminHandler, *config.ConfigStore, stri
 	}
 	rl := ratelimit.NewRateLimiter(nil)
 	t.Cleanup(rl.Close)
-	return NewAdminHandler(cs, rl, nil), cs, path
+	return NewAdminHandler(cs, rl, nil, nil), cs, path
 }
 
 func authedRequest(t *testing.T, h *AdminHandler, method, target string, body []byte) *http.Request {
@@ -378,7 +378,7 @@ log_metrics: true
 	}
 	rl := ratelimit.NewRateLimiter(nil)
 	t.Cleanup(rl.Close)
-	h := NewAdminHandler(cs, rl, nil)
+	h := NewAdminHandler(cs, rl, nil, nil)
 
 	r := authedRequest(t, h, "GET", "/admin/models/data", nil)
 	w := httptest.NewRecorder()
@@ -418,7 +418,7 @@ log_metrics: true
 	}
 	rl := ratelimit.NewRateLimiter(nil)
 	t.Cleanup(rl.Close)
-	h := NewAdminHandler(cs, rl, nil)
+	h := NewAdminHandler(cs, rl, nil, nil)
 
 	// Update without sending api_key field — should preserve existing secret.
 	body, _ := json.Marshal(map[string]any{
