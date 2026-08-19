@@ -54,6 +54,12 @@ type inputItem struct {
 // translateInput converts Responses API input items into Chat Completions messages.
 func translateInput(input json.RawMessage, instructions string) ([]map[string]any, error) {
 	var messages []map[string]any
+	// systemTexts collects mid-conversation system/developer items. Qwen-style
+	// chat templates hard-fail ("System message must be at the beginning.")
+	// when a system message appears after the first position, and Responses
+	// clients (Codex) emit developer items mid-input. They are merged into the
+	// leading system message at the end of translation.
+	var systemTexts []string
 
 	if instructions != "" {
 		messages = append(messages, map[string]any{
@@ -147,6 +153,14 @@ func translateInput(input json.RawMessage, instructions string) ([]map[string]an
 			if role == "developer" {
 				role = "system"
 			}
+			if role == "system" && len(messages) > 0 {
+				// Not the first message anymore: defer and merge into the
+				// leading system message (see systemTexts).
+				if s := systemItemText(item.Content); s != "" {
+					systemTexts = append(systemTexts, s)
+				}
+				continue
+			}
 			content := translateContentForChat(item.Content, item.Role)
 			messages = append(messages, map[string]any{
 				"role":    role,
@@ -158,10 +172,54 @@ func translateInput(input json.RawMessage, instructions string) ([]map[string]an
 		}
 	}
 
+	if len(systemTexts) > 0 && len(messages) > 0 {
+		if messages[0]["role"] == "system" {
+			prev, _ := messages[0]["content"].(string)
+			parts := []string{}
+			if prev != "" {
+				parts = append(parts, prev)
+			}
+			parts = append(parts, systemTexts...)
+			messages[0]["content"] = strings.Join(parts, "\n\n")
+		} else {
+			prepend := map[string]any{
+				"role":    "system",
+				"content": strings.Join(systemTexts, "\n\n"),
+			}
+			messages = append([]map[string]any{prepend}, messages...)
+		}
+	}
+
 	if len(messages) == 0 {
 		return nil, fmt.Errorf("no valid input items")
 	}
 	return messages, nil
+}
+
+// systemItemText extracts plain text from a system/developer message content
+// value: a plain string or an array of input_text/text parts.
+func systemItemText(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(raw, &parts) == nil {
+		var texts []string
+		for _, p := range parts {
+			if p.Text != "" {
+				texts = append(texts, p.Text)
+			}
+		}
+		return strings.Join(texts, "\n")
+	}
+	return ""
 }
 
 // translateContentForChat converts Responses API content to Chat Completions format.
