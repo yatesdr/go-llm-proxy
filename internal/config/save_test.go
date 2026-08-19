@@ -249,6 +249,11 @@ func TestAliasMutatorsRoundTrip(t *testing.T) {
 	if err := cs.AddAlias("reviewer-model", "model-b"); err != nil {
 		t.Fatalf("AddAlias: %v", err)
 	}
+	if info, err := os.Stat(path); err != nil {
+		t.Fatalf("stat saved config: %v", err)
+	} else if got := info.Mode().Perm(); got != 0o660 {
+		t.Fatalf("saved config mode = %04o, want 0660", got)
+	}
 	if got := cs.Get().Aliases["reviewer-model"]; got != "model-b" {
 		t.Fatalf("in-memory alias target = %q", got)
 	}

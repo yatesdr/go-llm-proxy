@@ -191,7 +191,13 @@ docker run --rm \
 (`/admin`) saves config changes with an atomic write-then-rename, which fails
 with `device or resource busy` if `config.yaml` itself is bind-mounted as a
 single file — bind-mounting the parent directory avoids this. The config
-file must be writable (not `:ro`) whenever the admin UI is enabled.
+file must be writable (not `:ro`) whenever the admin UI is enabled. The image
+runs as the unprivileged `app` user, so on Linux the host directory must also
+grant that container UID/GID write access. For a bind mount, check the image
+identity with `docker exec go-llm-proxy id`, then make the config directory
+group-writable (using the container GID) and enable setgid inheritance; keep
+the config file group-readable/writable as well. This preserves host-side
+editing while allowing the admin's atomic save to create its temporary file.
 
 A brand-new named volume gets the correct ownership automatically (the image
 seeds `/data` for its `app` user on first mount) — no manual `chown` needed

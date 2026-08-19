@@ -106,8 +106,16 @@ func (cs *ConfigStore) mutateYAML(mutate func(root *yaml.Node) error) error {
 	}
 
 	tmpPath := absPath + ".tmp"
-	if err := os.WriteFile(tmpPath, buf.Bytes(), 0o600); err != nil {
+	// Keep the config group-readable/writable for container deployments where
+	// the app UID differs from the host user but both share the config group.
+	// The config directory still controls who can create/rename files, and 0660
+	// is stricter than the 0644 mode used by the starter config.
+	if err := os.WriteFile(tmpPath, buf.Bytes(), 0o660); err != nil {
 		return fmt.Errorf("writing tmp config: %w", err)
+	}
+	if err := os.Chmod(tmpPath, 0o660); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("setting tmp config permissions: %w", err)
 	}
 	if err := os.Rename(tmpPath, absPath); err != nil {
 		os.Remove(tmpPath)
