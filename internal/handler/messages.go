@@ -103,7 +103,7 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	model := config.FindModel(cfg, req.Model)
 	if model == nil {
-		Record(requestedModel, "messages")
+		RecordUnknownRequest(r, requestedModel, "messages")
 		httputil.WriteAnthropicError(w, http.StatusNotFound, "not_found_error", "unknown model")
 		return
 	}

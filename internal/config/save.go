@@ -458,6 +458,32 @@ func (cs *ConfigStore) DeleteAlias(alias string) error {
 	})
 }
 
+// UpdateAlias changes an existing alias target without briefly removing the
+// alias from the configuration.
+func (cs *ConfigStore) UpdateAlias(alias, target string) error {
+	if alias == "" {
+		return fmt.Errorf("alias is required")
+	}
+	if target == "" {
+		return fmt.Errorf("target is required")
+	}
+	cur := cs.Get()
+	if _, exists := cur.Aliases[alias]; !exists {
+		return fmt.Errorf("alias %q not found", alias)
+	}
+	if FindModel(cur, target) == nil {
+		return fmt.Errorf("alias %q references unknown model %q", alias, target)
+	}
+	return cs.mutateYAML(func(root *yaml.Node) error {
+		aliases := findMappingValue(root, "aliases")
+		if aliases == nil || aliases.Kind != yaml.MappingNode {
+			return fmt.Errorf("aliases section not found")
+		}
+		setMappingValue(aliases, alias, stringNode(target))
+		return nil
+	})
+}
+
 // AddModel appends a new model to the config.
 func (cs *ConfigStore) AddModel(m ModelConfig) error {
 	if m.Name == "" {

@@ -1,9 +1,13 @@
 package handler
 
 import (
+	"net/http"
 	"sort"
 	"sync"
 	"time"
+
+	"go-llm-proxy/internal/auth"
+	"go-llm-proxy/internal/config"
 )
 
 const (
@@ -19,6 +23,11 @@ type UnknownModel struct {
 	FirstSeen    time.Time
 	LastSeen     time.Time
 	LastEndpoint string
+	// LastRequester identifies the configured API user that most recently
+	// requested this unknown model. It is a friendly key name when available,
+	// never the raw API key.
+	LastRequester string
+	LastKeyHash   string
 }
 
 type unknownModelRegistry struct {
@@ -43,6 +52,10 @@ func capUnknownModelID(id string) string {
 }
 
 func (r *unknownModelRegistry) Record(modelID, endpoint string) {
+	r.record(modelID, endpoint, "", "")
+}
+
+func (r *unknownModelRegistry) record(modelID, endpoint, requester, keyHash string) {
 	id := capUnknownModelID(modelID)
 	if id == "" {
 		return
@@ -55,6 +68,8 @@ func (r *unknownModelRegistry) Record(modelID, endpoint string) {
 		entry.Count++
 		entry.LastSeen = now
 		entry.LastEndpoint = endpoint
+		entry.LastRequester = requester
+		entry.LastKeyHash = keyHash
 		r.entries[id] = entry
 		return
 	}
@@ -73,11 +88,13 @@ func (r *unknownModelRegistry) Record(modelID, endpoint string) {
 	}
 
 	r.entries[id] = UnknownModel{
-		ID:           id,
-		Count:        1,
-		FirstSeen:    now,
-		LastSeen:     now,
-		LastEndpoint: endpoint,
+		ID:            id,
+		Count:         1,
+		FirstSeen:     now,
+		LastSeen:      now,
+		LastEndpoint:  endpoint,
+		LastRequester: requester,
+		LastKeyHash:   keyHash,
 	}
 }
 
@@ -108,6 +125,29 @@ var unknownModels = newUnknownModelRegistry()
 
 // Record stores an unrecognized model request in the process-wide registry.
 func Record(modelID, endpoint string) { unknownModels.Record(modelID, endpoint) }
+
+// RecordForRequester records an unknown model and the authenticated API user
+// that made the latest request. The key hash is safe to expose; the raw key is
+// intentionally never retained in this process-wide registry.
+func RecordForRequester(modelID, endpoint, requester, keyHash string) {
+	unknownModels.record(modelID, endpoint, requester, keyHash)
+}
+
+// RecordUnknownRequest captures the request's safe API-user identity. Direct
+// handler tests and deployments without configured keys remain identifiable
+// without retaining a raw credential.
+func RecordUnknownRequest(r *http.Request, modelID, endpoint string) {
+	key := auth.KeyFromContext(r.Context())
+	if key == nil {
+		RecordForRequester(modelID, endpoint, "Unauthenticated", "")
+		return
+	}
+	requester := key.Name
+	if requester == "" {
+		requester = "Unnamed API key"
+	}
+	RecordForRequester(modelID, endpoint, requester, config.KeyHash(key.Key))
+}
 
 // Snapshot returns registry entries sorted by most recently seen first.
 func Snapshot() []UnknownModel { return unknownModels.Snapshot() }

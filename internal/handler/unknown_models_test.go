@@ -73,3 +73,13 @@ func TestUnknownModelRegistryRemoveAndSort(t *testing.T) {
 		t.Fatalf("snapshot after remove = %+v", got)
 	}
 }
+
+func TestUnknownModelRegistryRecordsRequester(t *testing.T) {
+	r := newUnknownModelRegistry()
+	r.record("missing-model", "chat/completions", "alice", "0123456789abcdef")
+	r.record("missing-model", "responses", "bob", "fedcba9876543210")
+	got := r.Snapshot()
+	if len(got) != 1 || got[0].Count != 2 || got[0].LastRequester != "bob" || got[0].LastKeyHash != "fedcba9876543210" {
+		t.Fatalf("snapshot = %+v", got)
+	}
+}

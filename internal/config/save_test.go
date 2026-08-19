@@ -272,6 +272,12 @@ func TestAliasMutatorsRoundTrip(t *testing.T) {
 	if !strings.Contains(string(data), "# test config") {
 		t.Fatal("alias mutation did not preserve YAML comments")
 	}
+	if err := reloaded.UpdateAlias("reviewer-model", "model-a"); err != nil {
+		t.Fatalf("UpdateAlias: %v", err)
+	}
+	if got := reloaded.Get().Aliases["reviewer-model"]; got != "model-a" {
+		t.Fatalf("updated alias target = %q", got)
+	}
 	backupAfter, err := os.ReadFile(backupPath)
 	if err != nil {
 		t.Fatalf("reading migration backup after mutation: %v", err)

@@ -140,7 +140,7 @@ func (h *UsageDashboardHandler) renderLogin(w http.ResponseWriter, errMsg string
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Usage Dashboard</title>
-`+fontLinks+`
+` + fontLinks + `
 <style>` + dashboardCSS() + `</style>
 </head>
 <body class="auth-body">
@@ -173,7 +173,7 @@ func (h *UsageDashboardHandler) renderDashboard(w http.ResponseWriter) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Usage Dashboard</title>
-`+fontLinks+`
+` + fontLinks + `
 <style>` + dashboardCSS() + `</style>
 </head>
 <body>
@@ -397,6 +397,13 @@ func topbarBrand(href, sub string) string {
 		`<span class="brand-name">EIDONIX</span><span class="brand-app">· ` + sub + `</span></a>`
 }
 
+// topbarBrandProduct renders the product wordmark used by the admin shell:
+// muted EIDONIX followed by the product name in the page accent color.
+func topbarBrandProduct(href, product string) string {
+	return `<a class="brand" href="` + href + `">` + eidonixMark("brand-mark") +
+		`<span class="brand-name">EIDONIX</span><span class="brand-app-accent">` + product + `</span></a>`
+}
+
 // fontLinks loads IBM Plex from Google Fonts (the style guide's UI faces).
 // Pages fall back to system-ui when the host has no internet access.
 const fontLinks = `<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">`
@@ -436,6 +443,7 @@ a:hover{text-decoration:underline}
 .brand-mark{height:32px;width:auto;display:block;color:#fff}
 .brand-name{font-weight:700;font-size:13px;letter-spacing:.14em}
 .brand-app{color:var(--quiet);font-weight:600;font-size:12px;letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
+.brand-app-accent{color:var(--accent);font-weight:700;font-size:15px;letter-spacing:-.01em;white-space:nowrap}
 .topbar-right{margin-left:auto;display:flex;align-items:center;gap:16px}
 .nav-ext{color:#c9c9cd;font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;text-decoration:none}
 .nav-ext:hover{color:#fff;text-decoration:none}
@@ -515,5 +523,5 @@ select{height:32px;padding:0 8px;font-size:13px;border:1px solid var(--border);b
 .bar-segment+.bar-segment{border-top:2px solid var(--paper)}
 .bar-label{font-size:11px;color:var(--quiet);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;text-align:center;font-family:var(--font-mono)}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
-@media(max-width:700px){.summary-cards{grid-template-columns:1fr 1fr}.bars{height:120px}.brand-app,.nav-ext{display:none}}`
+@media(max-width:700px){.summary-cards{grid-template-columns:1fr 1fr}.bars{height:120px}.brand-app,.brand-app-accent,.nav-ext{display:none}}`
 }

@@ -242,7 +242,7 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	model := config.FindModel(cfg, req.Model)
 	if model == nil {
-		Record(requestedModel, "responses")
+		RecordUnknownRequest(r, requestedModel, "responses")
 		httputil.WriteError(w, http.StatusNotFound, "unknown model")
 		return
 	}

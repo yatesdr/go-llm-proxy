@@ -90,6 +90,12 @@ func TestModelsPageHasDedicatedAliasingTab(t *testing.T) {
 	}
 
 	page := w.Body.String()
+	if !strings.Contains(page, `class="brand-app-accent">LLM Proxy</span>`) {
+		t.Error("admin shell missing turquoise LLM Proxy wordmark")
+	}
+	if strings.Contains(page, `brand-app">· Admin`) {
+		t.Error("admin shell still renders the old Admin wordmark")
+	}
 	for _, want := range []string{
 		`id="subtabModels"`,
 		`id="subtabHelpers"`,

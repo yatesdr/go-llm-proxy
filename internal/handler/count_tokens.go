@@ -80,7 +80,7 @@ func (h *CountTokensHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	model := config.FindModel(cfg, req.Model)
 	if model == nil {
-		Record(requestedModel, "count_tokens")
+		RecordUnknownRequest(r, requestedModel, "count_tokens")
 		httputil.WriteAnthropicError(w, http.StatusNotFound, "not_found_error", "unknown model")
 		return
 	}

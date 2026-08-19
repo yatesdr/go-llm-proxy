@@ -68,8 +68,8 @@ func (h *AdminHandler) ModelsPage(w http.ResponseWriter, r *http.Request) {
   <p class="helper-text" style="margin:0 0 12px">Unrecognized requests are kept in memory since this proxy restart and capped at 200 entries.</p>
   <h3>Unrecognized requests</h3>
   <div class="table-wrap"><table class="data-table">
-    <thead><tr><th>Model ID</th><th style="width:80px">Count</th><th style="width:180px">Last seen</th><th style="width:150px">Endpoint</th><th style="width:290px">Alias to</th></tr></thead>
-    <tbody id="unknownModelsBody"><tr><td colspan="5" class="empty-cell">Loading…</td></tr></tbody>
+    <thead><tr><th>Model ID</th><th style="width:80px">Count</th><th style="width:180px">Last seen</th><th style="width:150px">Endpoint</th><th style="width:190px">Last requester</th><th style="width:290px">Alias to</th></tr></thead>
+    <tbody id="unknownModelsBody"><tr><td colspan="6" class="empty-cell">Loading…</td></tr></tbody>
   </table></div>
   <h3 style="margin-top:18px">Configured aliases</h3>
   <div class="table-wrap"><table class="data-table">
@@ -130,7 +130,7 @@ func (h *AdminHandler) ModelsData(w http.ResponseWriter, r *http.Request) {
 	unknownModels := make([]map[string]any, 0, len(unknown))
 	for _, entry := range unknown {
 		unknownModels = append(unknownModels, map[string]any{
-			"id": entry.ID, "count": entry.Count,
+			"id": entry.ID, "count": entry.Count, "requester": entry.LastRequester, "key_hash": entry.LastKeyHash,
 			"last_seen": entry.LastSeen.UTC().Format(time.RFC3339), "endpoint": entry.LastEndpoint,
 		})
 	}
@@ -253,6 +253,14 @@ func (h *AdminHandler) ModelsMutate(w http.ResponseWriter, r *http.Request) {
 		}
 		Remove(req.Alias)
 		slog.Info("admin: model alias added", "alias", req.Alias, "target", req.Target)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	case "alias_update":
+		if err := h.cs.UpdateAlias(req.Alias, req.Target); err != nil {
+			writeMutateError(w, err)
+			return
+		}
+		Remove(req.Alias)
+		slog.Info("admin: model alias updated", "alias", req.Alias, "target", req.Target)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	case "alias_delete":
 		if err := h.cs.DeleteAlias(req.Alias); err != nil {
@@ -536,13 +544,15 @@ function renderAliases(){
   if(unknown){unknown.innerHTML=chatState.unknownModels.length?chatState.unknownModels.map(function(u,i){
     var options=chatState.models.map(function(m){return '<option value="'+escAttr(m.name)+'">'+esc(m.name)+'</option>';}).join('');
     var seen=u.last_seen?new Date(u.last_seen).toLocaleString():'\u2014';
-    return '<tr><td><code>'+esc(u.id)+'</code></td><td class="mono">'+u.count+'</td><td>'+esc(seen)+'</td><td class="mono">'+esc(u.endpoint)+'</td><td><div class="action-group"><select id="unknownTarget-'+i+'">'+options+'</select><button class="btn btn-primary btn-sm" type="button" onclick="aliasUnknown('+i+')" '+(options?'':'disabled')+'>Alias</button></div></td></tr>';
-  }).join(''):'<tr><td colspan="5" class="empty-cell">No unrecognized model requests since restart</td></tr>';}
+    var requester=u.requester||'Unauthenticated'; if(u.key_hash) requester+=' · '+u.key_hash;
+    return '<tr><td><code>'+esc(u.id)+'</code></td><td class="mono">'+u.count+'</td><td>'+esc(seen)+'</td><td class="mono">'+esc(u.endpoint)+'</td><td>'+esc(requester)+'</td><td><div class="action-group"><select id="unknownTarget-'+i+'">'+options+'</select><button class="btn btn-primary btn-sm" type="button" onclick="aliasUnknown('+i+')" '+(options?'':'disabled')+'>Alias</button></div></td></tr>';
+  }).join(''):'<tr><td colspan="6" class="empty-cell">No unrecognized model requests since restart</td></tr>';}
   var aliases=document.getElementById('aliasesBody');
-  if(aliases){aliases.innerHTML=chatState.aliases.length?chatState.aliases.map(function(a,i){return '<tr><td><code>'+esc(a.alias)+'</code></td><td><code>'+esc(a.target)+'</code></td><td class="row-actions"><button class="btn btn-danger btn-sm" type="button" onclick="deleteAlias('+i+')">Delete</button></td></tr>';}).join(''):'<tr><td colspan="3" class="empty-cell">No aliases configured</td></tr>';}
+  if(aliases){aliases.innerHTML=chatState.aliases.length?chatState.aliases.map(function(a,i){var options=chatState.models.map(function(m){return '<option value="'+escAttr(m.name)+'" '+(m.name===a.target?'selected':'')+'>'+esc(m.name)+'</option>';}).join('');return '<tr><td><code>'+esc(a.alias)+'</code></td><td><select id="aliasTarget-'+i+'">'+options+'</select></td><td class="row-actions"><div class="action-group"><button class="btn btn-primary btn-sm" type="button" onclick="updateAlias('+i+')">Save</button><button class="btn btn-danger btn-sm" type="button" onclick="deleteAlias('+i+')">Delete</button></div></td></tr>';}).join(''):'<tr><td colspan="3" class="empty-cell">No aliases configured</td></tr>';}
 }
 function aliasUnknown(i){var u=chatState.unknownModels[i],sel=document.getElementById('unknownTarget-'+i);if(!u||!sel||!sel.value)return;apiPost('/admin/models/mutate',{action:'alias_add',alias:u.id,target:sel.value}).then(function(r){if(!r.ok){flash(r.json.error&&r.json.error.message||'Alias failed','error');return;}flash('Alias created','success');loadModels();});}
 function deleteAlias(i){var a=chatState.aliases[i];if(!a)return;openConfirm('Delete alias','Delete alias <strong>'+esc(a.alias)+'</strong>?','','Delete alias',function(){apiPost('/admin/models/mutate',{action:'alias_delete',alias:a.alias}).then(function(r){if(!r.ok){flash(r.json.error&&r.json.error.message||'Delete failed','error');return;}flash('Alias deleted','success');loadModels();});});}
+function updateAlias(i){var a=chatState.aliases[i],sel=document.getElementById('aliasTarget-'+i);if(!a||!sel||!sel.value)return;apiPost('/admin/models/mutate',{action:'alias_update',alias:a.alias,target:sel.value}).then(function(r){if(!r.ok){flash(r.json.error&&r.json.error.message||'Alias update failed','error');return;}flash('Alias updated','success');loadModels();});}
 function renderHelpers(){
   chatState.visionList=(chatState.helpers.vision_models||[]).slice();
   chatState.searchList=(chatState.helpers.web_search_keys||[]).map(function(e){return {provider:e.provider,keyMask:e.key_mask,keepIndex:0,newKey:null};});

@@ -279,7 +279,7 @@ func (h *AdminHandler) renderShell(w http.ResponseWriter, activeTab, title, body
 <div class="shell">
 <div class="topbar">
   <div class="topbar-inner">
-    `+topbarBrand("/admin", "Admin")+`
+    `+topbarBrandProduct("/admin", "LLM Proxy")+`
     <div class="topbar-right">
       <a class="nav-ext" href="/usage">Usage</a>
       <a class="nav-ext" href="/">Setup</a>

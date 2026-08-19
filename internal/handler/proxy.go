@@ -113,7 +113,7 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	model := config.FindModel(cfg, modelName)
 	if model == nil {
-		Record(requestedModel, strings.TrimPrefix(cleanPath, "/v1/"))
+		RecordUnknownRequest(r, requestedModel, strings.TrimPrefix(cleanPath, "/v1/"))
 		httputil.WriteError(w, http.StatusNotFound, "unknown model")
 		return
 	}
