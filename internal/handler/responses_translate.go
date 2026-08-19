@@ -46,6 +46,9 @@ type inputItem struct {
 	Input     string          `json:"input"`     // custom_tool_call
 	Output    json.RawMessage `json:"output"`    // *_output items (string, array, or object)
 	Action    json.RawMessage `json:"action"`    // local_shell_call
+	ImageURL  string          `json:"image_url"` // top-level input_image
+	Text      string          `json:"text"`      // top-level input_text
+	Detail    string          `json:"detail"`    // top-level input_image detail
 	Status    string          `json:"status"`
 }
 
@@ -54,6 +57,12 @@ type inputItem struct {
 // translateInput converts Responses API input items into Chat Completions messages.
 func translateInput(input json.RawMessage, instructions string) ([]map[string]any, error) {
 	var messages []map[string]any
+	// systemTexts collects mid-conversation system/developer items. Qwen-style
+	// chat templates hard-fail ("System message must be at the beginning.")
+	// when a system message appears after the first position, and Responses
+	// clients (Codex) emit developer items mid-input. They are merged into the
+	// leading system message at the end of translation.
+	var systemTexts []string
 
 	if instructions != "" {
 		messages = append(messages, map[string]any{
@@ -147,10 +156,70 @@ func translateInput(input json.RawMessage, instructions string) ([]map[string]an
 			if role == "developer" {
 				role = "system"
 			}
+			if role == "system" && len(messages) > 0 {
+				// Not the first message anymore: defer and merge into the
+				// leading system message (see systemTexts).
+				if s := systemItemText(item.Content); s != "" {
+					systemTexts = append(systemTexts, s)
+				}
+				continue
+			}
 			content := translateContentForChat(item.Content, item.Role)
 			messages = append(messages, map[string]any{
 				"role":    role,
 				"content": content,
+			})
+
+		case item.Type == "input_text" || item.Type == "input_image":
+			// Top-level input items (no wrapping message). Codex emits images
+			// this way in multi-turn history. Merge into the most recent user
+			// message (converting string content to a parts array if needed),
+			// or open a new user message if none exists yet.
+			var part map[string]any
+			if item.Type == "input_text" {
+				part = map[string]any{"type": "text", "text": item.Text}
+			} else {
+				// PDF masquerading as an image (data:application/pdf) routes to
+				// the PDF pipeline, mirroring the nested input_image path.
+				if data, ok := pipeline.DecodePDFDataURL(item.ImageURL); ok {
+					part = map[string]any{"type": "pdf_data", "data": data}
+				} else {
+					part = map[string]any{
+						"type":      "image_url",
+						"image_url": map[string]any{"url": item.ImageURL},
+					}
+					if item.Detail != "" {
+						part["image_url"].(map[string]any)["detail"] = item.Detail
+					}
+				}
+			}
+			if n := len(messages); n > 0 {
+				last := messages[n-1]
+				if last["role"] == "user" {
+					switch c := last["content"].(type) {
+					case string:
+						parts := []any{}
+						if c != "" {
+							parts = append(parts, map[string]any{"type": "text", "text": c})
+						}
+						parts = append(parts, part)
+						last["content"] = parts
+					case []any:
+						last["content"] = append(c, part)
+					case []map[string]any:
+						// translateContentForChat returns []map[string]any for
+						// user messages with parts; without this case the default
+						// branch silently dropped the existing text.
+						last["content"] = append(c, part)
+					default:
+						last["content"] = []any{part}
+					}
+					continue
+				}
+			}
+			messages = append(messages, map[string]any{
+				"role":    "user",
+				"content": []any{part},
 			})
 
 		default:
@@ -158,10 +227,54 @@ func translateInput(input json.RawMessage, instructions string) ([]map[string]an
 		}
 	}
 
+	if len(systemTexts) > 0 && len(messages) > 0 {
+		if messages[0]["role"] == "system" {
+			prev, _ := messages[0]["content"].(string)
+			parts := []string{}
+			if prev != "" {
+				parts = append(parts, prev)
+			}
+			parts = append(parts, systemTexts...)
+			messages[0]["content"] = strings.Join(parts, "\n\n")
+		} else {
+			prepend := map[string]any{
+				"role":    "system",
+				"content": strings.Join(systemTexts, "\n\n"),
+			}
+			messages = append([]map[string]any{prepend}, messages...)
+		}
+	}
+
 	if len(messages) == 0 {
 		return nil, fmt.Errorf("no valid input items")
 	}
 	return messages, nil
+}
+
+// systemItemText extracts plain text from a system/developer message content
+// value: a plain string or an array of input_text/text parts.
+func systemItemText(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(raw, &parts) == nil {
+		var texts []string
+		for _, p := range parts {
+			if p.Text != "" {
+				texts = append(texts, p.Text)
+			}
+		}
+		return strings.Join(texts, "\n")
+	}
+	return ""
 }
 
 // translateContentForChat converts Responses API content to Chat Completions format.
