@@ -124,6 +124,65 @@ func TestTranslateInput_FunctionCallWithoutMessage(t *testing.T) {
 	}
 }
 
+func TestTranslateInput_TopLevelImageAndText(t *testing.T) {
+	// Codex multi-turn form: top-level input_image / input_text items
+	// (no wrapping message). Must merge into the most recent user message.
+	input := json.RawMessage(`[
+		{"role": "user", "content": "What color is this?"},
+		{"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo=", "detail": "high"},
+		{"type": "input_text", "text": "Answer in one word."}
+	]`)
+	msgs, err := translateInput(input, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message (merged), got %d: %v", len(msgs), msgs)
+	}
+	if msgs[0]["role"] != "user" {
+		t.Fatalf("expected user message, got %v", msgs[0]["role"])
+	}
+	parts, ok := msgs[0]["content"].([]any)
+	if !ok || len(parts) != 3 {
+		t.Fatalf("expected 3 content parts, got %v", msgs[0]["content"])
+	}
+	if parts[0].(map[string]any)["type"] != "text" || parts[0].(map[string]any)["text"] != "What color is this?" {
+		t.Fatalf("part 0 wrong: %v", parts[0])
+	}
+	if parts[1].(map[string]any)["type"] != "image_url" {
+		t.Fatalf("part 1 wrong: %v", parts[1])
+	}
+	iu := parts[1].(map[string]any)["image_url"].(map[string]any)
+	if iu["url"] != "data:image/png;base64,iVBORw0KGgo=" || iu["detail"] != "high" {
+		t.Fatalf("image_url part wrong: %v", iu)
+	}
+	if parts[2].(map[string]any)["type"] != "text" || parts[2].(map[string]any)["text"] != "Answer in one word." {
+		t.Fatalf("part 2 wrong: %v", parts[2])
+	}
+}
+
+func TestTranslateInput_TopLevelImageOnly(t *testing.T) {
+	// Image first, no preceding user message: must open a new user message.
+	input := json.RawMessage(`[
+		{"type": "input_image", "image_url": "data:image/png;base64,abc"},
+		{"type": "input_text", "text": "Describe"}
+	]`)
+	msgs, err := translateInput(input, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0]["role"] != "user" {
+		t.Fatalf("expected single user message, got %v", msgs)
+	}
+	parts, ok := msgs[0]["content"].([]any)
+	if !ok || len(parts) != 2 {
+		t.Fatalf("expected 2 parts, got %v", msgs[0]["content"])
+	}
+	if parts[0].(map[string]any)["type"] != "image_url" {
+		t.Fatalf("part 0 wrong: %v", parts[0])
+	}
+}
+
 func TestTranslateInput_DeveloperRole(t *testing.T) {
 	input := json.RawMessage(`[{"role": "developer", "content": "Be concise"}]`)
 	msgs, err := translateInput(input, "")

@@ -47,6 +47,9 @@ type inputItem struct {
 	Output    json.RawMessage `json:"output"`    // *_output items (string, array, or object)
 	Action    json.RawMessage `json:"action"`    // local_shell_call
 	Status    string          `json:"status"`
+	ImageURL  string          `json:"image_url"` // top-level input_image
+	Text      string          `json:"text"`      // top-level input_text
+	Detail    string          `json:"detail"`    // top-level input_image detail
 }
 
 // --- Input translation (Responses API -> Chat Completions) ---
@@ -151,6 +154,53 @@ func translateInput(input json.RawMessage, instructions string) ([]map[string]an
 			messages = append(messages, map[string]any{
 				"role":    role,
 				"content": content,
+			})
+
+		case item.Type == "input_text" || item.Type == "input_image":
+			// Top-level input items (no wrapping message). Codex emits images
+			// this way in multi-turn history. Merge into the most recent user
+			// message (converting string content to a parts array if needed),
+			// or open a new user message if none exists yet.
+			var part map[string]any
+			if item.Type == "input_text" {
+				part = map[string]any{"type": "text", "text": item.Text}
+			} else {
+				// PDF masquerading as an image (data:application/pdf) routes to
+				// the PDF pipeline, mirroring the nested input_image path.
+				if data, ok := pipeline.DecodePDFDataURL(item.ImageURL); ok {
+					part = map[string]any{"type": "pdf_data", "data": data}
+				} else {
+					part = map[string]any{
+						"type":      "image_url",
+						"image_url": map[string]any{"url": item.ImageURL},
+					}
+					if item.Detail != "" {
+						part["image_url"].(map[string]any)["detail"] = item.Detail
+					}
+				}
+			}
+			if n := len(messages); n > 0 {
+				last := messages[n-1]
+				if last["role"] == "user" {
+					switch c := last["content"].(type) {
+					case string:
+						parts := []any{}
+						if c != "" {
+							parts = append(parts, map[string]any{"type": "text", "text": c})
+						}
+						parts = append(parts, part)
+						last["content"] = parts
+					case []any:
+						last["content"] = append(c, part)
+					default:
+						last["content"] = []any{part}
+					}
+					continue
+				}
+			}
+			messages = append(messages, map[string]any{
+				"role":    "user",
+				"content": []any{part},
 			})
 
 		default:
