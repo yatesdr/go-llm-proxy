@@ -24,6 +24,7 @@ type messagesRequest struct {
 	Stream        bool              `json:"stream"`
 	Metadata      json.RawMessage   `json:"metadata,omitempty"`
 	Thinking      json.RawMessage   `json:"thinking,omitempty"`
+	aliasFrom     string
 }
 
 // --- Translation functions ---

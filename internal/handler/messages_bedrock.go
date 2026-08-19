@@ -99,7 +99,7 @@ func (h *MessagesHandler) handleBedrock(
 		logUsage(h.usage, usageLogInput{
 			startTime: startTime, statusCode: resp.StatusCode,
 			keyName: keyName, keyHash: keyHash,
-			model: req.Model, endpoint: "/v1/messages",
+			model: req.Model, aliasFrom: req.aliasFrom, endpoint: "/v1/messages",
 			backend:      model.Backend,
 			requestBytes: int64(len(body)), responseBytes: int64(len(errBody)),
 		})
@@ -116,7 +116,7 @@ func (h *MessagesHandler) handleBedrock(
 		logUsageConverse(h.usage, usageLogInput{
 			startTime: startTime, statusCode: resp.StatusCode,
 			keyName: keyName, keyHash: keyHash,
-			model: req.Model, endpoint: "/v1/messages",
+			model: req.Model, aliasFrom: req.aliasFrom, endpoint: "/v1/messages",
 			backend:      model.Backend,
 			requestBytes: int64(len(body)), responseBytes: respBytes,
 		}, usageData)
@@ -144,7 +144,7 @@ func (h *MessagesHandler) handleBedrock(
 	logUsageConverse(h.usage, usageLogInput{
 		startTime: startTime, statusCode: resp.StatusCode,
 		keyName: keyName, keyHash: keyHash,
-		model: req.Model, endpoint: "/v1/messages",
+		model: req.Model, aliasFrom: req.aliasFrom, endpoint: "/v1/messages",
 		backend:      model.Backend,
 		requestBytes: int64(len(body)), responseBytes: int64(len(respBody)),
 	}, usageData)

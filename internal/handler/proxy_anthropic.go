@@ -26,7 +26,7 @@ func (p *ProxyHandler) handleAnthropicChat(
 	w http.ResponseWriter,
 	r *http.Request,
 	body []byte,
-	modelName string,
+	modelName, aliasFrom string,
 	model *config.ModelConfig,
 	cfg *config.Config,
 	parsedChatReq map[string]any,
@@ -92,7 +92,7 @@ func (p *ProxyHandler) handleAnthropicChat(
 		logUsage(p.usage, usageLogInput{
 			startTime: startTime, statusCode: resp.StatusCode,
 			keyName: keyName, keyHash: keyHash,
-			model: modelName, endpoint: "/v1/chat/completions",
+			model: modelName, aliasFrom: aliasFrom, endpoint: "/v1/chat/completions",
 			backend:      selected.Backend,
 			requestBytes: int64(len(body)), responseBytes: int64(len(errBody)),
 		})
@@ -100,7 +100,7 @@ func (p *ProxyHandler) handleAnthropicChat(
 	}
 
 	rc := proxyRequestContext{
-		model: selected, modelName: modelName, endpoint: "/v1/chat/completions",
+		model: selected, modelName: modelName, aliasFrom: aliasFrom, endpoint: "/v1/chat/completions",
 		requestBody: body, keyName: keyName, keyHash: keyHash, startTime: startTime,
 	}
 	includeUsage := chatStreamIncludesUsage(parsedReq.StreamOptions)

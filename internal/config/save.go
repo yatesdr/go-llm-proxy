@@ -393,6 +393,63 @@ func mutateKeyEntry(root *yaml.Node, fullKey string, fn func(*yaml.Node) error) 
 
 // ─── Models ──────────────────────────────────────────────────────────────────
 
+// AddAlias adds a single-level alias for an existing configured chat model.
+func (cs *ConfigStore) AddAlias(alias, target string) error {
+	if alias == "" {
+		return fmt.Errorf("alias is required")
+	}
+	if target == "" {
+		return fmt.Errorf("target is required")
+	}
+	cur := cs.Get()
+	if FindModel(cur, alias) != nil {
+		return fmt.Errorf("alias %q conflicts with model name", alias)
+	}
+	if _, exists := cur.Aliases[alias]; exists {
+		return fmt.Errorf("alias %q already exists", alias)
+	}
+	if _, isAlias := cur.Aliases[target]; isAlias {
+		return fmt.Errorf("alias %q may not target alias %q", alias, target)
+	}
+	if FindModel(cur, target) == nil {
+		return fmt.Errorf("alias %q references unknown model %q", alias, target)
+	}
+
+	return cs.mutateYAML(func(root *yaml.Node) error {
+		aliases := findMappingValue(root, "aliases")
+		if aliases == nil {
+			aliases = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+			setMappingValue(root, "aliases", aliases)
+		}
+		if aliases.Kind != yaml.MappingNode {
+			return fmt.Errorf("aliases section is not a mapping")
+		}
+		setMappingValue(aliases, alias, stringNode(target))
+		return nil
+	})
+}
+
+// DeleteAlias removes an existing model alias.
+func (cs *ConfigStore) DeleteAlias(alias string) error {
+	if alias == "" {
+		return fmt.Errorf("alias is required")
+	}
+	if _, exists := cs.Get().Aliases[alias]; !exists {
+		return fmt.Errorf("alias %q not found", alias)
+	}
+	return cs.mutateYAML(func(root *yaml.Node) error {
+		aliases := findMappingValue(root, "aliases")
+		if aliases == nil || aliases.Kind != yaml.MappingNode {
+			return fmt.Errorf("aliases section not found")
+		}
+		deleteMappingValue(aliases, alias)
+		if len(aliases.Content) == 0 {
+			deleteMappingValue(root, "aliases")
+		}
+		return nil
+	})
+}
+
 // AddModel appends a new model to the config.
 func (cs *ConfigStore) AddModel(m ModelConfig) error {
 	if m.Name == "" {
@@ -403,6 +460,9 @@ func (cs *ConfigStore) AddModel(m ModelConfig) error {
 		if existing.Name == m.Name {
 			return fmt.Errorf("model %q already exists", m.Name)
 		}
+	}
+	if _, exists := cur.Aliases[m.Name]; exists {
+		return fmt.Errorf("model %q conflicts with alias", m.Name)
 	}
 	return cs.mutateYAML(func(root *yaml.Node) error {
 		modelsNode := findMappingValue(root, "models")
@@ -441,6 +501,9 @@ func (cs *ConfigStore) UpdateModel(originalName string, m ModelConfig) error {
 				return fmt.Errorf("model %q already exists", m.Name)
 			}
 		}
+		if _, exists := cur.Aliases[m.Name]; exists {
+			return fmt.Errorf("model %q conflicts with alias", m.Name)
+		}
 	}
 	return cs.mutateYAML(func(root *yaml.Node) error {
 		modelsNode := findMappingValue(root, "models")
@@ -467,6 +530,13 @@ func (cs *ConfigStore) UpdateModel(originalName string, m ModelConfig) error {
 
 func renameModelReferences(root *yaml.Node, oldName, newName string) {
 	renameKeyModelReferences(root, oldName, newName)
+	if aliases := findMappingValue(root, "aliases"); aliases != nil && aliases.Kind == yaml.MappingNode {
+		for i := 1; i < len(aliases.Content); i += 2 {
+			if aliases.Content[i].Value == oldName {
+				aliases.Content[i].Value = newName
+			}
+		}
+	}
 	if processors := findMappingValue(root, "processors"); processors != nil {
 		for _, field := range []string{"vision", "audio", "ocr"} {
 			if value := findMappingValue(processors, field); value != nil && value.Value == oldName {
@@ -529,6 +599,11 @@ func (cs *ConfigStore) DeleteModel(name string, force bool) error {
 
 func modelReferrers(cfg *Config, name string) []string {
 	var refs []string
+	for alias, target := range cfg.Aliases {
+		if target == name {
+			refs = append(refs, "alias "+alias)
+		}
+	}
 	for _, k := range cfg.Keys {
 		for _, m := range k.Models {
 			if m == name {
@@ -567,6 +642,17 @@ func modelReferrers(cfg *Config, name string) []string {
 // stripModelReferences removes all occurrences of modelName from key allow-lists
 // and unsets processor fields that point at it. Used only when force-deleting.
 func stripModelReferences(root *yaml.Node, modelName string) {
+	aliases := findMappingValue(root, "aliases")
+	if aliases != nil && aliases.Kind == yaml.MappingNode {
+		for i := len(aliases.Content) - 2; i >= 0; i -= 2 {
+			if aliases.Content[i+1].Value == modelName {
+				aliases.Content = append(aliases.Content[:i], aliases.Content[i+2:]...)
+			}
+		}
+		if len(aliases.Content) == 0 {
+			deleteMappingValue(root, "aliases")
+		}
+	}
 	keysNode := findMappingValue(root, "keys")
 	if keysNode != nil && keysNode.Kind == yaml.SequenceNode {
 		for _, entry := range keysNode.Content {

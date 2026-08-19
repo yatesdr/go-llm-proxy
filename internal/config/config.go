@@ -102,20 +102,21 @@ type PaddleOCRConfig struct {
 }
 
 type Config struct {
-	Listen                 string           `yaml:"listen"`
-	Models                 []ModelConfig    `yaml:"models"`
-	Keys                   []KeyConfig      `yaml:"keys"`
-	Services               ServicesConfig   `yaml:"services"`                 // external service proxies (Qdrant, etc.)
-	Processors             ProcessorsConfig `yaml:"processors"`               // global processor defaults
-	Audio                  AudioConfig      `yaml:"audio,omitempty"`          // transcription and text-to-speech workloads
-	Documents              DocumentsConfig  `yaml:"documents,omitempty"`      // native document-processing workloads
-	TrustedProxies         []string         `yaml:"trusted_proxies"`          // CIDR or IPs allowed to set X-Real-IP
-	ServeConfigGenerator   bool             `yaml:"serve_config_generator"`   // enable the config generator page at GET /
-	LogMetrics             bool             `yaml:"log_metrics"`              // enable per-request usage logging to SQLite
-	UsageDB                string           `yaml:"usage_db"`                 // path to SQLite usage database (default: usage.db)
-	UsageDashboard         bool             `yaml:"usage_dashboard"`          // enable the usage dashboard at /usage
-	UsageDashboardPassword string           `yaml:"usage_dashboard_password"` // password for the usage dashboard
-	AdminPassword          string           `yaml:"admin_password"`           // password for /admin (falls back to usage_dashboard_password)
+	Listen                 string            `yaml:"listen"`
+	Models                 []ModelConfig     `yaml:"models"`
+	Aliases                map[string]string `yaml:"aliases,omitempty"` // client-facing alias -> canonical model name
+	Keys                   []KeyConfig       `yaml:"keys"`
+	Services               ServicesConfig    `yaml:"services"`                 // external service proxies (Qdrant, etc.)
+	Processors             ProcessorsConfig  `yaml:"processors"`               // global processor defaults
+	Audio                  AudioConfig       `yaml:"audio,omitempty"`          // transcription and text-to-speech workloads
+	Documents              DocumentsConfig   `yaml:"documents,omitempty"`      // native document-processing workloads
+	TrustedProxies         []string          `yaml:"trusted_proxies"`          // CIDR or IPs allowed to set X-Real-IP
+	ServeConfigGenerator   bool              `yaml:"serve_config_generator"`   // enable the config generator page at GET /
+	LogMetrics             bool              `yaml:"log_metrics"`              // enable per-request usage logging to SQLite
+	UsageDB                string            `yaml:"usage_db"`                 // path to SQLite usage database (default: usage.db)
+	UsageDashboard         bool              `yaml:"usage_dashboard"`          // enable the usage dashboard at /usage
+	UsageDashboardPassword string            `yaml:"usage_dashboard_password"` // password for the usage dashboard
+	AdminPassword          string            `yaml:"admin_password"`           // password for /admin (falls back to usage_dashboard_password)
 }
 
 // EffectiveAdminPassword returns the password guarding /admin: admin_password
@@ -468,6 +469,22 @@ func FindModel(cfg *Config, name string) *ModelConfig {
 	return nil
 }
 
+// ResolveModelName returns the canonical configured model name for name.
+// Real model names take precedence over aliases; unknown names are returned
+// unchanged so callers can preserve the requested ID in errors and capture.
+func ResolveModelName(cfg *Config, name string) string {
+	if cfg == nil {
+		return name
+	}
+	if FindModel(cfg, name) != nil {
+		return name
+	}
+	if target, ok := cfg.Aliases[name]; ok {
+		return target
+	}
+	return name
+}
+
 func validateConfig(cfg *Config) error {
 	if len(cfg.Keys) == 0 {
 		slog.Warn("no API keys configured — all requests will be unauthenticated")
@@ -573,6 +590,23 @@ func validateConfig(cfg *Config) error {
 			return fmt.Errorf("duplicate model name %q", m.Name)
 		}
 		names[m.Name] = true
+	}
+
+	// Aliases are deliberately single-level: every target must be a concrete
+	// chat model, and alias IDs may not shadow configured model names.
+	for alias, target := range cfg.Aliases {
+		if alias == "" {
+			return fmt.Errorf("alias name is required")
+		}
+		if names[alias] {
+			return fmt.Errorf("alias %q conflicts with model name", alias)
+		}
+		if _, isAlias := cfg.Aliases[target]; isAlias {
+			return fmt.Errorf("alias %q may not target alias %q", alias, target)
+		}
+		if !names[target] {
+			return fmt.Errorf("alias %q references unknown model %q", alias, target)
+		}
 	}
 
 	for label, audio := range map[string]*AudioModelConfig{

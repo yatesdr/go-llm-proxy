@@ -78,6 +78,12 @@ models:
   #   aws_secret_key: ...
   #   # aws_session_token: ...        # optional, for temporary STS credentials
   #
+# ── Model aliases ──
+# Exact, case-sensitive alternate IDs for configured chat models. Targets must
+# be model names above; aliases cannot target other aliases.
+# aliases:
+#   codex-reviewer-model: my-model
+#
 # ── Chat helpers ───────────────────────────────────────────────────────────────
 # Optional. Handles images and web search for chat models that need help.
 # processors:

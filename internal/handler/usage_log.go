@@ -63,6 +63,7 @@ type usageLogInput struct {
 	keyName       string
 	keyHash       string
 	model         string
+	aliasFrom     string
 	backend       string // chosen backend URL (empty for non-model routes)
 	endpoint      string
 	requestBytes  int64
@@ -87,6 +88,7 @@ func logUsage(ul *usage.UsageLogger, in usageLogInput) {
 		KeyHash:       in.keyHash,
 		KeyName:       in.keyName,
 		Model:         in.model,
+		AliasFrom:     in.aliasFrom,
 		Backend:       in.backend,
 		Endpoint:      in.endpoint,
 		StatusCode:    in.statusCode,

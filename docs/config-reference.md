@@ -7,6 +7,7 @@ go-llm-proxy is configured via a single YAML file (default: `config.yaml`). See 
 | Field | Default | Description |
 |---|---|---|
 | `listen` | `":8080"` | Bind address (e.g., `"127.0.0.1:8080"` for localhost only) |
+| `aliases` | `{}` | Exact, case-sensitive client model IDs mapped to configured chat model names |
 | `trusted_proxies` | `[]` | IPs/CIDRs allowed to set `X-Real-IP` / `X-Forwarded-For` |
 | `serve_config_generator` | `false` | Enable the config generator UI at `GET /` |
 | `log_metrics` | `false` | Enable per-request usage logging to SQLite |
@@ -66,6 +67,27 @@ half-open retry), the 30s health probes exclude probed-down members, and a
 transport error or 5xx on `/v1/chat/completions` fails over to another
 backend once before reporting an error. Adding a backend to a model only
 remaps ~1/N of active sessions.
+
+## Model aliases
+
+Aliases let clients use an alternate model ID while routing to an existing
+configured chat model. They are exact and case-sensitive.
+
+```yaml
+aliases:
+  codex-reviewer-model: glm-5.3
+  fast-review: qwen3.5-9b
+```
+
+Every target must match a `models[].name`. Alias IDs cannot duplicate a real
+model name or point to another alias. API-key model restrictions are checked
+against the target, so a key allowed to use `glm-5.3` can also use its aliases.
+Aliases appear in `GET /v1/models` with the target model's context window.
+
+The admin LLM page also captures up to 200 unrecognized model IDs observed
+since the current process started. An administrator can map one to an existing
+model from the **Model Aliasing** tab. The capture list is in-memory only;
+configured aliases are saved to YAML and hot-reloaded.
 
 ## Model fields
 

@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sort"
+	"time"
 
 	"go-llm-proxy/internal/config"
 	"go-llm-proxy/internal/httputil"
@@ -24,6 +26,7 @@ func (h *AdminHandler) ModelsPage(w http.ResponseWriter, r *http.Request) {
 	body := `<div class="subtabs">
   <button class="subtab active" id="subtabModels" type="button" onclick="switchLLMTab('models')">Models</button>
   <button class="subtab" id="subtabHelpers" type="button" onclick="switchLLMTab('helpers')">Model Helpers</button>
+  <button class="subtab" id="subtabAliasing" type="button" onclick="switchLLMTab('aliasing')">Model Aliasing</button>
 </div>
 <div id="pane-models">
 <div class="card">
@@ -58,6 +61,22 @@ func (h *AdminHandler) ModelsPage(w http.ResponseWriter, r *http.Request) {
   </div>
 </div>
 <div class="btn-row"><button class="btn btn-primary" type="button" onclick="saveHelpers()">Save helpers</button></div>
+</div>
+<div id="pane-aliasing" style="display:none">
+<div class="card">
+  <h2>Aliases &amp; unrecognized requests</h2>
+  <p class="helper-text" style="margin:0 0 12px">Unrecognized requests are kept in memory since this proxy restart and capped at 200 entries.</p>
+  <h3>Unrecognized requests</h3>
+  <div class="table-wrap"><table class="data-table">
+    <thead><tr><th>Model ID</th><th style="width:80px">Count</th><th style="width:180px">Last seen</th><th style="width:150px">Endpoint</th><th style="width:290px">Alias to</th></tr></thead>
+    <tbody id="unknownModelsBody"><tr><td colspan="5" class="empty-cell">Loading…</td></tr></tbody>
+  </table></div>
+  <h3 style="margin-top:18px">Configured aliases</h3>
+  <div class="table-wrap"><table class="data-table">
+    <thead><tr><th>Alias</th><th>Target model</th><th style="width:100px;text-align:right">Actions</th></tr></thead>
+    <tbody id="aliasesBody"><tr><td colspan="3" class="empty-cell">Loading…</td></tr></tbody>
+  </table></div>
+</div>
 </div>` + modelModalHTML()
 	h.renderShell(w, "chat", "Admin · LLM", body, modelsPageJS())
 }
@@ -98,8 +117,25 @@ func (h *AdminHandler) ModelsData(w http.ResponseWriter, r *http.Request) {
 		}
 		models = append(models, entry)
 	}
+	aliasNames := make([]string, 0, len(cfg.Aliases))
+	for alias := range cfg.Aliases {
+		aliasNames = append(aliasNames, alias)
+	}
+	sort.Strings(aliasNames)
+	aliases := make([]map[string]any, 0, len(aliasNames))
+	for _, alias := range aliasNames {
+		aliases = append(aliases, map[string]any{"alias": alias, "target": cfg.Aliases[alias]})
+	}
+	unknown := Snapshot()
+	unknownModels := make([]map[string]any, 0, len(unknown))
+	for _, entry := range unknown {
+		unknownModels = append(unknownModels, map[string]any{
+			"id": entry.ID, "count": entry.Count,
+			"last_seen": entry.LastSeen.UTC().Format(time.RFC3339), "endpoint": entry.LastEndpoint,
+		})
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"models": models, "regions": awsRegions,
+		"models": models, "regions": awsRegions, "aliases": aliases, "unknown_models": unknownModels,
 		"helpers": map[string]any{
 			"vision": cfg.Processors.Vision, "has_search_key": cfg.Processors.WebSearchKey != "",
 			"search_key_mask": config.MaskSecret(cfg.Processors.WebSearchKey),
@@ -171,6 +207,8 @@ func (h *AdminHandler) ModelsMutate(w http.ResponseWriter, r *http.Request) {
 		Action       string         `json:"action"`
 		OriginalName string         `json:"original_name"`
 		Name         string         `json:"name"`
+		Alias        string         `json:"alias"`
+		Target       string         `json:"target"`
 		Force        bool           `json:"force"`
 		Model        *modelInputDTO `json:"model"`
 	}
@@ -207,6 +245,21 @@ func (h *AdminHandler) ModelsMutate(w http.ResponseWriter, r *http.Request) {
 			writeMutateError(w, err)
 			return
 		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	case "alias_add":
+		if err := h.cs.AddAlias(req.Alias, req.Target); err != nil {
+			writeMutateError(w, err)
+			return
+		}
+		Remove(req.Alias)
+		slog.Info("admin: model alias added", "alias", req.Alias, "target", req.Target)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	case "alias_delete":
+		if err := h.cs.DeleteAlias(req.Alias); err != nil {
+			writeMutateError(w, err)
+			return
+		}
+		slog.Info("admin: model alias deleted", "alias", req.Alias)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	default:
 		httputil.WriteError(w, http.StatusBadRequest, "unknown action")
@@ -259,9 +312,9 @@ type modelInputDTO struct {
 	SupportsVision   bool                `json:"supports_vision"`
 	SupportsAudio    *bool               `json:"supports_audio"` // legacy capability; hidden in the new UI
 	ForcePipeline    bool                `json:"force_pipeline"`
-	RewriteVision     string              `json:"rewrite_vision"`
-	RewriteDocuments  string              `json:"rewrite_documents"`
-	RewriteWebSearch  string              `json:"rewrite_web_search"`
+	RewriteVision    string              `json:"rewrite_vision"`
+	RewriteDocuments string              `json:"rewrite_documents"`
+	RewriteWebSearch string              `json:"rewrite_web_search"`
 	Backends         []backendInputDTO   `json:"backends"`
 	APIKey           *string             `json:"api_key"` // legacy admin client
 	Region           string              `json:"region"`
@@ -451,8 +504,8 @@ func modelModalHTML() string {
 
 func modelsPageJS() string {
 	return `
-var chatState={models:[],editing:null,helpers:{},searchAction:null};
-function loadModels(){apiGet('/admin/models/data').then(function(d){chatState.models=d.models||[];chatState.helpers=d.helpers||{};renderModels();renderHelpers();}).catch(function(e){flash('Load failed: '+e.message,'error');});}
+var chatState={models:[],aliases:[],unknownModels:[],editing:null,helpers:{},searchAction:null};
+function loadModels(){apiGet('/admin/models/data').then(function(d){chatState.models=d.models||[];chatState.aliases=d.aliases||[];chatState.unknownModels=d.unknown_models||[];chatState.helpers=d.helpers||{};renderModels();renderAliases();renderHelpers();}).catch(function(e){flash('Load failed: '+e.message,'error');});}
 function backendDot(b){
   var cls='health-unknown',label='no health data';
   if(b.disabled){cls='health-unknown';label='disabled';}
@@ -478,6 +531,18 @@ function renderModels(){var el=document.getElementById('modelsBody');if(!chatSta
   '<td class="mono">'+(function(){var c=[];if(m.supports_vision)c.push('vision');if(m.supports_audio)c.push('audio');return c.length?c.join(' \u00b7 '):'\u2014';})()+'</td>'+
   '<td class="mono">'+(function(){var g=[];if(m.force_pipeline)g.push('pipeline');if(chatState.helpers.vision&&!m.supports_vision)g.push('vision');if(chatState.helpers.has_search_key)g.push('search');return g.length?g.join(' \u00b7 '):'\u2014';})()+'</td>'+
   '<td class="row-actions"><div class="action-group"><button class="btn btn-secondary btn-sm btn-icon" onclick="openModel(\''+escAttr(m.name)+'\')" title="Edit model"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.3 2.2l2.5 2.5L5.5 13H3v-2.5z"/><path d="M9.8 3.7l2.5 2.5"/></svg></button><button class="btn btn-danger btn-sm btn-icon" onclick="deleteModel(\''+escAttr(m.name)+'\')" title="Delete model"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2.5 4h11M5.5 4V2.5h5V4M4 4l.7 9.5h6.6L12 4M6.5 6.8v4.4M9.5 6.8v4.4"/></svg></button></div></td></tr>';}).join('');reapplyFilter('modelFilter','modelsBody');}
+function renderAliases(){
+  var unknown=document.getElementById('unknownModelsBody');
+  if(unknown){unknown.innerHTML=chatState.unknownModels.length?chatState.unknownModels.map(function(u,i){
+    var options=chatState.models.map(function(m){return '<option value="'+escAttr(m.name)+'">'+esc(m.name)+'</option>';}).join('');
+    var seen=u.last_seen?new Date(u.last_seen).toLocaleString():'\u2014';
+    return '<tr><td><code>'+esc(u.id)+'</code></td><td class="mono">'+u.count+'</td><td>'+esc(seen)+'</td><td class="mono">'+esc(u.endpoint)+'</td><td><div class="action-group"><select id="unknownTarget-'+i+'">'+options+'</select><button class="btn btn-primary btn-sm" type="button" onclick="aliasUnknown('+i+')" '+(options?'':'disabled')+'>Alias</button></div></td></tr>';
+  }).join(''):'<tr><td colspan="5" class="empty-cell">No unrecognized model requests since restart</td></tr>';}
+  var aliases=document.getElementById('aliasesBody');
+  if(aliases){aliases.innerHTML=chatState.aliases.length?chatState.aliases.map(function(a,i){return '<tr><td><code>'+esc(a.alias)+'</code></td><td><code>'+esc(a.target)+'</code></td><td class="row-actions"><button class="btn btn-danger btn-sm" type="button" onclick="deleteAlias('+i+')">Delete</button></td></tr>';}).join(''):'<tr><td colspan="3" class="empty-cell">No aliases configured</td></tr>';}
+}
+function aliasUnknown(i){var u=chatState.unknownModels[i],sel=document.getElementById('unknownTarget-'+i);if(!u||!sel||!sel.value)return;apiPost('/admin/models/mutate',{action:'alias_add',alias:u.id,target:sel.value}).then(function(r){if(!r.ok){flash(r.json.error&&r.json.error.message||'Alias failed','error');return;}flash('Alias created','success');loadModels();});}
+function deleteAlias(i){var a=chatState.aliases[i];if(!a)return;openConfirm('Delete alias','Delete alias <strong>'+esc(a.alias)+'</strong>?','','Delete alias',function(){apiPost('/admin/models/mutate',{action:'alias_delete',alias:a.alias}).then(function(r){if(!r.ok){flash(r.json.error&&r.json.error.message||'Delete failed','error');return;}flash('Alias deleted','success');loadModels();});});}
 function renderHelpers(){
   chatState.visionList=(chatState.helpers.vision_models||[]).slice();
   chatState.searchList=(chatState.helpers.web_search_keys||[]).map(function(e){return {provider:e.provider,keyMask:e.key_mask,keepIndex:0,newKey:null};});
@@ -630,13 +695,16 @@ function collectBackends(){return Array.from(document.querySelectorAll('#backend
 function saveModel(e){e.preventDefault();var f=e.target,backends=collectBackends(),err=document.getElementById('modelErr');err.style.display='none';if(!f.elements.name.value.trim()||!backends.length||backends.some(function(b){return !b.url;})){err.textContent='Name and at least one backend URL are required.';err.style.display='block';return;}var body={name:f.elements.name.value.trim(),type:f.elements.type.value,model:f.elements.model.value.trim(),timeout:parseInt(f.elements.timeout.value,10)||300,context_window:parseInt(f.elements.context_window.value,10)||0,supports_vision:f.elements.supports_vision.checked,rewrite_vision:f.elements.rewrite_vision.value,rewrite_documents:f.elements.rewrite_documents.value,rewrite_web_search:f.elements.rewrite_web_search.value,region:f.elements.region.value.trim(),aws_access_key:f.elements.aws_access_key.value.trim(),backends:backends};var d={};['temperature','top_p'].forEach(function(k){if(f.elements[k].value!=='')d[k]=parseFloat(f.elements[k].value);});if(f.elements.top_k.value!=='')d.top_k=parseInt(f.elements.top_k.value,10);if(f.elements.reasoning_effort.value)d.reasoning_effort=f.elements.reasoning_effort.value;body.defaults=d;if(f.elements.aws_secret_key.value)body.aws_secret_key=f.elements.aws_secret_key.value;if(f.elements.aws_session_token.value)body.aws_session_token=f.elements.aws_session_token.value;var payload=chatState.editing?{action:'update',original_name:chatState.editing,model:body}:{action:'add',model:body};var btn=document.getElementById('modelSave');btn.disabled=true;apiPost('/admin/models/mutate',payload).then(function(r){btn.disabled=false;if(!r.ok){err.textContent=r.json.error&&r.json.error.message||'Save failed';err.style.display='block';return;}closeModel();flash('Model saved','success');loadModels();});}
 function deleteModel(name){openConfirm('Delete model','Delete model <strong>'+esc(name)+'</strong>? Its backends are removed from the running config immediately.','','Delete model',function(){apiPost('/admin/models/mutate',{action:'delete',name:name}).then(function(r){if(!r.ok){flash(r.json.error&&r.json.error.message||'Delete failed','error');return;}flash('Deleted','success');loadModels();});});}
 function switchLLMTab(t){
-var h=t==='helpers';
-document.getElementById('pane-models').style.display=h?'none':'';
+var h=t==='helpers',a=t==='aliasing',m=!h&&!a;
+document.getElementById('pane-models').style.display=m?'':'none';
 document.getElementById('pane-helpers').style.display=h?'':'none';
-document.getElementById('subtabModels').classList.toggle('active',!h);
+document.getElementById('pane-aliasing').style.display=a?'':'none';
+document.getElementById('subtabModels').classList.toggle('active',m);
 document.getElementById('subtabHelpers').classList.toggle('active',h);
-if(history.replaceState)history.replaceState(null,'',h?'?tab=helpers':location.pathname);
+document.getElementById('subtabAliasing').classList.toggle('active',a);
+if(history.replaceState)history.replaceState(null,'',h?'?tab=helpers':(a?'?tab=aliasing':location.pathname));
 }
-if(location.search.indexOf('tab=helpers')>=0)switchLLMTab('helpers');
+var initialLLMTab=new URLSearchParams(location.search).get('tab');
+if(initialLLMTab==='helpers'||initialLLMTab==='aliasing')switchLLMTab(initialLLMTab);
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeModel();});attachFilter('modelFilter','modelsBody');loadModels();`
 }

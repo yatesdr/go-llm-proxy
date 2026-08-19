@@ -27,6 +27,7 @@ type responsesRequest struct {
 	Reasoning         *reasoningConfig  `json:"reasoning,omitempty"`
 	Text              json.RawMessage   `json:"text,omitempty"`
 	User              string            `json:"user,omitempty"`
+	aliasFrom         string
 }
 
 type reasoningConfig struct {

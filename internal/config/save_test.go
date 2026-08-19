@@ -238,6 +238,68 @@ func TestAddModelRoundTrip(t *testing.T) {
 	}
 }
 
+func TestAliasMutatorsRoundTrip(t *testing.T) {
+	path := writeFixture(t, baseFixture)
+	cs := loadStore(t, path)
+	backupPath := path + legacyConfigBackupSuffix
+	backupBefore, err := os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatalf("reading migration backup: %v", err)
+	}
+	if err := cs.AddAlias("reviewer-model", "model-b"); err != nil {
+		t.Fatalf("AddAlias: %v", err)
+	}
+	if got := cs.Get().Aliases["reviewer-model"]; got != "model-b" {
+		t.Fatalf("in-memory alias target = %q", got)
+	}
+
+	reloaded := loadStore(t, path)
+	if got := reloaded.Get().Aliases["reviewer-model"]; got != "model-b" {
+		t.Fatalf("reloaded alias target = %q", got)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "aliases:\n  reviewer-model: model-b") {
+		t.Fatalf("alias mapping missing from YAML:\n%s", data)
+	}
+	if !strings.Contains(string(data), "# test config") {
+		t.Fatal("alias mutation did not preserve YAML comments")
+	}
+	backupAfter, err := os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatalf("reading migration backup after mutation: %v", err)
+	}
+	if string(backupAfter) != string(backupBefore) {
+		t.Fatal("alias mutation changed the migration backup")
+	}
+
+	if err := reloaded.DeleteAlias("reviewer-model"); err != nil {
+		t.Fatalf("DeleteAlias: %v", err)
+	}
+	if _, ok := reloaded.Get().Aliases["reviewer-model"]; ok {
+		t.Fatal("alias remains after delete")
+	}
+}
+
+func TestAddAliasRejectsInvalidCurrentConfigReferences(t *testing.T) {
+	path := writeFixture(t, baseFixture)
+	cs := loadStore(t, path)
+	if err := cs.AddAlias("model-a", "model-b"); err == nil {
+		t.Fatal("expected model-name collision to fail")
+	}
+	if err := cs.AddAlias("reviewer", "missing"); err == nil {
+		t.Fatal("expected missing target to fail")
+	}
+	if err := cs.AddAlias("fast", "model-b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cs.AddAlias("reviewer", "fast"); err == nil {
+		t.Fatal("expected alias chain to fail")
+	}
+}
+
 func TestAddModelDuplicateRejected(t *testing.T) {
 	path := writeFixture(t, baseFixture)
 	cs := loadStore(t, path)

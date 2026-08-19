@@ -53,6 +53,13 @@ func (h *ResponsesHandler) HandleCompact(w http.ResponseWriter, r *http.Request)
 	}
 
 	cfg := h.config.Get()
+	requestedModel := req.Model
+	req.Model = config.ResolveModelName(cfg, requestedModel)
+	if req.Model != requestedModel {
+		req.aliasFrom = requestedModel
+		body = RewriteModelName(body, req.Model)
+		slog.Info("resolved model alias", "model", req.Model, "alias_from", req.aliasFrom)
+	}
 	key := auth.KeyFromContext(r.Context())
 	if !auth.KeyAllowsModel(key, req.Model) {
 		httputil.WriteError(w, http.StatusForbidden, "not authorized for requested model")
@@ -60,6 +67,7 @@ func (h *ResponsesHandler) HandleCompact(w http.ResponseWriter, r *http.Request)
 	}
 	model := config.FindModel(cfg, req.Model)
 	if model == nil {
+		Record(requestedModel, "responses")
 		httputil.WriteError(w, http.StatusNotFound, "unknown model")
 		return
 	}
@@ -84,7 +92,7 @@ func (h *ResponsesHandler) HandleCompact(w http.ResponseWriter, r *http.Request)
 
 	// Try native passthrough unless forced to translate.
 	if !h.shouldTranslate(model, "/responses/compact") {
-		if h.tryNativePassthrough(ctx, w, r, body, req.Model, model, "/responses/compact", keyName, keyHash, startTime) {
+		if h.tryNativePassthrough(ctx, w, r, body, req.Model, req.aliasFrom, model, "/responses/compact", keyName, keyHash, startTime) {
 			return
 		}
 		if h.shouldForceNative(model) {
@@ -214,7 +222,7 @@ func (h *ResponsesHandler) HandleCompact(w http.ResponseWriter, r *http.Request)
 	logUsageChat(h.usage, usageLogInput{
 		startTime: startTime, statusCode: resp.StatusCode,
 		keyName: keyName, keyHash: keyHash,
-		model: req.Model, endpoint: "/v1/responses/compact",
+		model: req.Model, aliasFrom: req.aliasFrom, endpoint: "/v1/responses/compact",
 		backend:      model.Backend,
 		requestBytes: int64(len(chatBody)), responseBytes: int64(len(respBody)),
 	}, chatResp.Usage)

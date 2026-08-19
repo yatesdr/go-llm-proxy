@@ -39,6 +39,7 @@ type UsageRecord struct {
 	KeyHash       string // first 16 hex chars of SHA-256(key)
 	KeyName       string
 	Model         string
+	AliasFrom     string // requested alias, empty when the canonical name was used
 	Backend       string // backend URL that served the request (empty pre-pools)
 	Endpoint      string
 	StatusCode    int
@@ -57,6 +58,7 @@ CREATE TABLE IF NOT EXISTS usage (
 	key_hash      TEXT    NOT NULL,
 	key_name      TEXT    NOT NULL DEFAULT '',
 	model         TEXT    NOT NULL,
+	alias_from    TEXT    NOT NULL DEFAULT '',
 	backend       TEXT    NOT NULL DEFAULT '',
 	endpoint      TEXT    NOT NULL DEFAULT '',
 	status_code   INTEGER NOT NULL DEFAULT 0,
@@ -94,6 +96,11 @@ func NewUsageLogger(dbPath string) (*UsageLogger, error) {
 		!strings.Contains(err.Error(), "duplicate column") {
 		db.Close()
 		return nil, fmt.Errorf("migrating usage schema: %w", err)
+	}
+	if _, err := db.Exec(`ALTER TABLE usage ADD COLUMN alias_from TEXT NOT NULL DEFAULT ''`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		db.Close()
+		return nil, fmt.Errorf("migrating usage alias column: %w", err)
 	}
 
 	readDB, err := sql.Open("sqlite", dbPath+"?mode=ro&_journal_mode=WAL&_busy_timeout=5000")
@@ -136,14 +143,15 @@ func (ul *UsageLogger) runWriter() {
 
 func (ul *UsageLogger) write(rec UsageRecord) {
 	_, err := ul.db.Exec(`
-		INSERT INTO usage (timestamp, key_hash, key_name, model, backend, endpoint,
+		INSERT INTO usage (timestamp, key_hash, key_name, model, alias_from, backend, endpoint,
 			status_code, request_bytes, response_bytes,
 			input_tokens, output_tokens, total_tokens, duration_ms)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.Timestamp.UTC().Format(time.RFC3339),
 		rec.KeyHash,
 		rec.KeyName,
 		rec.Model,
+		rec.AliasFrom,
 		rec.Backend,
 		rec.Endpoint,
 		rec.StatusCode,

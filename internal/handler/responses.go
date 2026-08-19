@@ -80,7 +80,7 @@ func (h *ResponsesHandler) shouldForceNative(model *config.ModelConfig) bool {
 // handled the request (any status except 404). Returns false if the
 // backend returned 404, meaning it does not support the endpoint —
 // the caller should fall back to translation.
-func (h *ResponsesHandler) tryNativePassthrough(ctx context.Context, w http.ResponseWriter, r *http.Request, body []byte, modelName string, model *config.ModelConfig, path, keyName, keyHash string, startTime time.Time) bool {
+func (h *ResponsesHandler) tryNativePassthrough(ctx context.Context, w http.ResponseWriter, r *http.Request, body []byte, modelName, aliasFrom string, model *config.ModelConfig, path, keyName, keyHash string, startTime time.Time) bool {
 	if model.Model != modelName {
 		body = RewriteModelName(body, model.Model)
 	}
@@ -141,7 +141,7 @@ func (h *ResponsesHandler) tryNativePassthrough(ctx context.Context, w http.Resp
 		if h.usage != nil {
 			rec := usage.UsageRecord{
 				Timestamp: startTime, KeyHash: keyHash, KeyName: keyName,
-				Model: modelName, Endpoint: "/v1" + path, StatusCode: resp.StatusCode,
+				Model: modelName, AliasFrom: aliasFrom, Endpoint: "/v1" + path, StatusCode: resp.StatusCode,
 				RequestBytes: int64(len(body)), ResponseBytes: int64(len(errBody)),
 				DurationMS: time.Since(startTime).Milliseconds(),
 			}
@@ -187,6 +187,7 @@ func (h *ResponsesHandler) tryNativePassthrough(ctx context.Context, w http.Resp
 			KeyHash:       keyHash,
 			KeyName:       keyName,
 			Model:         modelName,
+			AliasFrom:     aliasFrom,
 			Endpoint:      "/v1" + path,
 			StatusCode:    resp.StatusCode,
 			RequestBytes:  int64(len(body)),
@@ -226,6 +227,13 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := h.config.Get()
+	requestedModel := req.Model
+	req.Model = config.ResolveModelName(cfg, requestedModel)
+	if req.Model != requestedModel {
+		req.aliasFrom = requestedModel
+		body = RewriteModelName(body, req.Model)
+		slog.Info("resolved model alias", "model", req.Model, "alias_from", req.aliasFrom)
+	}
 	key := auth.KeyFromContext(r.Context())
 	if !auth.KeyAllowsModel(key, req.Model) {
 		httputil.WriteError(w, http.StatusForbidden, "not authorized for requested model")
@@ -234,6 +242,7 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	model := config.FindModel(cfg, req.Model)
 	if model == nil {
+		Record(requestedModel, "responses")
 		httputil.WriteError(w, http.StatusNotFound, "unknown model")
 		return
 	}
@@ -270,7 +279,7 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Try native passthrough unless forced to translate.
 	if !h.shouldTranslate(model, "/responses") {
-		if h.tryNativePassthrough(ctx, w, r, body, req.Model, model, "/responses", keyName, keyHash, startTime) {
+		if h.tryNativePassthrough(ctx, w, r, body, req.Model, req.aliasFrom, model, "/responses", keyName, keyHash, startTime) {
 			return
 		}
 		// For native mode, don't fall back to translation — the backend must handle it.
@@ -567,7 +576,7 @@ func (h *ResponsesHandler) handleNonStreaming(w http.ResponseWriter, resp *http.
 	logUsageChat(h.usage, usageLogInput{
 		startTime: startTime, statusCode: resp.StatusCode,
 		keyName: keyName, keyHash: keyHash,
-		model: req.Model, endpoint: "/v1/responses",
+		model: req.Model, aliasFrom: req.aliasFrom, endpoint: "/v1/responses",
 		backend:      model.Backend,
 		requestBytes: requestBytes, responseBytes: int64(len(body)),
 	}, chatResp.Usage)

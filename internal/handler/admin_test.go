@@ -80,6 +80,39 @@ func TestLoginPageRenders(t *testing.T) {
 	}
 }
 
+func TestModelsPageHasDedicatedAliasingTab(t *testing.T) {
+	h, _, _ := newAdminTestHandler(t)
+	r := authedRequest(t, h, http.MethodGet, "/admin/chat", nil)
+	w := httptest.NewRecorder()
+	h.RequirePage(h.ModelsPage).ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	page := w.Body.String()
+	for _, want := range []string{
+		`id="subtabModels"`,
+		`id="subtabHelpers"`,
+		`id="subtabAliasing"`,
+		`>Model Aliasing</button>`,
+		`id="pane-aliasing"`,
+		`?tab=aliasing`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("models page missing %q", want)
+		}
+	}
+
+	modelsPane := strings.Index(page, `id="pane-models"`)
+	helpersPane := strings.Index(page, `id="pane-helpers"`)
+	aliasingPane := strings.Index(page, `id="pane-aliasing"`)
+	aliasTable := strings.Index(page, `id="aliasesBody"`)
+	modelModal := strings.Index(page, `id="modelModal"`)
+	if !(modelsPane < helpersPane && helpersPane < aliasingPane && aliasingPane < aliasTable && aliasTable < modelModal) {
+		t.Errorf("expected aliases to render only in the third LLM pane; indexes models=%d helpers=%d aliasing=%d table=%d modal=%d", modelsPane, helpersPane, aliasingPane, aliasTable, modelModal)
+	}
+}
+
 func TestLoginWithCorrectPasswordSetsCookie(t *testing.T) {
 	h, _, _ := newAdminTestHandler(t)
 	form := url.Values{"password": {"hunter2"}}
@@ -350,6 +383,82 @@ func TestModelsMutateAddAndUpdate(t *testing.T) {
 	m := config.FindModel(cs.Get(), "model-c-prime")
 	if m == nil || m.ContextWindow != 65536 {
 		t.Fatalf("update failed: %+v", m)
+	}
+}
+
+func TestModelsAliasMutationsAndData(t *testing.T) {
+	h, cs, _ := newAdminTestHandler(t)
+	const alias = "codex-reviewer-test"
+	const unknown = "unknown-admin-payload-test"
+	Remove(alias)
+	Remove(unknown)
+	t.Cleanup(func() {
+		Remove(alias)
+		Remove(unknown)
+	})
+	Record(alias, "responses")
+
+	body, _ := json.Marshal(map[string]any{
+		"action": "alias_add", "alias": alias, "target": "model-b",
+	})
+	r := authedRequest(t, h, http.MethodPost, "/admin/models/mutate", body)
+	w := httptest.NewRecorder()
+	h.RequireAPI(h.ModelsMutate).ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("alias_add status = %d: %s", w.Code, w.Body.String())
+	}
+	if got := cs.Get().Aliases[alias]; got != "model-b" {
+		t.Fatalf("alias target = %q", got)
+	}
+	for _, entry := range Snapshot() {
+		if entry.ID == alias {
+			t.Fatal("alias_add did not remove the unknown-model row")
+		}
+	}
+
+	Record(unknown, "messages")
+	dataReq := authedRequest(t, h, http.MethodGet, "/admin/models/data", nil)
+	dataW := httptest.NewRecorder()
+	h.RequireAPI(h.ModelsData).ServeHTTP(dataW, dataReq)
+	if dataW.Code != http.StatusOK {
+		t.Fatalf("ModelsData status = %d", dataW.Code)
+	}
+	var payload struct {
+		Aliases []struct {
+			Alias  string `json:"alias"`
+			Target string `json:"target"`
+		} `json:"aliases"`
+		Unknown []struct {
+			ID       string `json:"id"`
+			Count    uint64 `json:"count"`
+			Endpoint string `json:"endpoint"`
+		} `json:"unknown_models"`
+	}
+	if err := json.Unmarshal(dataW.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Aliases) != 1 || payload.Aliases[0].Alias != alias || payload.Aliases[0].Target != "model-b" {
+		t.Fatalf("aliases payload = %+v", payload.Aliases)
+	}
+	foundUnknown := false
+	for _, entry := range payload.Unknown {
+		if entry.ID == unknown {
+			foundUnknown = entry.Count == 1 && entry.Endpoint == "messages"
+		}
+	}
+	if !foundUnknown {
+		t.Fatalf("unknown_models payload missing expected row: %+v", payload.Unknown)
+	}
+
+	deleteBody, _ := json.Marshal(map[string]any{"action": "alias_delete", "alias": alias})
+	deleteReq := authedRequest(t, h, http.MethodPost, "/admin/models/mutate", deleteBody)
+	deleteW := httptest.NewRecorder()
+	h.RequireAPI(h.ModelsMutate).ServeHTTP(deleteW, deleteReq)
+	if deleteW.Code != http.StatusOK {
+		t.Fatalf("alias_delete status = %d: %s", deleteW.Code, deleteW.Body.String())
+	}
+	if _, exists := cs.Get().Aliases[alias]; exists {
+		t.Fatal("alias remains after alias_delete")
 	}
 }
 

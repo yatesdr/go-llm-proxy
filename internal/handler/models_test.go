@@ -75,3 +75,35 @@ func TestModelsHandlerAppliesModelACLToAudioWorkloads(t *testing.T) {
 		t.Fatalf("model ids=%v want=[kokoro]", got)
 	}
 }
+
+func TestModelsHandlerIncludesAliasesUsingTargetACLAndContext(t *testing.T) {
+	cs := config.NewTestConfigStore(&config.Config{
+		Models: []config.ModelConfig{
+			{Name: "allowed", ContextWindow: 131072},
+			{Name: "denied", ContextWindow: 8192},
+		},
+		Aliases: map[string]string{"reviewer": "allowed", "hidden": "denied"},
+		Keys:    []config.KeyConfig{{Key: "limited", Models: []string{"allowed"}}},
+	})
+	h := auth.AuthMiddleware(cs, NewModelsHandler(cs, nil))
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer limited")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	var response struct {
+		Data []struct {
+			ID            string `json:"id"`
+			ContextWindow int    `json:"context_window"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Data) != 2 || response.Data[0].ID != "allowed" || response.Data[1].ID != "reviewer" {
+		t.Fatalf("models = %+v", response.Data)
+	}
+	if response.Data[1].ContextWindow != 131072 {
+		t.Fatalf("alias context window = %d", response.Data[1].ContextWindow)
+	}
+}

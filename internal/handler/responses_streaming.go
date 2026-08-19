@@ -799,7 +799,7 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 	logUsageChat(h.usage, usageLogInput{
 		startTime: startTime, statusCode: resp.StatusCode,
 		keyName: keyName, keyHash: keyHash,
-		model: req.Model, endpoint: "/v1/responses",
+		model: req.Model, aliasFrom: req.aliasFrom, endpoint: "/v1/responses",
 		backend:      model.Backend,
 		requestBytes: requestBytes, responseBytes: responseBytes,
 	}, usageData)

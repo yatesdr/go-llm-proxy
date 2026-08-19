@@ -25,7 +25,7 @@ import (
 // disconnect/reconnect.
 func (p *ProxyHandler) handleBedrockChat(
 	ctx context.Context, w http.ResponseWriter,
-	body []byte, modelName string, model *config.ModelConfig,
+	body []byte, modelName, aliasFrom string, model *config.ModelConfig,
 	keyName, keyHash, requestID string, startTime time.Time,
 ) {
 	converseReq, parsedReq, err := buildConverseRequestFromChat(body)
@@ -97,6 +97,7 @@ func (p *ProxyHandler) handleBedrockChat(
 			startTime: startTime, statusCode: resp.StatusCode,
 			keyName: keyName, keyHash: keyHash,
 			model: modelName, endpoint: "/v1/chat/completions",
+			aliasFrom:    aliasFrom,
 			backend:      model.Backend,
 			requestBytes: int64(len(body)), responseBytes: int64(len(errBody)),
 		})
@@ -114,6 +115,7 @@ func (p *ProxyHandler) handleBedrockChat(
 			startTime: startTime, statusCode: resp.StatusCode,
 			keyName: keyName, keyHash: keyHash,
 			model: modelName, endpoint: "/v1/chat/completions",
+			aliasFrom:    aliasFrom,
 			backend:      model.Backend,
 			requestBytes: int64(len(body)), responseBytes: respBytes,
 		}, usageData)
@@ -142,6 +144,7 @@ func (p *ProxyHandler) handleBedrockChat(
 		startTime: startTime, statusCode: resp.StatusCode,
 		keyName: keyName, keyHash: keyHash,
 		model: modelName, endpoint: "/v1/chat/completions",
+		aliasFrom:    aliasFrom,
 		backend:      model.Backend,
 		requestBytes: int64(len(body)), responseBytes: int64(len(respBody)),
 	}, usageData)

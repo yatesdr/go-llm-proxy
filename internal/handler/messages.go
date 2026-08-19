@@ -88,6 +88,13 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := h.config.Get()
+	requestedModel := req.Model
+	req.Model = config.ResolveModelName(cfg, requestedModel)
+	if req.Model != requestedModel {
+		req.aliasFrom = requestedModel
+		body = RewriteModelName(body, req.Model)
+		slog.Info("resolved model alias", "model", req.Model, "alias_from", req.aliasFrom)
+	}
 	key := auth.KeyFromContext(r.Context())
 	if !auth.KeyAllowsModel(key, req.Model) {
 		httputil.WriteAnthropicError(w, http.StatusForbidden, "permission_error", "not authorized for requested model")
@@ -96,6 +103,7 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	model := config.FindModel(cfg, req.Model)
 	if model == nil {
+		Record(requestedModel, "messages")
 		httputil.WriteAnthropicError(w, http.StatusNotFound, "not_found_error", "unknown model")
 		return
 	}
@@ -334,7 +342,7 @@ func (h *MessagesHandler) handleNativePassthrough(ctx context.Context, w http.Re
 		logUsage(h.usage, usageLogInput{
 			startTime: startTime, statusCode: resp.StatusCode,
 			keyName: keyName, keyHash: keyHash,
-			model: req.Model, endpoint: "/v1/messages",
+			model: req.Model, aliasFrom: req.aliasFrom, endpoint: "/v1/messages",
 			backend:      model.Backend,
 			requestBytes: int64(len(body)), responseBytes: int64(len(errBody)),
 		})
@@ -373,7 +381,7 @@ func (h *MessagesHandler) handleNativePassthrough(ctx context.Context, w http.Re
 	logUsage(h.usage, usageLogInput{
 		startTime: startTime, statusCode: resp.StatusCode,
 		keyName: keyName, keyHash: keyHash,
-		model: req.Model, endpoint: "/v1/messages",
+		model: req.Model, aliasFrom: req.aliasFrom, endpoint: "/v1/messages",
 		backend:      model.Backend,
 		requestBytes: int64(len(body)), responseBytes: totalBytes,
 	})
@@ -496,7 +504,7 @@ func (h *MessagesHandler) handleNonStreaming(w http.ResponseWriter, resp *http.R
 	logUsageChat(h.usage, usageLogInput{
 		startTime: startTime, statusCode: resp.StatusCode,
 		keyName: keyName, keyHash: keyHash,
-		model: req.Model, endpoint: "/v1/messages",
+		model: req.Model, aliasFrom: req.aliasFrom, endpoint: "/v1/messages",
 		backend:      model.Backend,
 		requestBytes: requestBytes, responseBytes: int64(len(body)),
 	}, chatResp.Usage)

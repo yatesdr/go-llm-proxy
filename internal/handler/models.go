@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"sort"
 
 	"go-llm-proxy/internal/auth"
 	"go-llm-proxy/internal/config"
@@ -36,10 +37,10 @@ func (h *ModelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ContextWindow int    `json:"context_window,omitempty"`
 	}
 
-	models := make([]modelObj, 0, len(cfg.Models)+2)
-	seen := make(map[string]struct{}, len(cfg.Models)+2)
-	appendModel := func(name string, contextWindow int) {
-		if name == "" || !auth.KeyAllowsModel(key, name) {
+	models := make([]modelObj, 0, len(cfg.Models)+len(cfg.Aliases)+2)
+	seen := make(map[string]struct{}, len(cfg.Models)+len(cfg.Aliases)+2)
+	appendModel := func(name string, contextWindow int, authorizedAs string) {
+		if name == "" || !auth.KeyAllowsModel(key, authorizedAs) {
 			return
 		}
 		if _, exists := seen[name]; exists {
@@ -55,11 +56,22 @@ func (h *ModelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	for _, m := range cfg.Models {
-		appendModel(m.Name, m.ContextWindow)
+		appendModel(m.Name, m.ContextWindow, m.Name)
+	}
+	aliasNames := make([]string, 0, len(cfg.Aliases))
+	for alias := range cfg.Aliases {
+		aliasNames = append(aliasNames, alias)
+	}
+	sort.Strings(aliasNames)
+	for _, alias := range aliasNames {
+		target := cfg.Aliases[alias]
+		if model := config.FindModel(cfg, target); model != nil {
+			appendModel(alias, model.ContextWindow, target)
+		}
 	}
 	for _, audio := range []*config.AudioModelConfig{cfg.Audio.Whisper, cfg.Audio.TTS} {
 		if audio != nil {
-			appendModel(audio.Name, 0)
+			appendModel(audio.Name, 0, audio.Name)
 		}
 	}
 

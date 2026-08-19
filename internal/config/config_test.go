@@ -80,6 +80,47 @@ func TestValidateConfig_DuplicateModelName(t *testing.T) {
 	}
 }
 
+func TestValidateConfigAliases(t *testing.T) {
+	tests := []struct {
+		name    string
+		aliases map[string]string
+		wantErr string
+	}{
+		{name: "valid", aliases: map[string]string{"reviewer": "test-model"}},
+		{name: "missing target", aliases: map[string]string{"reviewer": "missing"}, wantErr: "unknown model"},
+		{name: "shadows model", aliases: map[string]string{"test-model": "test-model"}, wantErr: "conflicts with model"},
+		{name: "alias chain", aliases: map[string]string{"reviewer": "fast", "fast": "test-model"}, wantErr: "may not target alias"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Aliases = tt.aliases
+			err := validateConfig(cfg)
+			if tt.wantErr == "" && err != nil {
+				t.Fatalf("validateConfig: %v", err)
+			}
+			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Fatalf("error = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestResolveModelName(t *testing.T) {
+	cfg := validConfig()
+	cfg.Aliases = map[string]string{"reviewer": "test-model", "CaseSensitive": "test-model"}
+	for _, tt := range []struct{ in, want string }{
+		{"test-model", "test-model"},
+		{"reviewer", "test-model"},
+		{"casesensitive", "casesensitive"},
+		{"unknown", "unknown"},
+	} {
+		if got := ResolveModelName(cfg, tt.in); got != tt.want {
+			t.Errorf("ResolveModelName(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
 func TestValidateConfig_DuplicateKey(t *testing.T) {
 	cfg := validConfig()
 	cfg.Keys = append(cfg.Keys, KeyConfig{Key: "sk-test-key", Name: "dup"})

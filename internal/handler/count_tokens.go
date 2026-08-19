@@ -66,6 +66,12 @@ func (h *CountTokensHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := h.config.Get()
+	requestedModel := req.Model
+	req.Model = config.ResolveModelName(cfg, requestedModel)
+	if req.Model != requestedModel {
+		body = RewriteModelName(body, req.Model)
+		slog.Info("resolved model alias", "model", req.Model, "alias_from", requestedModel)
+	}
 	key := auth.KeyFromContext(r.Context())
 	if !auth.KeyAllowsModel(key, req.Model) {
 		httputil.WriteAnthropicError(w, http.StatusForbidden, "permission_error", "not authorized for requested model")
@@ -74,6 +80,7 @@ func (h *CountTokensHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	model := config.FindModel(cfg, req.Model)
 	if model == nil {
+		Record(requestedModel, "count_tokens")
 		httputil.WriteAnthropicError(w, http.StatusNotFound, "not_found_error", "unknown model")
 		return
 	}

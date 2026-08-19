@@ -18,7 +18,7 @@ func TestUsageLoggerCloseDrainsQueuedRecords(t *testing.T) {
 	const records = usageQueueSize + 250
 	for i := 0; i < records; i++ {
 		ul.Log(UsageRecord{
-			Timestamp: time.Now(), Model: "test", Endpoint: "/v1/test", StatusCode: 200,
+			Timestamp: time.Now(), Model: "canonical", AliasFrom: "reviewer", Endpoint: "/v1/test", StatusCode: 200,
 		})
 	}
 	if err := ul.Close(); err != nil {
@@ -36,6 +36,13 @@ func TestUsageLoggerCloseDrainsQueuedRecords(t *testing.T) {
 	}
 	if got != records {
 		t.Fatalf("Close persisted %d records, want %d", got, records)
+	}
+	var model, aliasFrom string
+	if err := db.QueryRow("SELECT model, alias_from FROM usage LIMIT 1").Scan(&model, &aliasFrom); err != nil {
+		t.Fatal(err)
+	}
+	if model != "canonical" || aliasFrom != "reviewer" {
+		t.Fatalf("stored model metadata = (%q, %q)", model, aliasFrom)
 	}
 }
 

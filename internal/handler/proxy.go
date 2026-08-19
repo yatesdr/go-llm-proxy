@@ -43,6 +43,7 @@ func NewProxyHandler(cs *config.ConfigStore, usage *usage.UsageLogger, pipeline 
 type proxyRequestContext struct {
 	model       *config.ModelConfig
 	modelName   string
+	aliasFrom   string
 	endpoint    string
 	requestBody []byte
 	keyName     string
@@ -91,6 +92,18 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := p.config.Get()
+	requestedModel := modelName
+	modelName = config.ResolveModelName(cfg, requestedModel)
+	aliasFrom := ""
+	if modelName != requestedModel {
+		aliasFrom = requestedModel
+		slog.Info("resolved model alias", "model", modelName, "alias_from", aliasFrom)
+		if isMultipart {
+			body = RewriteModelInMultipart(body, contentType, modelName)
+		} else {
+			body = RewriteModelName(body, modelName)
+		}
+	}
 
 	key := auth.KeyFromContext(r.Context())
 	if !auth.KeyAllowsModel(key, modelName) {
@@ -100,6 +113,7 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	model := config.FindModel(cfg, modelName)
 	if model == nil {
+		Record(requestedModel, strings.TrimPrefix(cleanPath, "/v1/"))
 		httputil.WriteError(w, http.StatusNotFound, "unknown model")
 		return
 	}
@@ -145,7 +159,7 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(model.Timeout)*time.Second)
 		defer cancel()
-		p.handleBedrockChat(ctx, w, body, modelName, model, keyName, keyHash, r.Header.Get("X-Request-ID"), time.Now())
+		p.handleBedrockChat(ctx, w, body, modelName, aliasFrom, model, keyName, keyHash, r.Header.Get("X-Request-ID"), time.Now())
 		return
 	}
 
@@ -208,7 +222,7 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		slog.Info("proxying chat completions request (anthropic translation)",
 			"model", modelName, "key", keyName)
-		p.handleAnthropicChat(w, r, body, modelName, model, cfg, parsedChatReq,
+		p.handleAnthropicChat(w, r, body, modelName, aliasFrom, model, cfg, parsedChatReq,
 			searchEnabled, keyName, keyHash, time.Now())
 		return
 	}
@@ -252,7 +266,7 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	startTime := time.Now()
 	rc := proxyRequestContext{
-		model: model, modelName: modelName, endpoint: cleanPath,
+		model: model, modelName: modelName, aliasFrom: aliasFrom, endpoint: cleanPath,
 		requestBody: body, keyName: keyName, keyHash: keyHash, startTime: startTime,
 	}
 
@@ -316,7 +330,7 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		logUsage(p.usage, usageLogInput{
 			startTime: startTime, statusCode: resp.StatusCode,
 			keyName: keyName, keyHash: keyHash,
-			model: modelName, endpoint: cleanPath,
+			model: modelName, aliasFrom: aliasFrom, endpoint: cleanPath,
 			backend:      model.Backend,
 			requestBytes: int64(len(body)), responseBytes: int64(len(errBody)),
 		})
@@ -407,6 +421,7 @@ func (p *ProxyHandler) streamRawResponse(w http.ResponseWriter, resp *http.Respo
 			KeyHash:       rc.keyHash,
 			KeyName:       rc.keyName,
 			Model:         rc.modelName,
+			AliasFrom:     rc.aliasFrom,
 			Endpoint:      rc.endpoint,
 			StatusCode:    resp.StatusCode,
 			RequestBytes:  int64(len(rc.requestBody)),
@@ -667,6 +682,7 @@ func logUsageFromChatResponse(ul *usage.UsageLogger, usageData *api.ChunkUsage,
 		keyName:       rc.keyName,
 		keyHash:       rc.keyHash,
 		model:         rc.modelName,
+		aliasFrom:     rc.aliasFrom,
 		backend:       rc.model.Backend,
 		endpoint:      rc.endpoint,
 		requestBytes:  int64(len(rc.requestBody)),
