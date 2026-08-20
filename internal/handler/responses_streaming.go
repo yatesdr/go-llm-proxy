@@ -22,12 +22,15 @@ import (
 type toolCallState struct {
 	itemID    string
 	callID    string
-	name      string
+	flatName  string // raw name from the model (matches Chat Completions tools)
+	name      string // Responses item name (inner, after namespace split)
+	itemType  string // "function_call" (default) or "custom_tool_call"
+	namespace string // Responses namespace field ("" for plain tools)
 	args      strings.Builder
 	outputIdx int
 }
 
-func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Response, req responsesRequest, model *config.ModelConfig, chatReq map[string]any, requestBytes int64, keyName, keyHash string, startTime time.Time, headersAlreadySent bool) {
+func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Response, req responsesRequest, model *config.ModelConfig, chatReq map[string]any, requestBytes int64, keyName, keyHash string, startTime time.Time, headersAlreadySent bool, toolMap map[string]toolMapping) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		httputil.WriteError(w, http.StatusInternalServerError, "streaming not supported")
@@ -205,22 +208,26 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 				continue
 			}
 			args := tc.args.String()
-			emit("response.function_call_arguments.done", map[string]any{
+			doneEvent := "response.function_call_arguments.done"
+			doneData := map[string]any{
 				"arguments":       args,
 				"item_id":         tc.itemID,
 				"output_index":    tc.outputIdx,
 				"sequence_number": seq,
-			})
+			}
+			if tc.itemType == "custom_tool_call" {
+				doneEvent = "response.custom_tool_call_input.done"
+				doneData["input"] = customToolInput(args)
+			}
+			emit(doneEvent, doneData)
 			seq++
 
-			item := map[string]any{
-				"id":        tc.itemID,
-				"type":      "function_call",
-				"call_id":   tc.callID,
-				"name":      tc.name,
-				"arguments": args,
-				"status":    "completed",
+			argVal := args
+			if tc.itemType == "custom_tool_call" {
+				argVal = customToolInput(args)
 			}
+			item := toolCallItemMap(tc.itemID, tc.callID, tc.name, tc.namespace, tc.itemType, argVal)
+			item["status"] = "completed"
 			emit("response.output_item.done", map[string]any{
 				"item":            item,
 				"output_index":    tc.outputIdx,
@@ -416,10 +423,14 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 				if tc.Function != nil {
 					name = tc.Function.Name
 				}
+				itemType, resolvedName, namespace := resolveToolCall(toolMap, name)
 				tcs := &toolCallState{
 					itemID:    itemID,
 					callID:    tc.ID,
-					name:      name,
+					flatName:  name,
+					name:      resolvedName,
+					itemType:  itemType,
+					namespace: namespace,
 					outputIdx: outputIdx,
 				}
 				// Grow slice to accommodate index.
@@ -429,14 +440,7 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 				toolCalls[tc.Index] = tcs
 
 				evData := map[string]any{
-					"item": map[string]any{
-						"id":        itemID,
-						"type":      "function_call",
-						"call_id":   tc.ID,
-						"name":      name,
-						"arguments": "",
-						"status":    "in_progress",
-					},
+					"item":            toolCallItemMap(itemID, tc.ID, resolvedName, namespace, itemType, ""),
 					"output_index":    outputIdx,
 					"sequence_number": seq,
 				}
@@ -459,10 +463,14 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 						"output_index":    tcs.outputIdx,
 						"sequence_number": seq,
 					}
+					deltaEvent := "response.function_call_arguments.delta"
+					if tcs.itemType == "custom_tool_call" {
+						deltaEvent = "response.custom_tool_call_input.delta"
+					}
 					if searchEnabled {
-						toolCallBuffer = append(toolCallBuffer, bufferedEvent{"response.function_call_arguments.delta", evData})
+						toolCallBuffer = append(toolCallBuffer, bufferedEvent{deltaEvent, evData})
 					} else {
-						emit("response.function_call_arguments.delta", evData)
+						emit(deltaEvent, evData)
 					}
 					seq++
 				}
@@ -502,7 +510,7 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 					Function: struct {
 						Name      string `json:"name"`
 						Arguments string `json:"arguments"`
-					}{Name: tc.name, Arguments: tc.args.String()},
+					}{Name: tc.flatName, Arguments: tc.args.String()},
 				})
 			}
 
@@ -589,7 +597,7 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 						ctx, currentChatReq, model, emit,
 						&outputIdx, &seq, &msgID, &msgStarted, &contentStarted, &textBuf,
 						startMsg, startContent, finishMsg,
-						emitReasoningText, emitContentText, &thinkFilter)
+						emitReasoningText, emitContentText, &thinkFilter, toolMap)
 					if newFinish != "" {
 						finishReason = newFinish
 					}
@@ -627,7 +635,7 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 							Function: struct {
 								Name      string `json:"name"`
 								Arguments string `json:"arguments"`
-							}{Name: tc.name, Arguments: tc.args.String()},
+							}{Name: tc.flatName, Arguments: tc.args.String()},
 						})
 					}
 
@@ -816,6 +824,7 @@ func (h *ResponsesHandler) streamResponsesFromBackend(
 	msgStarted *bool, contentStarted *bool, textBuf *strings.Builder,
 	startMsg func(), startContent func(), finishMsg func(),
 	emitReasoningText func(string), emitContentText func(string), thinkFilter *thinkTagFilter,
+	toolMap map[string]toolMapping,
 ) (finishReason string, usageData *api.ChunkUsage, toolCalls []*toolCallState, finalSeq int) {
 
 	finalSeq = *seq
@@ -921,10 +930,14 @@ func (h *ResponsesHandler) streamResponsesFromBackend(
 				if tc.Function != nil {
 					name = tc.Function.Name
 				}
+				itemType, resolvedName, namespace := resolveToolCall(toolMap, name)
 				tcs := &toolCallState{
 					itemID:    itemID,
 					callID:    tc.ID,
-					name:      name,
+					flatName:  name,
+					name:      resolvedName,
+					itemType:  itemType,
+					namespace: namespace,
 					outputIdx: *outputIdx,
 				}
 				for len(toolCalls) <= tc.Index {
@@ -932,14 +945,7 @@ func (h *ResponsesHandler) streamResponsesFromBackend(
 				}
 				toolCalls[tc.Index] = tcs
 				evData := map[string]any{
-					"item": map[string]any{
-						"id":        itemID,
-						"type":      "function_call",
-						"call_id":   tc.ID,
-						"name":      name,
-						"arguments": "",
-						"status":    "in_progress",
-					},
+					"item":            toolCallItemMap(itemID, tc.ID, resolvedName, namespace, itemType, ""),
 					"output_index":    *outputIdx,
 					"sequence_number": *seq,
 				}
@@ -961,10 +967,14 @@ func (h *ResponsesHandler) streamResponsesFromBackend(
 						"output_index":    tcs.outputIdx,
 						"sequence_number": *seq,
 					}
+					deltaEvent := "response.function_call_arguments.delta"
+					if tcs.itemType == "custom_tool_call" {
+						deltaEvent = "response.custom_tool_call_input.delta"
+					}
 					if searchEnabled {
-						toolCallBuffer = append(toolCallBuffer, bufferedEvent{"response.function_call_arguments.delta", evData})
+						toolCallBuffer = append(toolCallBuffer, bufferedEvent{deltaEvent, evData})
 					} else {
-						emit("response.function_call_arguments.delta", evData)
+						emit(deltaEvent, evData)
 					}
 					*seq++
 				}

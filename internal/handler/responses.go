@@ -299,7 +299,7 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	chatReq := buildChatRequest(req, model.Model, messages)
+	chatReq, toolMap := buildChatRequest(req, model.Model, messages)
 
 	// Run pipeline pre-send processors (vision, PDF, etc.).
 	// For streaming requests, send SSE keepalives during processing to prevent
@@ -431,15 +431,15 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	reqBytes := int64(len(chatBody))
 	if req.Stream {
-		h.handleStreaming(w, resp, req, model, chatReq, reqBytes, keyName, keyHash, startTime, headersAlreadySent)
+		h.handleStreaming(w, resp, req, model, chatReq, reqBytes, keyName, keyHash, startTime, headersAlreadySent, toolMap)
 	} else {
-		h.handleNonStreaming(w, resp, req, model, chatReq, reqBytes, keyName, keyHash, startTime)
+		h.handleNonStreaming(w, resp, req, model, chatReq, reqBytes, keyName, keyHash, startTime, toolMap)
 	}
 }
 
 // --- Non-streaming handler ---
 
-func (h *ResponsesHandler) handleNonStreaming(w http.ResponseWriter, resp *http.Response, req responsesRequest, model *config.ModelConfig, chatReq map[string]any, requestBytes int64, keyName, keyHash string, startTime time.Time) {
+func (h *ResponsesHandler) handleNonStreaming(w http.ResponseWriter, resp *http.Response, req responsesRequest, model *config.ModelConfig, chatReq map[string]any, requestBytes int64, keyName, keyHash string, startTime time.Time, toolMap map[string]toolMapping) {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, api.MaxResponseBodySize))
 	if err != nil {
 		httputil.WriteError(w, http.StatusBadGateway, "failed to read upstream response")
@@ -526,14 +526,13 @@ func (h *ResponsesHandler) handleNonStreaming(w http.ResponseWriter, resp *http.
 		}
 
 		for _, tc := range msg.ToolCalls {
-			output = append(output, map[string]any{
-				"id":        api.RandomID("fc_"),
-				"type":      "function_call",
-				"call_id":   tc.ID,
-				"name":      tc.Function.Name,
-				"arguments": tc.Function.Arguments,
-				"status":    "completed",
-			})
+			itemType, name, namespace := resolveToolCall(toolMap, tc.Function.Name)
+			item := toolCallItemMap(api.RandomID("fc_"), tc.ID, name, namespace, itemType, tc.Function.Arguments)
+			if itemType == "custom_tool_call" {
+				item["input"] = customToolInput(tc.Function.Arguments)
+			}
+			item["status"] = "completed"
+			output = append(output, item)
 		}
 
 		switch choice.FinishReason {
