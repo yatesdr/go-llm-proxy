@@ -43,6 +43,7 @@ type inputItem struct {
 	ID        string          `json:"id"`
 	CallID    string          `json:"call_id"`
 	Name      string          `json:"name"`
+	Namespace string          `json:"namespace"` // function_call / custom_tool_call (namespaced tools)
 	Arguments string          `json:"arguments"` // function_call
 	Input     string          `json:"input"`     // custom_tool_call
 	Output    json.RawMessage `json:"output"`    // *_output items (string, array, or object)
@@ -100,6 +101,20 @@ func translateInput(input json.RawMessage, instructions string) ([]map[string]an
 			name := item.Name
 			if name == "" && item.Type == "local_shell_call" {
 				name = "shell"
+			}
+			// Namespaced tools: the client sends name + namespace as separate
+			// fields, but the flattened tool definition name sent to Chat
+			// Completions is namespace+name concatenated (codex flat_tool_name).
+			if item.Namespace != "" {
+				name = item.Namespace + name
+			}
+			// A flattened custom tool is a function with a single "input"
+			// property; wrap the free-form input so history matches the
+			// tool definition the model sees.
+			if item.Type == "custom_tool_call" {
+				if b, err := json.Marshal(map[string]any{"input": args}); err == nil {
+					args = string(b)
+				}
 			}
 
 			tc := map[string]any{
@@ -345,11 +360,139 @@ func translateOutputContentItems(items []map[string]json.RawMessage) []map[strin
 
 // --- Tool translation ---
 
+// customToolFormat is the "format" field of a free-form (custom) tool.
+type customToolFormat struct {
+	Type       string `json:"type"`
+	Syntax     string `json:"syntax"`
+	Definition string `json:"definition"`
+}
+
+// toolMapping records how a flattened Chat Completions tool name maps back to
+// the Responses API output item the client expects (function_call may carry a
+// namespace; custom tools map to custom_tool_call items).
+type toolMapping struct {
+	flatName  string
+	itemType  string // "function_call" or "custom_tool_call"
+	name      string // Responses item "name" field (inner name)
+	namespace string // Responses item "namespace" field ("" for plain tools)
+}
+
+func toolMappingsByFlatName(m []toolMapping) map[string]toolMapping {
+	if len(m) == 0 {
+		return nil
+	}
+	mm := make(map[string]toolMapping, len(m))
+	for _, t := range m {
+		mm[t.flatName] = t
+	}
+	return mm
+}
+
+// resolveToolCall looks up a Chat Completions tool name produced by the model
+// and returns the Responses API item fields. An absent mapping means a plain
+// function_call with the given name.
+func resolveToolCall(m map[string]toolMapping, flatName string) (itemType, name, namespace string) {
+	if t, ok := m[flatName]; ok {
+		return t.itemType, t.name, t.namespace
+	}
+	return "function_call", flatName, ""
+}
+
+// customToolInput extracts the free-form input string from a custom tool's JSON
+// arguments (the flattened single "input" property). Falls back to the raw
+// arguments string when it is not a JSON object.
+func customToolInput(args string) string {
+	var obj struct {
+		Input string `json:"input"`
+	}
+	if err := json.Unmarshal([]byte(args), &obj); err == nil {
+		return obj.Input
+	}
+	return args
+}
+
+// customToolParams builds the Chat Completions parameter schema for a free-form
+// (custom) tool: a single required string "input" property, mirroring the
+// OpenAI compatibility layer's own custom->function translation.
+func customToolParams(format *customToolFormat) json.RawMessage {
+	inputDesc := "Free-form input for this tool."
+	if format != nil {
+		if format.Definition != "" {
+			inputDesc = format.Definition
+		} else if format.Syntax != "" {
+			inputDesc = format.Syntax
+		}
+	}
+	b, _ := json.Marshal(map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"input": map[string]any{"type": "string", "description": inputDesc},
+		},
+		"required":             []string{"input"},
+		"additionalProperties": false,
+	})
+	return b
+}
+
+// toolCallItemMap builds a Responses API output item for a tool call, honoring
+// the flattened-name mapping (namespaced function calls and custom tools).
+func toolCallItemMap(itemID, callID, name, namespace, itemType, args string) map[string]any {
+	item := map[string]any{
+		"id":      itemID,
+		"call_id": callID,
+		"name":    name,
+		"status":  "in_progress",
+	}
+	if itemType == "custom_tool_call" {
+		item["type"] = "custom_tool_call"
+		item["input"] = args
+	} else {
+		item["type"] = "function_call"
+		item["arguments"] = args
+	}
+	if namespace != "" {
+		item["namespace"] = namespace
+	}
+	return item
+}
+
 // translateTools converts Responses API tool definitions to Chat Completions format.
-// Non-function tools (web_search_preview, etc.) are stripped and returned in the second value.
-func translateTools(tools []json.RawMessage) ([]map[string]any, []string) {
+// Non-function tools (web_search_preview, etc.) are stripped and returned in the
+// second value. Namespace and custom tools are flattened to function tools (Chat
+// Completions has no namespace/custom slot): the flattened name is namespace+name
+// concatenated, matching the codex engine's flat_tool_name. The third return value
+// maps flattened names back to Responses API output item fields for the response
+// side.
+func translateTools(tools []json.RawMessage) ([]map[string]any, []string, []toolMapping) {
 	var result []map[string]any
 	var strippedToolTypes []string
+	var mappings []toolMapping
+
+	addFunction := func(flatName, name, description string, parameters json.RawMessage, strict *bool, itemType, namespace string) {
+		fn := map[string]any{"name": flatName}
+		if description != "" {
+			fn["description"] = description
+		}
+		if len(parameters) > 0 {
+			fn["parameters"] = json.RawMessage(parameters)
+		}
+		if strict != nil {
+			fn["strict"] = *strict
+		}
+		result = append(result, map[string]any{
+			"type":     "function",
+			"function": fn,
+		})
+		if itemType != "function_call" || namespace != "" {
+			mappings = append(mappings, toolMapping{
+				flatName:  flatName,
+				itemType:  itemType,
+				name:      name,
+				namespace: namespace,
+			})
+		}
+	}
+
 	for _, raw := range tools {
 		var tool struct {
 			Type        string          `json:"type"`
@@ -357,31 +500,47 @@ func translateTools(tools []json.RawMessage) ([]map[string]any, []string) {
 			Description string          `json:"description"`
 			Parameters  json.RawMessage `json:"parameters"`
 			Strict      *bool           `json:"strict"`
+			Format      *customToolFormat `json:"format"`
+			Tools       []struct {
+				Type        string          `json:"type"`
+				Name        string          `json:"name"`
+				Description string          `json:"description"`
+				Parameters  json.RawMessage `json:"parameters"`
+				Strict      *bool           `json:"strict"`
+				Format      *customToolFormat `json:"format"`
+			} `json:"tools"`
 		}
 		if json.Unmarshal(raw, &tool) != nil {
 			continue
 		}
-		if tool.Type != "function" {
+		switch tool.Type {
+		case "function":
+			addFunction(tool.Name, tool.Name, tool.Description, tool.Parameters, tool.Strict, "function_call", "")
+		case "namespace":
+			for _, inner := range tool.Tools {
+				flat := tool.Name + inner.Name
+				if inner.Type == "custom" {
+					desc := inner.Description
+					if inner.Format != nil && inner.Format.Definition != "" {
+						desc = inner.Description + "\n\n" + inner.Format.Definition
+					}
+					addFunction(flat, inner.Name, desc, customToolParams(inner.Format), nil, "custom_tool_call", tool.Name)
+				} else {
+					addFunction(flat, inner.Name, inner.Description, inner.Parameters, inner.Strict, "function_call", tool.Name)
+				}
+			}
+		case "custom":
+			desc := tool.Description
+			if tool.Format != nil && tool.Format.Definition != "" {
+				desc = tool.Description + "\n\n" + tool.Format.Definition
+			}
+			addFunction(tool.Name, tool.Name, desc, customToolParams(tool.Format), nil, "custom_tool_call", "")
+		default:
 			slog.Debug("stripping non-function tool from translated request", "type", tool.Type)
 			strippedToolTypes = append(strippedToolTypes, tool.Type)
-			continue
 		}
-		fn := map[string]any{"name": tool.Name}
-		if tool.Description != "" {
-			fn["description"] = tool.Description
-		}
-		if len(tool.Parameters) > 0 {
-			fn["parameters"] = json.RawMessage(tool.Parameters)
-		}
-		if tool.Strict != nil {
-			fn["strict"] = *tool.Strict
-		}
-		result = append(result, map[string]any{
-			"type":     "function",
-			"function": fn,
-		})
 	}
-	return result, strippedToolTypes
+	return result, strippedToolTypes, mappings
 }
 
 // --- Text format translation ---
@@ -425,17 +584,22 @@ func translateTextFormat(text json.RawMessage) json.RawMessage {
 
 // --- Chat Completions request builder ---
 
-func buildChatRequest(req responsesRequest, backendModel string, messages []map[string]any) map[string]any {
+// buildChatRequest translates a Responses API request into a Chat Completions
+// request. The second return value maps flattened tool names (namespace/custom
+// tools) back to Responses API output item fields for the response side.
+func buildChatRequest(req responsesRequest, backendModel string, messages []map[string]any) (map[string]any, map[string]toolMapping) {
 	chatReq := map[string]any{
 		"model":    backendModel,
 		"messages": messages,
 		"stream":   req.Stream,
 	}
+	var toolMap map[string]toolMapping
 	if req.Stream {
 		chatReq["stream_options"] = map[string]any{"include_usage": true}
 	}
 	if len(req.Tools) > 0 {
-		tools, strippedToolTypes := translateTools(req.Tools)
+		tools, strippedToolTypes, mappings := translateTools(req.Tools)
+		toolMap = toolMappingsByFlatName(mappings)
 		if len(tools) > 0 {
 			chatReq["tools"] = tools
 			// Only include tool_choice and parallel_tool_calls when tools are present.
@@ -470,5 +634,5 @@ func buildChatRequest(req responsesRequest, backendModel string, messages []map[
 	if req.User != "" {
 		chatReq["user"] = req.User
 	}
-	return chatReq
+	return chatReq, toolMap
 }

@@ -170,7 +170,7 @@ func TestTranslateTools_FunctionTools(t *testing.T) {
 	tools := []json.RawMessage{
 		json.RawMessage(`{"type":"function","name":"get_weather","description":"Get weather","parameters":{"type":"object","properties":{}},"strict":true}`),
 	}
-	result, _ := translateTools(tools)
+	result, _, _ := translateTools(tools)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 tool, got %d", len(result))
 	}
@@ -191,7 +191,7 @@ func TestTranslateTools_SkipsNonFunction(t *testing.T) {
 		json.RawMessage(`{"type":"web_search_preview"}`),
 		json.RawMessage(`{"type":"function","name":"fn1"}`),
 	}
-	result, stripped := translateTools(tools)
+	result, stripped, _ := translateTools(tools)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 tool (non-function skipped), got %d", len(result))
 	}
