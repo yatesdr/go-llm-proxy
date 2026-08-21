@@ -8,8 +8,6 @@ import (
 // ChatCompletionsPath is the backend endpoint for Chat Completions requests.
 const ChatCompletionsPath = "/chat/completions"
 
-const MaxRequestBodySize = 50 * 1024 * 1024
-
 // MaxResponseBodySize limits total bytes proxied from upstream (100 MB).
 // Prevents a broken or malicious backend from consuming unbounded resources.
 // Normal LLM responses are well under this; even a very long streaming completion

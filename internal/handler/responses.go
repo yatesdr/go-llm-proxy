@@ -206,10 +206,12 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, api.MaxRequestBodySize)
+	cfg := h.config.Get()
+	r.Body = http.MaxBytesReader(w, r.Body, cfg.RequestBodyLimit())
 	body, err := io.ReadAll(r.Body)
 	r.Body.Close()
 	if err != nil {
+		slog.Warn("request body too large", "path", r.URL.Path, "limit_mb", cfg.MaxRequestBodyMB)
 		httputil.WriteError(w, http.StatusRequestEntityTooLarge, "request body too large")
 		return
 	}
@@ -224,7 +226,6 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := h.config.Get()
 	key := auth.KeyFromContext(r.Context())
 	if !auth.KeyAllowsModel(key, req.Model) {
 		httputil.WriteError(w, http.StatusForbidden, "not authorized for requested model")

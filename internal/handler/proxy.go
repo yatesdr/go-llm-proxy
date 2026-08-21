@@ -67,10 +67,11 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, api.MaxRequestBodySize)
+	r.Body = http.MaxBytesReader(w, r.Body, p.config.Get().RequestBodyLimit())
 	body, err := io.ReadAll(r.Body)
 	r.Body.Close()
 	if err != nil {
+		slog.Warn("request body too large", "path", r.URL.Path, "limit_mb", p.config.Get().MaxRequestBodyMB)
 		httputil.WriteError(w, http.StatusRequestEntityTooLarge, "request body too large")
 		return
 	}

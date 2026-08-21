@@ -115,10 +115,11 @@ func (h *QdrantHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var body []byte
 	var err error
 	if r.Body != nil && r.Method != http.MethodGet && r.Method != http.MethodHead {
-		r.Body = http.MaxBytesReader(w, r.Body, api.MaxRequestBodySize)
+		r.Body = http.MaxBytesReader(w, r.Body, h.config.Get().RequestBodyLimit())
 		body, err = io.ReadAll(r.Body)
 		r.Body.Close()
 		if err != nil {
+			slog.Warn("request body too large", "path", r.URL.Path, "limit_mb", h.config.Get().MaxRequestBodyMB)
 			httputil.WriteError(w, http.StatusRequestEntityTooLarge, "request body too large")
 			return
 		}

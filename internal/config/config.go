@@ -22,6 +22,7 @@ type ProcessorsConfig struct {
 
 type Config struct {
 	Listen                 string           `yaml:"listen"`
+	MaxRequestBodyMB       int              `yaml:"max_request_body_mb"` // request body limit in MB (default: 200; 0 = use default)
 	Models                 []ModelConfig    `yaml:"models"`
 	Keys                   []KeyConfig      `yaml:"keys"`
 	Services               ServicesConfig   `yaml:"services"`                 // external service proxies (Qdrant, etc.)
@@ -154,6 +155,9 @@ func (cs *ConfigStore) Load() error {
 
 	if cfg.Listen == "" {
 		cfg.Listen = ":8080"
+	}
+	if cfg.MaxRequestBodyMB <= 0 {
+		cfg.MaxRequestBodyMB = 200 // default: 200 MB (vision requests carry base64 images)
 	}
 
 	for i := range cfg.Models {
