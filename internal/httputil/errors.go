@@ -117,6 +117,7 @@ func NewHTTPClientWithResponseHeaderTimeout(headerTimeout time.Duration) *http.C
 	}
 	return &http.Client{
 		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
 			DialContext: (&net.Dialer{
 				Timeout:   10 * time.Second,
 				KeepAlive: 30 * time.Second,
