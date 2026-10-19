@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"go-llm-proxy/internal/api"
@@ -25,6 +26,14 @@ type msgToolCallState struct {
 	blockIndex int
 	args       strings.Builder
 }
+
+// messagesPingInterval is how long a translated stream may be silent before a
+// ping event is sent. A variable so tests can shorten it.
+var messagesPingInterval = 15 * time.Second
+
+// maxSSELineSize bounds one upstream SSE line. Tool-call argument chunks and
+// reasoning deltas can be large; 16 MiB is far above anything legitimate.
+const maxSSELineSize = 16 * 1024 * 1024
 
 func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Response, req messagesRequest, model *config.ModelConfig, chatReq map[string]any, requestBytes int64, keyName, keyHash string, startTime time.Time, headersAlreadySent bool) {
 	flusher, ok := w.(http.Flusher)
@@ -44,19 +53,31 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 	upstreamModel := req.Model
 	msgID := api.RandomID("msg_")
 	blockIndex := 0
-	msgStartEmitted := false
+	sawToolCalls := false
+	ctx := resp.Request.Context()
 	textBlockOpen := false
 	reasoningBlockOpen := false
+	var backendStopReason any
 	var toolCalls []*msgToolCallState
 	var usageData *api.ChunkUsage
 	var finishReason string
 	var responseBytes int64
 
+	// All writes to w go through writeMu: a ping goroutine writes while the
+	// translation loop is blocked reading the upstream.
+	var writeMu sync.Mutex
+	lastWrite := time.Now()
+	writeRaw := func(format string, args ...any) {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		fmt.Fprintf(w, format, args...)
+		flusher.Flush()
+		lastWrite = time.Now()
+	}
 	emit := func(eventType string, data map[string]any) {
 		data["type"] = eventType
 		jsonData, _ := json.Marshal(data)
-		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, jsonData)
-		flusher.Flush()
+		writeRaw("event: %s\ndata: %s\n\n", eventType, jsonData)
 	}
 
 	emitMessageStart := func() {
@@ -73,8 +94,45 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 			},
 		})
 		slog.Debug("emitted message_start", "model", upstreamModel)
-		msgStartEmitted = true
 	}
+
+	// The upstream accepted the request (headers are in), so commit to the
+	// stream now: message_start and a ping go out immediately, and pings
+	// continue whenever the upstream is quiet (long prefill, slow reasoning)
+	// so the client and any intermediary see a live connection.
+	emitMessageStart()
+	emit("ping", map[string]any{})
+	pingDone := make(chan struct{})
+	var pingWG sync.WaitGroup
+	pingWG.Add(1)
+	go func() {
+		defer pingWG.Done()
+		interval := messagesPingInterval
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-pingDone:
+				return
+			case <-ticker.C:
+				writeMu.Lock()
+				idle := time.Since(lastWrite) >= interval
+				writeMu.Unlock()
+				if idle {
+					emit("ping", map[string]any{})
+				}
+			}
+		}
+	}()
+	stopPings := func() {
+		select {
+		case <-pingDone:
+		default:
+			close(pingDone)
+		}
+		pingWG.Wait()
+	}
+	defer stopPings()
 
 	openTextBlock := func() {
 		emit("content_block_start", map[string]any{
@@ -148,7 +206,8 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 
 	// Read and translate the upstream SSE stream.
 	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 256*1024), 256*1024)
+	scanner.Buffer(make([]byte, 64*1024), maxSSELineSize)
+	sawDone, sawChunk := false, false
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -164,6 +223,7 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 		}
 		data := line[6:]
 		if data == "[DONE]" {
+			sawDone = true
 			break
 		}
 
@@ -173,14 +233,7 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 			continue
 		}
 
-		if chunk.Model != "" {
-			upstreamModel = chunk.Model
-		}
-		if !msgStartEmitted {
-			emitMessageStart()
-			// Emit ping for keepalive.
-			emit("ping", map[string]any{})
-		}
+		sawChunk = true
 		if chunk.Usage != nil {
 			usageData = chunk.Usage
 		}
@@ -193,6 +246,7 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 
 		// emitReasoningChunk emits a reasoning text segment as a thinking block delta.
 		emitReasoningChunk := func(text string) {
+			closeTextBlock() // reasoning after text gets its own block index
 			if !reasoningBlockOpen {
 				openReasoningBlock()
 			}
@@ -236,7 +290,7 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 
 		// Tool call deltas.
 		for _, tc := range delta.ToolCalls {
-			if tc.ID != "" {
+			if startsNewToolCall(toolCalls, tc) {
 				// New tool call — close open blocks first.
 				closeReasoningBlock()
 				closeTextBlock()
@@ -244,13 +298,18 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 				if len(toolCalls) == 0 {
 					toolCallBlockIndexStart = blockIndex
 				}
+				sawToolCalls = true
 
 				name := ""
 				if tc.Function != nil {
 					name = tc.Function.Name
 				}
+				callID := tc.ID
+				if callID == "" {
+					callID = api.RandomID("call_")
+				}
 				tcs := &msgToolCallState{
-					callID:     tc.ID,
+					callID:     callID,
 					name:       name,
 					blockIndex: blockIndex,
 				}
@@ -264,7 +323,7 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 					"index": blockIndex,
 					"content_block": map[string]any{
 						"type":  "tool_use",
-						"id":    tc.ID,
+						"id":    callID,
 						"name":  name,
 						"input": map[string]any{},
 					},
@@ -292,11 +351,16 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 		if choice.FinishReason != nil {
 			finishReason = *choice.FinishReason
 		}
+		if choice.StopReason != nil {
+			backendStopReason = choice.StopReason
+		}
 	}
+	scanErr := scanner.Err()
 
 	// Flush any pending think-tag buffer before finalizing.
 	for _, seg := range thinkFilter.Flush() {
 		if seg.IsReasoning {
+			closeTextBlock()
 			if !reasoningBlockOpen {
 				openReasoningBlock()
 			}
@@ -347,8 +411,6 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 				})
 			}
 
-			ctx := resp.Request.Context()
-
 			// Emit keepalive comments during search execution.
 			searchDone := make(chan struct{})
 			var newChatReq map[string]any
@@ -362,10 +424,7 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 			}()
 
 			completed := waitForSearchOrDisconnect(ctx, searchDone,
-				func() {
-					fmt.Fprintf(w, ": searching\n\n")
-					flusher.Flush()
-				},
+				func() { writeRaw(": searching\n\n") },
 				2*time.Second, 5*time.Second, "messages streaming")
 			if !completed {
 				// Client disconnected; goroutine awaited. Stop emitting.
@@ -404,6 +463,12 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 					usageData = newUsage
 				}
 				toolCalls = newTC
+				sawToolCalls = false
+				for _, tc := range newTC {
+					if tc != nil {
+						sawToolCalls = true
+					}
+				}
 				// Update blockIndex past any new blocks opened.
 				for _, tc := range toolCalls {
 					if tc != nil && tc.blockIndex >= blockIndex {
@@ -444,8 +509,27 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 		toolCalls = nil // Already closed — prevent terminal double-close.
 	}
 
-	// Emit terminal events.
-	if msgStartEmitted {
+	// A stream is complete only if the upstream said so: a finish_reason, with
+	// no read error ([DONE] itself is optional once a finish_reason arrived). A cut connection, a scanner failure or an EOF with no
+	// finish_reason is reported as a stream error (retryable), never as a
+	// normal end_turn — the client would otherwise take a half-written answer
+	// or half-written tool call as final.
+	truncated := scanErr != nil || finishReason == ""
+	if truncated && ctx.Err() == nil {
+		stopPings()
+		closeReasoningBlock()
+		closeTextBlock()
+		slog.Warn("upstream stream ended without completion",
+			"model", req.Model, "scan_error", scanErr, "saw_done", sawDone, "saw_chunk", sawChunk,
+			"finish_reason", finishReason, "response_bytes", responseBytes)
+		writeRaw("event: error\ndata: %s\n\n", mustJSON(map[string]any{
+			"type": "error",
+			"error": map[string]any{
+				"type":    "overloaded_error",
+				"message": "upstream stream ended unexpectedly before completion",
+			},
+		}))
+	} else if ctx.Err() == nil {
 		if finishReason == "" {
 			finishReason = "stop"
 		}
@@ -461,34 +545,20 @@ func (h *MessagesHandler) handleStreaming(w http.ResponseWriter, resp *http.Resp
 			}
 		}
 
-		stopReason := mapFinishToStopReason(finishReason)
+		stopReason, stopSequence := resolveStopReason(finishReason, backendStopReason, req.StopSequences, sawToolCalls)
 
-		var outputTokens int
-		if usageData != nil {
-			outputTokens = usageData.CompletionTokens
+		usage := anthropicUsage(usageData)
+		if usage == nil {
+			usage = anthropicUsage(&api.ChunkUsage{})
 		}
-
-		var inputTokens int
-		if usageData != nil {
-			inputTokens = usageData.PromptTokens
-		}
-
 		emit("message_delta", map[string]any{
-			"delta": map[string]any{"stop_reason": stopReason, "stop_sequence": nil},
-			"usage": map[string]any{
-				"input_tokens":                inputTokens,
-				"output_tokens":               outputTokens,
-				"cache_creation_input_tokens": 0,
-				"cache_read_input_tokens":     0,
-			},
+			"delta": map[string]any{"stop_reason": stopReason, "stop_sequence": stopSequence},
+			"usage": usage,
 		})
 
 		emit("message_stop", map[string]any{})
 
 		slog.Debug("stream complete", "stop_reason", stopReason, "blocks", blockIndex)
-	} else {
-		slog.Error("streaming handler received no valid chunks from upstream",
-			"model", req.Model, "response_bytes", responseBytes)
 	}
 
 	logUsageChat(h.usage, usageLogInput{
@@ -552,7 +622,7 @@ func (h *MessagesHandler) streamFromBackend(
 
 	blockIndex := startBlockIndex
 	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 256*1024), 256*1024)
+	scanner.Buffer(make([]byte, 64*1024), maxSSELineSize)
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -600,14 +670,18 @@ func (h *MessagesHandler) streamFromBackend(
 		}
 
 		for _, tc := range delta.ToolCalls {
-			if tc.ID != "" {
+			if startsNewToolCall(toolCalls, tc) {
 				closeTextBlock()
 				name := ""
 				if tc.Function != nil {
 					name = tc.Function.Name
 				}
+				callID := tc.ID
+				if callID == "" {
+					callID = api.RandomID("call_")
+				}
 				tcs := &msgToolCallState{
-					callID:     tc.ID,
+					callID:     callID,
 					name:       name,
 					blockIndex: blockIndex,
 				}
@@ -619,7 +693,7 @@ func (h *MessagesHandler) streamFromBackend(
 					"index": blockIndex,
 					"content_block": map[string]any{
 						"type":  "tool_use",
-						"id":    tc.ID,
+						"id":    callID,
 						"name":  name,
 						"input": map[string]any{},
 					},
@@ -699,4 +773,28 @@ func emitSearchResultBlocks(emit func(string, map[string]any), blockIndex int, r
 		blockIndex++
 	}
 	return blockIndex
+}
+
+// startsNewToolCall reports whether a tool-call delta opens a new tool_use
+// block. A delta starts one when it carries an id the call at that index does
+// not already have (some servers repeat the id on every delta), or when it is
+// the first delta seen for that index and names a function even though the id
+// is missing.
+func startsNewToolCall(calls []*msgToolCallState, tc api.ChunkToolCall) bool {
+	var existing *msgToolCallState
+	if tc.Index >= 0 && tc.Index < len(calls) {
+		existing = calls[tc.Index]
+	}
+	if existing != nil {
+		return false
+	}
+	if tc.ID != "" {
+		return true
+	}
+	return tc.Function != nil && tc.Function.Name != ""
+}
+
+func mustJSON(v any) []byte {
+	b, _ := json.Marshal(v)
+	return b
 }

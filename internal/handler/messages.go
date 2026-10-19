@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path"
+	"regexp"
 	"strings"
 	"time"
 
@@ -125,17 +126,14 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	startTime := time.Now()
 
-	// model.Timeout guards connect/headers and non-streaming bodies.
-	// Streaming requests disarm it up front: the stream flag is in the
-	// request here (unlike the passthrough proxy, which must sniff the
-	// response Content-Type), and a wall-clock cap on a live stream
-	// severs healthy long generations (see requestTimeout). Pre-stream
-	// phases stay bounded by the transport's dial/TLS/header timeouts.
+	// model.Timeout bounds the wait for the backend's response headers and,
+	// for non-streaming requests, the whole body. It stays armed through the
+	// upstream Do call (so a backend that never answers is cut off) and is
+	// disarmed only once a streaming response has started successfully: a
+	// wall-clock cap on a live stream severs healthy long generations (see
+	// requestTimeout).
 	ctx, cancel, disarmTimeout := requestTimeout(r.Context(), model.Timeout)
 	defer cancel()
-	if req.Stream {
-		disarmTimeout()
-	}
 
 	// AWS Bedrock backends use the Converse API (translated from Anthropic
 	// Messages, signed with SigV4 or a Bedrock API key) instead of Chat
@@ -144,13 +142,16 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// messages_mode is not a meaningful knob for Bedrock — it's always
 	// Converse. Implementation lives in messages_bedrock.go.
 	if model.Type == config.BackendBedrock {
+		if req.Stream {
+			disarmTimeout() // Bedrock streams are not covered by the header-wait rule.
+		}
 		h.handleBedrock(ctx, w, body, req, model, keyName, keyHash, r.Header.Get("X-Request-ID"), startTime)
 		return
 	}
 
 	// Native passthrough for anthropic backends or native mode.
 	if !h.shouldTranslate(model) {
-		h.handleNativePassthrough(ctx, w, r, body, req, model, keyName, keyHash, startTime)
+		h.handleNativePassthrough(ctx, disarmTimeout, w, r, body, req, model, keyName, keyHash, startTime)
 		return
 	}
 
@@ -163,13 +164,15 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "request translation failed")
 		return
 	}
+	applyModelOptions(chatReq, req, model)
 
 	// Run pipeline pre-send processors (vision, PDF, etc.).
 	// For streaming requests, send SSE keepalives during processing to prevent
-	// the client from timing out while the vision model describes images.
+	// the client from timing out while the vision model describes images or a
+	// large PDF is extracted.
 	headersAlreadySent := false
 	if h.pipeline != nil && h.pipeline.ShouldProcess(model) {
-		if req.Stream && pipeline.RequestContainsImageURLs(chatReq) {
+		if req.Stream && (pipeline.RequestContainsImageURLs(chatReq) || pipeline.RequestContainsPDFData(chatReq)) {
 			chatReq, headersAlreadySent, err = runPipelineWithKeepalives(ctx, w, h.pipeline, chatReq, model)
 		} else {
 			chatReq, err = h.pipeline.ProcessRequest(ctx, chatReq, model)
@@ -177,17 +180,7 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			if headersAlreadySent {
 				// Headers already flushed at 200 — emit an SSE error event.
-				errData, _ := json.Marshal(map[string]any{
-					"type": "error",
-					"error": map[string]any{
-						"type":    "api_error",
-						"message": "internal processing error",
-					},
-				})
-				fmt.Fprintf(w, "event: error\ndata: %s\n\n", errData)
-				if f, ok := w.(http.Flusher); ok {
-					f.Flush()
-				}
+				writeSSEError(w, "api_error", "internal processing error")
 			} else {
 				slog.Error("pipeline processing failed", "model", req.Model, "error", err)
 				httputil.WriteAnthropicError(w, http.StatusInternalServerError, "api_error", "internal processing error")
@@ -195,6 +188,11 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	// No backend accepts the internal pdf_data / document_url parts. Anything
+	// the pipeline left behind (documents rewriting off) becomes an OpenAI file
+	// part or a placeholder.
+	pipeline.ConvertPDFDataToFileParts(chatReq)
 
 	// Check if the client disconnected during pipeline processing (e.g. vision
 	// calls can take 30+ seconds, and the client may have given up waiting).
@@ -208,6 +206,12 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httputil.WriteAnthropicError(w, http.StatusInternalServerError, "api_error", "failed to build upstream request")
 		return
+	}
+	if clampMaxTokens(chatReq, chatBody, model) {
+		if chatBody, err = json.Marshal(chatReq); err != nil {
+			httputil.WriteAnthropicError(w, http.StatusInternalServerError, "api_error", "failed to build upstream request")
+			return
+		}
 	}
 
 	upstreamURL := strings.TrimRight(model.Backend, "/") + api.ChatCompletionsPath
@@ -232,11 +236,11 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	resp, err := h.client.Do(upReq)
 	if err != nil {
 		if ctx.Err() != nil {
-			httputil.WriteAnthropicError(w, http.StatusGatewayTimeout, "api_error", "upstream request timed out")
+			h.failBeforeStream(w, headersAlreadySent, http.StatusGatewayTimeout, "api_error", "upstream request timed out")
 			return
 		}
 		slog.Error("upstream request failed", "error", err, "model", req.Model)
-		httputil.WriteAnthropicError(w, http.StatusBadGateway, "api_error", "upstream request failed")
+		h.failBeforeStream(w, headersAlreadySent, http.StatusBadGateway, "api_error", "upstream request failed")
 		return
 	}
 	defer resp.Body.Close()
@@ -246,48 +250,53 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		slog.Error("upstream returned error for translated messages request",
 			"model", req.Model, "status", resp.StatusCode, "body", string(errBody))
 
-		// Sanitized error: never forward raw backend error bodies to the client.
-		// They may contain internal URLs, backend API keys, or infrastructure details.
-		errMsg := fmt.Sprintf("backend returned HTTP %d", resp.StatusCode)
-		if resp.StatusCode == http.StatusBadRequest && pipeline.RequestContainsImageURLs(chatReq) {
+		// Never forward raw backend error bodies: they may contain internal
+		// URLs, backend API keys, or infrastructure details. The message is
+		// extracted, scrubbed and (for context overflows) rewritten instead.
+		outStatus, outType, errMsg := buildClientError(resp.StatusCode, errBody, false)
+		if outStatus == http.StatusBadRequest && imageRejectedRe.MatchString(errMsg) && pipeline.RequestContainsImageURLs(chatReq) {
 			errMsg = fmt.Sprintf("The backend model (%s) does not appear to support image inputs. "+
-				"Remove images from the conversation or use a vision-capable model.", req.Model)
+				"Remove images from the conversation or use a vision-capable model. (%s)", req.Model, errMsg)
 		}
 
-		if req.Stream {
-			httputil.SetSecurityHeaders(w)
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.Header().Set("Cache-Control", "no-cache")
-			w.WriteHeader(http.StatusOK)
-			errData, _ := json.Marshal(map[string]any{
-				"type": "error",
-				"error": map[string]any{
-					"type":    "api_error",
-					"message": errMsg,
-				},
-			})
-			fmt.Fprintf(w, "event: error\ndata: %s\n\n", errData)
-			if f, ok := w.(http.Flusher); ok {
-				f.Flush()
-			}
+		// Streaming with nothing sent yet: answer with the real HTTP status so
+		// the client's retry and error handling work. Only when the stream was
+		// already opened (pipeline keepalives) is an in-band SSE error needed.
+		if headersAlreadySent {
+			writeSSEError(w, outType, errMsg)
 			return
 		}
-
-		httputil.WriteAnthropicError(w, resp.StatusCode, "api_error", errMsg)
+		copyRetryHeaders(w, resp.Header)
+		httputil.WriteAnthropicError(w, outStatus, outType, errMsg)
 		return
 	}
 
 	reqBytes := int64(len(chatBody))
 	if req.Stream {
+		disarmTimeout() // headers arrived: the stream may run as long as it needs
 		h.handleStreaming(w, resp, req, model, chatReq, reqBytes, keyName, keyHash, startTime, headersAlreadySent)
 	} else {
 		h.handleNonStreaming(w, resp, req, model, chatReq, reqBytes, keyName, keyHash, startTime)
 	}
 }
 
+// imageRejectedRe recognises backend errors complaining about image input.
+var imageRejectedRe = regexp.MustCompile(`(?i)image|multimodal|multi-modal|vision`)
+
+// failBeforeStream reports a failure that happened before any upstream
+// response: as an HTTP error normally, or as an SSE error event when the
+// stream was already opened for pipeline keepalives.
+func (h *MessagesHandler) failBeforeStream(w http.ResponseWriter, streamOpen bool, status int, errType, msg string) {
+	if streamOpen {
+		writeSSEError(w, errType, msg)
+		return
+	}
+	httputil.WriteAnthropicError(w, status, errType, msg)
+}
+
 // --- Native passthrough ---
 
-func (h *MessagesHandler) handleNativePassthrough(ctx context.Context, w http.ResponseWriter, r *http.Request, body []byte, req messagesRequest, model *config.ModelConfig, keyName, keyHash string, startTime time.Time) {
+func (h *MessagesHandler) handleNativePassthrough(ctx context.Context, disarmTimeout func(), w http.ResponseWriter, r *http.Request, body []byte, req messagesRequest, model *config.ModelConfig, keyName, keyHash string, startTime time.Time) {
 	if model.Model != req.Model {
 		body = RewriteModelName(body, model.Model)
 	}
@@ -337,8 +346,7 @@ func (h *MessagesHandler) handleNativePassthrough(ctx context.Context, w http.Re
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, api.MaxResponseBodySize))
 		slog.Error("upstream returned error (native passthrough)",
 			"model", req.Model, "status", resp.StatusCode, "body", string(errBody))
-		httputil.WriteAnthropicError(w, resp.StatusCode, "api_error",
-			fmt.Sprintf("backend returned HTTP %d", resp.StatusCode))
+		writeUpstreamFailure(w, resp.Header, resp.StatusCode, errBody, true)
 		logUsage(h.usage, usageLogInput{
 			startTime: startTime, statusCode: resp.StatusCode,
 			keyName: keyName, keyHash: keyHash,
@@ -349,14 +357,18 @@ func (h *MessagesHandler) handleNativePassthrough(ctx context.Context, w http.Re
 		return
 	}
 
-	// Forward response headers.
+	// Forward response headers (including rate-limit state).
 	for k := range AllowedResponseHeaders {
 		if v := resp.Header.Get(k); v != "" {
 			w.Header().Set(k, v)
 		}
 	}
+	copyRetryHeaders(w, resp.Header)
 	httputil.SetSecurityHeaders(w)
 	w.WriteHeader(resp.StatusCode)
+	if req.Stream || strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+		disarmTimeout() // headers arrived: a live stream is not wall-clock capped
+	}
 
 	flusher, canFlush := w.(http.Flusher)
 	buf := make([]byte, 4096)
@@ -420,6 +432,7 @@ func (h *MessagesHandler) handleNonStreaming(w http.ResponseWriter, resp *http.R
 	respID := api.RandomID("msg_")
 	var content []any
 	stopReason := "end_turn"
+	var stopSequence any
 
 	if len(chatResp.Choices) > 0 {
 		choice := chatResp.Choices[0]
@@ -469,22 +482,15 @@ func (h *MessagesHandler) handleNonStreaming(w http.ResponseWriter, resp *http.R
 			})
 		}
 
-		stopReason = mapFinishToStopReason(choice.FinishReason)
+		stopReason, stopSequence = resolveStopReason(choice.FinishReason, choice.StopReason,
+			req.StopSequences, len(msg.ToolCalls) > 0)
 	}
 
 	if content == nil {
 		content = []any{}
 	}
 
-	var usageObj map[string]any
-	if chatResp.Usage != nil {
-		usageObj = map[string]any{
-			"input_tokens":                chatResp.Usage.PromptTokens,
-			"output_tokens":               chatResp.Usage.CompletionTokens,
-			"cache_creation_input_tokens": 0,
-			"cache_read_input_tokens":     0,
-		}
-	}
+	usageObj := anthropicUsage(chatResp.Usage)
 
 	response := map[string]any{
 		"id":            respID,
@@ -493,7 +499,7 @@ func (h *MessagesHandler) handleNonStreaming(w http.ResponseWriter, resp *http.R
 		"content":       content,
 		"model":         chatResp.Model,
 		"stop_reason":   stopReason,
-		"stop_sequence": nil,
+		"stop_sequence": stopSequence,
 		"usage":         usageObj,
 	}
 

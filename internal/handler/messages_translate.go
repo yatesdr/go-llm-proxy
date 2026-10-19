@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"strings"
 
+	"go-llm-proxy/internal/api"
 	"go-llm-proxy/internal/pipeline"
 )
 
@@ -24,6 +26,8 @@ type messagesRequest struct {
 	Stream        bool              `json:"stream"`
 	Metadata      json.RawMessage   `json:"metadata,omitempty"`
 	Thinking      json.RawMessage   `json:"thinking,omitempty"`
+	OutputConfig  json.RawMessage   `json:"output_config,omitempty"`
+	OutputFormat  json.RawMessage   `json:"output_format,omitempty"`
 	aliasFrom     string
 }
 
@@ -96,7 +100,14 @@ func translateAnthropicMessages(msgs []json.RawMessage) ([]map[string]any, error
 }
 
 // translateUserMessage converts an Anthropic user message to one or more
-// Chat Completions messages. tool_result blocks become separate role:tool messages.
+// Chat Completions messages.
+//
+// tool_result blocks become role:tool messages and are emitted FIRST: Chat
+// Completions requires tool messages to directly follow the assistant message
+// that issued the calls, so any user text in the same Anthropic turn must come
+// after them or strict templates reject the conversation. Images and documents
+// inside a tool_result cannot ride in a tool message, so they are lifted into
+// the user message that follows (labelled with the originating tool_use id).
 // Handles text, image, document (PDF), tool_result, and thinking blocks.
 func translateUserMessage(content json.RawMessage) []map[string]any {
 	// String content: pass through directly.
@@ -112,6 +123,7 @@ func translateUserMessage(content json.RawMessage) []map[string]any {
 	}
 
 	var userParts []any
+	var toolMedia []any
 	var toolResults []map[string]any
 
 	for _, block := range blocks {
@@ -131,16 +143,31 @@ func translateUserMessage(content json.RawMessage) []map[string]any {
 
 		case "document":
 			slog.Debug("translating document block", "keys", blockKeys(block))
-			userParts = append(userParts, translateDocumentBlock(block))
+			userParts = append(userParts, translateDocumentParts(block)...)
 
 		case "tool_result":
 			var toolUseID string
 			json.Unmarshal(block["tool_use_id"], &toolUseID)
-			content := extractToolResultContent(block["content"])
+			text, media := splitToolResultContent(block["content"])
+			var isError bool
+			json.Unmarshal(block["is_error"], &isError)
+			if len(media) > 0 {
+				if strings.TrimSpace(text) == "" {
+					text = "[the tool returned attachments; they follow in the next message]"
+				}
+				toolMedia = append(toolMedia, map[string]any{
+					"type": "text",
+					"text": "[attachments from tool result " + toolUseID + "]",
+				})
+				toolMedia = append(toolMedia, media...)
+			}
+			if isError {
+				text = "[tool error] " + text
+			}
 			toolResults = append(toolResults, map[string]any{
 				"role":         "tool",
 				"tool_call_id": toolUseID,
-				"content":      content,
+				"content":      text,
 			})
 
 		case "web_search_tool_result":
@@ -176,31 +203,31 @@ func translateUserMessage(content json.RawMessage) []map[string]any {
 		}
 	}
 
-	var result []map[string]any
+	// Tool messages first, then the user turn (tool attachments, then the
+	// user's own parts).
+	result := append([]map[string]any(nil), toolResults...)
 
-	// Emit user message if there are any text/image parts.
-	if len(userParts) > 0 {
+	parts := append(toolMedia, userParts...)
+	if len(parts) > 0 {
 		// If only one text part, simplify to string content.
-		if len(userParts) == 1 {
-			if tp, ok := userParts[0].(map[string]any); ok && tp["type"] == "text" {
+		if len(parts) == 1 {
+			if tp, ok := parts[0].(map[string]any); ok && tp["type"] == "text" {
 				result = append(result, map[string]any{"role": "user", "content": tp["text"]})
-			} else {
-				result = append(result, map[string]any{"role": "user", "content": userParts})
+				return result
 			}
-		} else {
-			result = append(result, map[string]any{"role": "user", "content": userParts})
 		}
+		result = append(result, map[string]any{"role": "user", "content": parts})
 	}
-
-	// Emit tool result messages after the user message.
-	result = append(result, toolResults...)
 
 	return result
 }
 
 // translateAssistantMessage converts an Anthropic assistant message to a
 // Chat Completions message. text blocks become content, tool_use blocks
-// become tool_calls, thinking blocks are stripped.
+// become tool_calls, and thinking blocks are replayed as reasoning_content
+// (and reasoning) so reasoning-capable templates can keep the model's prior
+// chain of thought in context. redacted_thinking carries no readable text and
+// is dropped.
 func translateAssistantMessage(content json.RawMessage) map[string]any {
 	// String content: pass through.
 	var s string
@@ -215,6 +242,7 @@ func translateAssistantMessage(content json.RawMessage) map[string]any {
 	}
 
 	var textParts []string
+	var reasoningParts []string
 	var toolCalls []map[string]any
 
 	for _, block := range blocks {
@@ -232,7 +260,11 @@ func translateAssistantMessage(content json.RawMessage) map[string]any {
 			json.Unmarshal(block["id"], &id)
 			json.Unmarshal(block["name"], &name)
 			// input is an object in Anthropic, needs to be JSON string in OpenAI.
-			argsBytes, _ := json.Marshal(json.RawMessage(block["input"]))
+			input := block["input"]
+			if len(input) == 0 || string(input) == "null" {
+				input = json.RawMessage("{}")
+			}
+			argsBytes, _ := json.Marshal(input)
 			toolCalls = append(toolCalls, map[string]any{
 				"id":   id,
 				"type": "function",
@@ -263,8 +295,15 @@ func translateAssistantMessage(content json.RawMessage) map[string]any {
 				textParts = append(textParts, "[Searched the web: "+query+"]")
 			}
 
-		case "thinking", "redacted_thinking":
-			slog.Debug("stripping thinking block from assistant message", "type", blockType)
+		case "thinking":
+			var thinking string
+			json.Unmarshal(block["thinking"], &thinking)
+			if thinking != "" {
+				reasoningParts = append(reasoningParts, thinking)
+			}
+
+		case "redacted_thinking":
+			slog.Debug("dropping redacted_thinking block from assistant message")
 
 		default:
 			slog.Debug("skipping unknown assistant content block type", "type", blockType)
@@ -282,6 +321,12 @@ func translateAssistantMessage(content json.RawMessage) map[string]any {
 
 	if len(toolCalls) > 0 {
 		msg["tool_calls"] = toolCalls
+	}
+
+	if len(reasoningParts) > 0 {
+		reasoning := strings.Join(reasoningParts, "\n")
+		msg["reasoning_content"] = reasoning
+		msg["reasoning"] = reasoning
 	}
 
 	return msg
@@ -323,75 +368,192 @@ func blockKeys(block map[string]json.RawMessage) []string {
 	return keys
 }
 
-// translateDocumentBlock converts an Anthropic document content block to a
-// pipeline-internal pdf_data part. The pipeline's processPDFs will extract text
-// or use vision fallback, then replace it with a text block before sending upstream.
-func translateDocumentBlock(block map[string]json.RawMessage) map[string]any {
+// translateDocumentParts converts an Anthropic document content block into
+// Chat Completions content parts.
+//
+//   - base64 PDF: a pipeline-internal pdf_data part (processPDFs extracts text
+//     or falls back to OCR/vision, and no part of it reaches the backend).
+//   - text source: the text itself, headed by the title/context when present.
+//   - content source: the inner text/image blocks, inlined.
+//   - url source: a pipeline-internal document_url part; the pipeline fetches
+//     it through the SSRF-safe client (size capped) and processes the result.
+//
+// citations and cache_control are ignored.
+func translateDocumentParts(block map[string]json.RawMessage) []any {
 	var source struct {
-		Type      string `json:"type"`
-		MediaType string `json:"media_type"`
-		Data      string `json:"data"`
+		Type      string          `json:"type"`
+		MediaType string          `json:"media_type"`
+		Data      string          `json:"data"`
+		URL       string          `json:"url"`
+		Content   json.RawMessage `json:"content"`
 	}
 	if err := json.Unmarshal(block["source"], &source); err != nil {
 		slog.Warn("document block: failed to parse source", "error", err,
 			"raw_source", string(block["source"]))
-		return map[string]any{"type": "text", "text": "[document: could not parse source]"}
+		return []any{map[string]any{"type": "text", "text": "[document: could not parse source]"}}
 	}
 
 	slog.Debug("document block source", "source_type", source.Type,
 		"media_type", source.MediaType, "data_len", len(source.Data))
 
-	// Handle base64 PDFs.
-	if source.Type == "base64" && (source.MediaType == "application/pdf" || source.MediaType == "") {
-		result := map[string]any{
-			"type": "pdf_data",
-			"data": source.Data,
+	var title, docContext string
+	json.Unmarshal(block["title"], &title)
+	json.Unmarshal(block["context"], &docContext)
+	if title == "" {
+		// Some Claude Code versions use "name".
+		json.Unmarshal(block["name"], &title)
+	}
+	header := documentHeader(title, docContext)
+
+	switch source.Type {
+	case "base64":
+		if source.MediaType == "application/pdf" || source.MediaType == "" {
+			result := map[string]any{
+				"type": "pdf_data",
+				"data": source.Data,
+			}
+			if title != "" {
+				result["filename"] = title
+			}
+			return []any{result}
 		}
-		// Preserve filename if present.
-		var title string
-		if json.Unmarshal(block["title"], &title) == nil && title != "" {
-			result["filename"] = title
-		}
-		// Also try "name" field (some Claude Code versions use this).
-		if title == "" {
-			var name string
-			if json.Unmarshal(block["name"], &name) == nil && name != "" {
-				result["filename"] = name
+		if strings.HasPrefix(source.MediaType, "text/") {
+			if raw, err := base64.StdEncoding.DecodeString(source.Data); err == nil {
+				return []any{map[string]any{"type": "text", "text": header + string(raw)}}
 			}
 		}
-		return result
+
+	case "text":
+		return []any{map[string]any{"type": "text", "text": header + source.Data}}
+
+	case "content":
+		var inner []map[string]json.RawMessage
+		var innerStr string
+		if json.Unmarshal(source.Content, &innerStr) == nil {
+			return []any{map[string]any{"type": "text", "text": header + innerStr}}
+		}
+		if json.Unmarshal(source.Content, &inner) == nil {
+			parts := []any{}
+			if header != "" {
+				parts = append(parts, map[string]any{"type": "text", "text": strings.TrimRight(header, "\n")})
+			}
+			for _, ib := range inner {
+				var t string
+				json.Unmarshal(ib["type"], &t)
+				switch t {
+				case "text":
+					var text string
+					json.Unmarshal(ib["text"], &text)
+					parts = append(parts, map[string]any{"type": "text", "text": text})
+				case "image":
+					parts = append(parts, translateImageBlock(ib))
+				}
+			}
+			return parts
+		}
+
+	case "url":
+		if source.URL != "" {
+			result := map[string]any{"type": "document_url", "url": source.URL}
+			if title != "" {
+				result["filename"] = title
+			}
+			return []any{result}
+		}
 	}
 
 	slog.Warn("document block: unsupported format",
 		"source_type", source.Type, "media_type", source.MediaType)
-	return map[string]any{"type": "text", "text": "[unsupported document format: " + source.MediaType + "]"}
+	return []any{map[string]any{"type": "text", "text": "[unsupported document format: " + source.MediaType + "]"}}
 }
 
-// extractToolResultContent extracts a string from a tool_result content field,
+// documentHeader renders the optional title/context of a document block as a
+// text prefix (empty when neither is present).
+func documentHeader(title, docContext string) string {
+	var sb strings.Builder
+	if title != "" {
+		sb.WriteString("[Document: " + title + "]\n")
+	}
+	if docContext != "" {
+		sb.WriteString(docContext + "\n")
+	}
+	if sb.Len() > 0 {
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+// translateDocumentBlock returns the first part of translateDocumentParts. It
+// is kept for single-part callers (and tests); multi-part sources (content
+// documents) are only fully represented by translateDocumentParts.
+func translateDocumentBlock(block map[string]json.RawMessage) map[string]any {
+	parts := translateDocumentParts(block)
+	if len(parts) > 0 {
+		if m, ok := parts[0].(map[string]any); ok {
+			return m
+		}
+	}
+	return map[string]any{"type": "text", "text": "[empty document]"}
+}
+
+// extractToolResultContent extracts the text of a tool_result content field,
 // which can be a string or an array of content blocks.
 func extractToolResultContent(raw json.RawMessage) string {
+	text, _ := splitToolResultContent(raw)
+	return text
+}
+
+// splitToolResultContent separates a tool_result content field into its text
+// and any media parts (image_url / pdf_data / ...) that a role:tool message
+// cannot carry.
+func splitToolResultContent(raw json.RawMessage) (string, []any) {
 	if len(raw) == 0 || string(raw) == "null" {
-		return ""
+		return "", nil
 	}
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
-		return s
+		return s, nil
 	}
-	// Array of blocks: concatenate text parts.
-	var blocks []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+	var blocks []map[string]json.RawMessage
+	if json.Unmarshal(raw, &blocks) != nil {
+		return string(raw), nil
 	}
-	if json.Unmarshal(raw, &blocks) == nil {
-		var parts []string
-		for _, b := range blocks {
-			if b.Type == "text" && b.Text != "" {
-				parts = append(parts, b.Text)
+	var texts []string
+	var media []any
+	for _, b := range blocks {
+		var t string
+		json.Unmarshal(b["type"], &t)
+		switch t {
+		case "text":
+			var text string
+			json.Unmarshal(b["text"], &text)
+			if text != "" {
+				texts = append(texts, text)
+			}
+		case "image":
+			media = append(media, translateImageBlock(b))
+		case "document":
+			media = append(media, translateDocumentParts(b)...)
+		case "search_result":
+			var title string
+			json.Unmarshal(b["title"], &title)
+			var inner []struct {
+				Text string `json:"text"`
+			}
+			json.Unmarshal(b["content"], &inner)
+			var sb strings.Builder
+			if title != "" {
+				sb.WriteString(title + "\n")
+			}
+			for _, c := range inner {
+				sb.WriteString(c.Text + "\n")
+			}
+			if sb.Len() > 0 {
+				texts = append(texts, strings.TrimRight(sb.String(), "\n"))
 			}
 		}
-		return strings.Join(parts, "\n")
 	}
-	return string(raw)
+	return strings.Join(texts, "\n"), media
 }
 
 // --- Tool translation ---
@@ -506,6 +668,9 @@ func buildChatRequestFromAnthropic(req messagesRequest, backendModel string) (ma
 			if tc := translateAnthropicToolChoice(req.ToolChoice, true); tc != nil {
 				chatReq["tool_choice"] = json.RawMessage(tc)
 			}
+			if toolChoiceDisablesParallel(req.ToolChoice) {
+				chatReq["parallel_tool_calls"] = false
+			}
 		}
 		if len(strippedServerTools) > 0 {
 			chatReq[pipeline.InternalKeyStrippedTools] = strippedServerTools
@@ -534,9 +699,20 @@ func buildChatRequestFromAnthropic(req messagesRequest, backendModel string) (ma
 		slog.Debug("dropping top_k (no OpenAI equivalent)", "top_k", *req.TopK)
 	}
 
-	// thinking config: dropped for Chat Completions backends.
-	if len(req.Thinking) > 0 && string(req.Thinking) != "null" {
-		slog.Debug("dropping thinking config for translated request")
+	// thinking: Chat Completions has no equivalent. thinking.type "disabled"
+	// is honored per model via thinking_off (applyThinkingOff); an enabled
+	// budget_tokens has no portable mapping and is dropped. output_config.effort
+	// becomes reasoning_effort, except when thinking is disabled.
+	thinking := parseThinking(req.Thinking)
+	if thinking.Type != "" || thinking.BudgetTokens > 0 {
+		slog.Debug("translated thinking config", "type", thinking.Type, "budget_tokens", thinking.BudgetTokens)
+	}
+	oc := parseOutputConfig(req.OutputConfig, req.OutputFormat)
+	if oc.Effort != "" && thinking.Type != "disabled" {
+		chatReq["reasoning_effort"] = oc.Effort
+	}
+	if rf := oc.responseFormat(); rf != nil {
+		chatReq["response_format"] = rf
 	}
 
 	// metadata.user_id -> user.
@@ -573,4 +749,127 @@ func mapFinishToStopReason(finishReason string) string {
 	default:
 		return "end_turn"
 	}
+}
+
+// --- thinking / output_config ---
+
+type thinkingConfig struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens"`
+}
+
+func parseThinking(raw json.RawMessage) thinkingConfig {
+	var t thinkingConfig
+	if len(raw) > 0 && string(raw) != "null" {
+		json.Unmarshal(raw, &t)
+	}
+	return t
+}
+
+type outputConfig struct {
+	Effort string
+	Format json.RawMessage
+}
+
+// parseOutputConfig reads output_config.{effort,format} and the older
+// top-level output_format. Efforts the Chat Completions world doesn't know
+// ("max") are mapped to the nearest spelling ("xhigh").
+func parseOutputConfig(rawConfig, rawFormat json.RawMessage) outputConfig {
+	var oc outputConfig
+	var cfg struct {
+		Effort string          `json:"effort"`
+		Format json.RawMessage `json:"format"`
+	}
+	if len(rawConfig) > 0 && string(rawConfig) != "null" {
+		json.Unmarshal(rawConfig, &cfg)
+	}
+	oc.Effort = strings.ToLower(strings.TrimSpace(cfg.Effort))
+	if oc.Effort == "max" {
+		oc.Effort = "xhigh"
+	}
+	oc.Format = cfg.Format
+	if (len(oc.Format) == 0 || string(oc.Format) == "null") && len(rawFormat) > 0 {
+		oc.Format = rawFormat
+	}
+	return oc
+}
+
+// responseFormat converts an Anthropic json_schema output format into the
+// Chat Completions response_format object.
+func (oc outputConfig) responseFormat() map[string]any {
+	if len(oc.Format) == 0 || string(oc.Format) == "null" {
+		return nil
+	}
+	var f struct {
+		Type   string          `json:"type"`
+		Name   string          `json:"name"`
+		Schema json.RawMessage `json:"schema"`
+	}
+	if json.Unmarshal(oc.Format, &f) != nil || f.Type != "json_schema" || len(f.Schema) == 0 {
+		return nil
+	}
+	name := f.Name
+	if name == "" {
+		name = "response"
+	}
+	return map[string]any{
+		"type": "json_schema",
+		"json_schema": map[string]any{
+			"name":   name,
+			"schema": f.Schema,
+			"strict": true,
+		},
+	}
+}
+
+func toolChoiceDisablesParallel(tc json.RawMessage) bool {
+	if len(tc) == 0 || string(tc) == "null" {
+		return false
+	}
+	var c struct {
+		Disable bool `json:"disable_parallel_tool_use"`
+	}
+	return json.Unmarshal(tc, &c) == nil && c.Disable
+}
+
+// anthropicUsage converts Chat Completions usage into Anthropic usage.
+// Cached prompt tokens are reported as cache_read_input_tokens and removed from
+// input_tokens, matching Anthropic's accounting (input_tokens excludes cache
+// reads).
+func anthropicUsage(u *api.ChunkUsage) map[string]any {
+	if u == nil {
+		return nil
+	}
+	cached := 0
+	if u.PromptTokensDetails != nil {
+		cached = u.PromptTokensDetails.CachedTokens
+	}
+	input := u.PromptTokens - cached
+	if input < 0 {
+		input = 0
+	}
+	return map[string]any{
+		"input_tokens":                input,
+		"output_tokens":               u.CompletionTokens,
+		"cache_creation_input_tokens": 0,
+		"cache_read_input_tokens":     cached,
+	}
+}
+
+// resolveStopReason maps a Chat Completions finish to the Anthropic stop_reason
+// and stop_sequence. A finish of "stop" whose backend stop_reason names one of
+// the request's stop sequences is reported as "stop_sequence"; any turn that
+// emitted tool calls ends with "tool_use" even if the backend said "stop".
+func resolveStopReason(finish string, backendStop any, stopSequences []string, sawToolCalls bool) (string, any) {
+	if sawToolCalls && (finish == "stop" || finish == "tool_calls" || finish == "") {
+		return "tool_use", nil
+	}
+	if s, ok := backendStop.(string); ok && s != "" && finish == "stop" {
+		for _, seq := range stopSequences {
+			if seq == s {
+				return "stop_sequence", s
+			}
+		}
+	}
+	return mapFinishToStopReason(finish), nil
 }

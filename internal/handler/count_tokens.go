@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -37,10 +36,11 @@ func NewCountTokensHandler(cs *config.ConfigStore, ul *usage.UsageLogger) *Count
 	}
 }
 
-// roughTokenEstimate estimates tokens from a JSON body using ~4 chars/token.
-// This matches Claude Code's own roughTokenCountEstimation fallback.
+// roughTokenEstimate estimates tokens from a JSON body using ~4 chars/token
+// for text (matching the client's own fallback), with embedded base64 images
+// and PDFs costed separately rather than as text.
 func roughTokenEstimate(body []byte) int {
-	return len(body) / 4
+	return estimateRequestTokens(body)
 }
 
 func (h *CountTokensHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -89,14 +89,18 @@ func (h *CountTokensHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if model.Type == config.BackendAnthropic {
 		model, releaseBackend := lb.ResolveModel(cfg, model, body)
 		defer releaseBackend()
-		h.proxyNative(r.Context(), w, r, body, model)
+		h.proxyNative(r.Context(), w, r, body, model, req.Model)
 		return
 	}
 
 	// Translated backends: return a rough estimate.
+	h.writeEstimate(w, req.Model, body)
+}
+
+func (h *CountTokensHandler) writeEstimate(w http.ResponseWriter, model string, body []byte) {
 	tokens := roughTokenEstimate(body)
-	slog.Debug("count_tokens: returning rough estimate for translated backend",
-		"model", req.Model, "chars", len(body), "estimated_tokens", tokens)
+	slog.Debug("count_tokens: returning rough estimate",
+		"model", model, "bytes", len(body), "estimated_tokens", tokens)
 
 	httputil.SetSecurityHeaders(w)
 	w.Header().Set("Content-Type", "application/json")
@@ -105,7 +109,7 @@ func (h *CountTokensHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *CountTokensHandler) proxyNative(ctx context.Context, w http.ResponseWriter, r *http.Request, body []byte, model *config.ModelConfig) {
+func (h *CountTokensHandler) proxyNative(ctx context.Context, w http.ResponseWriter, r *http.Request, body []byte, model *config.ModelConfig, modelName string) {
 	if model.Model != "" {
 		body = RewriteModelName(body, model.Model)
 	}
@@ -140,10 +144,17 @@ func (h *CountTokensHandler) proxyNative(ctx context.Context, w http.ResponseWri
 
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, api.MaxResponseBodySize))
 
+	// Anthropic-compatible gateways often lack count_tokens: answer with an
+	// estimate so the client's context management keeps working.
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed ||
+		resp.StatusCode == http.StatusNotImplemented {
+		slog.Info("count_tokens not supported by backend; returning estimate", "status", resp.StatusCode)
+		h.writeEstimate(w, modelName, body)
+		return
+	}
 	if resp.StatusCode >= 400 {
 		slog.Error("count_tokens upstream error", "status", resp.StatusCode, "body", string(respBody))
-		httputil.WriteAnthropicError(w, resp.StatusCode, "api_error",
-			fmt.Sprintf("backend returned HTTP %d", resp.StatusCode))
+		writeUpstreamFailure(w, resp.Header, resp.StatusCode, respBody, true)
 		return
 	}
 
