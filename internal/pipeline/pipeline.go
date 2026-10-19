@@ -77,18 +77,15 @@ func (p *Pipeline) shouldRewriteVision(model *config.ModelConfig) bool {
 // shouldRewriteDocuments reports whether the proxy should intercept pdf_data
 // content for this model (native text extraction, the Documents-tab
 // processor, OCR, or vision-PDF fallback) rather than forwarding it as-is.
-// Auto shares the "Vision capable" signal with shouldRewriteVision: native PDF
-// understanding is built on vision capability in practice, so a model that
-// can't accept images natively is assumed unable to handle raw PDFs either.
+//
+// pdf_data is a proxy-internal part type that no backend understands, so Auto
+// always rewrites: even a vision-capable model gets the extracted text, since
+// "accepts images" says nothing about accepting a raw PDF and Chat Completions
+// has no standard document part. Only an explicit "off" skips the rewrite; the
+// translators then convert any leftover pdf_data to a file part via
+// ConvertPDFDataToFileParts so the backend never sees the internal type.
 func (p *Pipeline) shouldRewriteDocuments(model *config.ModelConfig) bool {
-	switch model.RewriteDocuments {
-	case "on":
-		return true
-	case "off":
-		return false
-	default:
-		return model.ForcePipeline || !model.SupportsVision
-	}
+	return model.RewriteDocuments != "off"
 }
 
 // shouldRewriteSearch reports whether the proxy should inject/convert the
@@ -217,6 +214,7 @@ func (p *Pipeline) ProcessRequest(ctx context.Context, chatReq map[string]any,
 	// Responses API clients (which have no structured PDF input) converge on
 	// the same internal shape as Anthropic's document blocks.
 	if rewriteDocumentsEnabled {
+		resolveDocumentURLs(ctx, chatReq)
 		NormalizePDFDataURLs(chatReq)
 	}
 

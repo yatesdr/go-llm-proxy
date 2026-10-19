@@ -443,3 +443,34 @@ func TestLookupKeyByHash(t *testing.T) {
 		t.Errorf("expected empty for unknown hash, got %q", got)
 	}
 }
+
+func TestThinkingOffSurvivesUpdateModel(t *testing.T) {
+	fixture := `models:
+  - name: m
+    backend: http://localhost:8000/v1
+    rewrite_documents: "on"
+    thinking_off:
+      chat_template_kwargs:
+        enable_thinking: false
+`
+	cs := loadStore(t, writeFixture(t, fixture))
+	m := FindModel(cs.Get(), "m")
+	kw, _ := m.ThinkingOff["chat_template_kwargs"].(map[string]any)
+	if kw["enable_thinking"] != false {
+		t.Fatalf("thinking_off not parsed: %#v", m.ThinkingOff)
+	}
+	// Simulate the admin form: no ThinkingOff in the payload.
+	upd := *m
+	upd.ThinkingOff = nil
+	if err := cs.UpdateModel("m", upd); err != nil {
+		t.Fatalf("UpdateModel: %v", err)
+	}
+	m = FindModel(cs.Get(), "m")
+	kw, _ = m.ThinkingOff["chat_template_kwargs"].(map[string]any)
+	if kw["enable_thinking"] != false {
+		t.Fatalf("thinking_off lost on update: %#v", m.ThinkingOff)
+	}
+	if m.RewriteDocuments != "on" {
+		t.Fatalf("rewrite_documents lost on update: %q", m.RewriteDocuments)
+	}
+}

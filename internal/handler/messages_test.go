@@ -243,7 +243,7 @@ func TestTranslateDocumentBlock_Base64PDF(t *testing.T) {
 func TestTranslateDocumentBlock_UnsupportedFormat(t *testing.T) {
 	block := map[string]json.RawMessage{
 		"type":   json.RawMessage(`"document"`),
-		"source": json.RawMessage(`{"type":"url","media_type":"text/html","url":"https://example.com"}`),
+		"source": json.RawMessage(`{"type":"base64","media_type":"application/zip","data":"UEs="}`),
 	}
 	result := translateDocumentBlock(block)
 	if result["type"] != "text" {
@@ -1109,24 +1109,17 @@ func TestMessagesHandler_BackendError_Streaming(t *testing.T) {
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
-	// Should return SSE with error event.
-	if !strings.Contains(w.Header().Get("Content-Type"), "text/event-stream") {
-		t.Fatalf("expected SSE content type for streaming error, got %q", w.Header().Get("Content-Type"))
+	// Nothing was streamed yet, so the real HTTP status is returned (not 200+SSE).
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for pre-stream backend error, got %d", w.Code)
 	}
-	events := parseSSEEvents(w.Body.String())
-	var hasError bool
-	for _, e := range events {
-		if e.event == "error" {
-			hasError = true
-			var d map[string]any
-			json.Unmarshal([]byte(e.data), &d)
-			if d["type"] != "error" {
-				t.Fatalf("expected type=error in payload, got %v", d["type"])
-			}
-		}
+	var d map[string]any
+	json.Unmarshal(w.Body.Bytes(), &d)
+	if d["type"] != "error" {
+		t.Fatalf("expected Anthropic error payload, got %v", d)
 	}
-	if !hasError {
-		t.Fatal("expected error SSE event for backend error in streaming mode")
+	if errObj := d["error"].(map[string]any); errObj["type"] != "invalid_request_error" || errObj["message"] != "invalid request" {
+		t.Fatalf("unexpected error object: %v", errObj)
 	}
 }
 

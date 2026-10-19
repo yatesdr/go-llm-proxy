@@ -2,6 +2,42 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Added
+
+- Messages endpoint: per-model `thinking_off` (raw object merged into the Chat
+  Completions request when the client disables thinking), `output_config.effort`
+  to `reasoning_effort`, `output_config.format` json_schema to `response_format`,
+  `disable_parallel_tool_use`, replay of thinking blocks as `reasoning_content`,
+  text/content/url document sources, images and documents inside tool results,
+  glob model aliases and `[1m]`-style suffix stripping, `max_tokens` clamped to
+  the context window, cache-read usage and `stop_sequence` stop reasons.
+- `message_start` and pings are sent as soon as the backend accepts a streaming
+  request, with a ping every 15 s while it is quiet.
+
+### Changed
+
+- PDF documents are always rewritten to text for translated Messages requests
+  (previously vision-capable models received the internal `pdf_data` part and
+  failed); `rewrite_documents: off` now yields OpenAI `file` parts.
+- Backend errors on the Messages endpoint carry the Anthropic status and type
+  for the failure (backend 401/403 become 502), the scrubbed backend message,
+  context-overflow errors rewritten to `prompt is too long: N tokens > M maximum`,
+  and the backend's retry headers. Streaming requests that fail before any
+  output get the real HTTP status instead of 200 plus an SSE error.
+- Tool results are sent before user text in the same turn.
+- A translated stream that ends without a `finish_reason` or with a read error
+  now ends with an `overloaded_error` event instead of `end_turn`.
+
+### Fixed
+
+- Admin model saves no longer drop `rewrite_documents`.
+- Reasoning arriving after text no longer reuses the text block's index;
+  repeated tool-call ids no longer open duplicate tool blocks.
+- Per-model timeout stays armed until response headers arrive on the Messages
+  paths.
+
 ## v0.6.1 — 2026-08-18
 
 ### Fixed

@@ -73,13 +73,48 @@ func TestShouldProcess_AnthropicBackend_NotVisionCapable(t *testing.T) {
 	}
 }
 
-// A vision-capable Anthropic backend (real Claude) with no search key
-// configured has nothing to rewrite and should skip the pipeline.
+// A vision-capable Anthropic backend with no search key still rewrites
+// documents (pdf_data is proxy-internal; no backend accepts it), unless the
+// operator opts out with rewrite_documents: off and nothing else is enabled.
 func TestShouldProcess_AnthropicBackend_VisionCapable(t *testing.T) {
 	p := &Pipeline{config: config.NewTestConfigStore(&config.Config{})}
 	m := &config.ModelConfig{Type: config.BackendAnthropic, SupportsVision: true}
+	if !p.ShouldProcess(m) {
+		t.Fatal("expected true: documents are always rewritten in auto mode")
+	}
+	m.RewriteDocuments = "off"
 	if p.ShouldProcess(m) {
-		t.Fatal("expected false for a vision-capable anthropic backend with no search key")
+		t.Fatal("expected false for a vision-capable backend with documents off and no search key")
+	}
+}
+
+func TestConvertPDFDataToFileParts(t *testing.T) {
+	req := map[string]any{"messages": []map[string]any{{
+		"role": "user",
+		"content": []any{
+			map[string]any{"type": "text", "text": "hi"},
+			map[string]any{"type": "pdf_data", "data": "QUJD", "filename": "a.pdf"},
+			map[string]any{"type": "pdf_data", "data": "REVG"},
+		},
+	}}}
+	if !RequestContainsPDFData(req) {
+		t.Fatal("expected pdf_data detected")
+	}
+	ConvertPDFDataToFileParts(req)
+	if RequestContainsPDFData(req) {
+		t.Fatal("pdf_data should be gone")
+	}
+	parts := req["messages"].([]map[string]any)[0]["content"].([]any)
+	f := parts[1].(map[string]any)
+	if f["type"] != "file" {
+		t.Fatalf("expected file part, got %v", f)
+	}
+	file := f["file"].(map[string]any)
+	if file["file_data"] != "data:application/pdf;base64,QUJD" || file["filename"] != "a.pdf" {
+		t.Fatalf("unexpected file part: %v", file)
+	}
+	if parts[2].(map[string]any)["file"].(map[string]any)["filename"] != "document.pdf" {
+		t.Fatalf("expected default filename, got %v", parts[2])
 	}
 }
 

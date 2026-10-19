@@ -94,8 +94,10 @@ models:
 # ── Model aliases ──
 # Exact, case-sensitive alternate IDs for configured chat models. Targets must
 # be model names above; aliases cannot target other aliases.
+# Patterns with * or ? also work; a trailing [1m]-style suffix is ignored.
 # aliases:
 #   codex-reviewer-model: my-model
+#   claude-haiku-*: my-model
 #
 # ── Chat helpers ───────────────────────────────────────────────────────────────
 # Optional. Handles images and web search for chat models that need help.

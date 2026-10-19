@@ -109,6 +109,10 @@ The proxy's role is step 4. When Codex instead submits a PDF directly as an `inp
 
 These clients handle PDFs entirely client-side. The proxy's PDF pipeline runs for direct Chat Completions requests if the request body contains PDF content signatures, but these clients typically use their own file handling tools.
 
+### When documents are rewritten
+
+`pdf_data` is the proxy's internal part type; no backend accepts it. Document rewriting therefore runs for every model (including vision-capable ones) unless the model sets `rewrite_documents: off`. With rewriting off, any PDF is passed on as an OpenAI Chat Completions `file` part (`{"type":"file","file":{"file_data":"data:application/pdf;base64,...","filename":"..."}}`). Documents with a URL source are fetched by the proxy through the SSRF-safe client (32 MB limit, 30 s, no private addresses, no redirects) and then processed like any other PDF; text bodies are inlined and other types are replaced by a short placeholder. During streaming requests the proxy sends SSE keepalives while documents or images are processed.
+
 ### Supported PDF types
 
 | PDF type | Claude Code / Chat Completions | Codex CLI |

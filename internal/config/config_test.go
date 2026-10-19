@@ -482,3 +482,48 @@ func TestApplyPasswordEnvDefaults_BothUnsetStaysEmpty(t *testing.T) {
 		t.Errorf("expected empty usage dashboard password, got %q", cfg.UsageDashboardPassword)
 	}
 }
+
+func TestResolveModelName_GlobAndSuffix(t *testing.T) {
+	cfg := &Config{
+		Models: []ModelConfig{{Name: "big"}, {Name: "small"}, {Name: "claude-exact"}},
+		Aliases: map[string]string{
+			"claude-*":         "big",
+			"claude-haiku-*":   "small",
+			"claude-sonnet-4?": "big",
+			"exact-alias":      "small",
+		},
+	}
+	cases := map[string]string{
+		"big":                       "big",
+		"claude-exact":              "claude-exact", // real model beats glob
+		"exact-alias":               "small",
+		"claude-haiku-4-5-20251001": "small", // most specific glob wins
+		"claude-opus-5":             "big",
+		"claude-opus-5[1m]":         "big",
+		"claude-haiku-4-5[1m]":      "small",
+		"big[1m]":                   "big",
+		"exact-alias[1m]":           "small",
+		"claude-sonnet-45":          "big",
+		"gpt-4":                     "gpt-4",
+	}
+	for in, want := range cases {
+		if got := ResolveModelName(cfg, in); got != want {
+			t.Errorf("ResolveModelName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestGlobMatch(t *testing.T) {
+	for _, tc := range []struct {
+		p, n string
+		want bool
+	}{
+		{"*", "", true}, {"a*b", "axxb", true}, {"a*b", "axxbc", false},
+		{"a*b*c", "abc", true}, {"a?c", "abc", true}, {"a?c", "ac", false},
+		{"*x", "ax", true}, {"x*", "ax", false},
+	} {
+		if got := GlobMatch(tc.p, tc.n); got != tc.want {
+			t.Errorf("GlobMatch(%q,%q)=%v want %v", tc.p, tc.n, got, tc.want)
+		}
+	}
+}

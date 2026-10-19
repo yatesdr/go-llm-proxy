@@ -29,6 +29,9 @@ type ChunkChoice struct {
 	Index        int        `json:"index"`
 	Delta        ChunkDelta `json:"delta"`
 	FinishReason *string    `json:"finish_reason"`
+	// StopReason is the vLLM/SGLang extension naming the stop string (a
+	// string) or stop token id (a number) that ended generation.
+	StopReason any `json:"stop_reason,omitempty"`
 }
 
 type ChunkDelta struct {
@@ -80,6 +83,7 @@ type ChatChoice struct {
 	Index        int           `json:"index"`
 	Message      ChatChoiceMsg `json:"message"`
 	FinishReason string        `json:"finish_reason"`
+	StopReason   any           `json:"stop_reason,omitempty"`
 }
 
 type ChatChoiceMsg struct {

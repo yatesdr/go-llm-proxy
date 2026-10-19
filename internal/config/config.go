@@ -214,6 +214,11 @@ type ModelConfig struct {
 	RewriteWebSearch string            `yaml:"rewrite_web_search,omitempty"` // "" (auto by protocol), "on", or "off"
 	Processors       *ProcessorsConfig `yaml:"processors"`                   // per-model processor overrides (nil = use global)
 	Defaults         *SamplingDefaults `yaml:"defaults"`                     // default sampling parameters (nil = use backend defaults)
+	// ThinkingOff is a raw object merged into the Chat Completions request
+	// when a Messages client (Claude Code) sends thinking.type "disabled".
+	// Backends spell "no reasoning" differently, so the operator supplies the
+	// fields, e.g. {chat_template_kwargs: {enable_thinking: false}}.
+	ThinkingOff map[string]any `yaml:"thinking_off,omitempty"`
 
 	// AWS Bedrock fields (only used when type: "bedrock").
 	// If api_key is set, it is sent as a Bedrock API key bearer token and the
@@ -510,6 +515,13 @@ func FindModel(cfg *Config, name string) *ModelConfig {
 // ResolveModelName returns the canonical configured model name for name.
 // Real model names take precedence over aliases; unknown names are returned
 // unchanged so callers can preserve the requested ID in errors and capture.
+//
+// Resolution order: exact model name, exact alias, then (after stripping a
+// trailing bracket suffix such as Claude Code's "[1m]" context marker) the
+// same two lookups, then glob aliases ("*" and "?") against the stripped and
+// original name. When several globs match, the most specific one wins
+// (longest literal text, then lexicographic order) so the result does not
+// depend on map iteration order.
 func ResolveModelName(cfg *Config, name string) string {
 	if cfg == nil {
 		return name
@@ -520,7 +532,77 @@ func ResolveModelName(cfg *Config, name string) string {
 	if target, ok := cfg.Aliases[name]; ok {
 		return target
 	}
+	stripped := StripModelSuffix(name)
+	if stripped != name {
+		if FindModel(cfg, stripped) != nil {
+			return stripped
+		}
+		if target, ok := cfg.Aliases[stripped]; ok {
+			return target
+		}
+	}
+	bestPattern, bestTarget := "", ""
+	for pattern, target := range cfg.Aliases {
+		if !strings.ContainsAny(pattern, "*?") {
+			continue
+		}
+		if !GlobMatch(pattern, stripped) && !GlobMatch(pattern, name) {
+			continue
+		}
+		if bestPattern == "" || globSpecificity(pattern) > globSpecificity(bestPattern) ||
+			(globSpecificity(pattern) == globSpecificity(bestPattern) && pattern < bestPattern) {
+			bestPattern, bestTarget = pattern, target
+		}
+	}
+	if bestPattern != "" {
+		return bestTarget
+	}
 	return name
+}
+
+// StripModelSuffix removes a trailing "[...]" marker (for example the "[1m]"
+// Claude Code appends to select a 1M-token context) from a client model ID.
+func StripModelSuffix(name string) string {
+	if !strings.HasSuffix(name, "]") {
+		return name
+	}
+	if i := strings.LastIndex(name, "["); i > 0 {
+		return name[:i]
+	}
+	return name
+}
+
+func globSpecificity(pattern string) int {
+	return len(strings.NewReplacer("*", "", "?", "").Replace(pattern))
+}
+
+// GlobMatch reports whether name matches pattern, where "*" matches any run
+// of characters (including none) and "?" matches exactly one. Matching is
+// case-sensitive.
+func GlobMatch(pattern, name string) bool {
+	p, n := []rune(pattern), []rune(name)
+	pi, ni := 0, 0
+	star, mark := -1, 0
+	for ni < len(n) {
+		switch {
+		case pi < len(p) && (p[pi] == '?' || p[pi] == n[ni]) && p[pi] != '*':
+			pi++
+			ni++
+		case pi < len(p) && p[pi] == '*':
+			star, mark = pi, ni
+			pi++
+		case star >= 0:
+			pi = star + 1
+			mark++
+			ni = mark
+		default:
+			return false
+		}
+	}
+	for pi < len(p) && p[pi] == '*' {
+		pi++
+	}
+	return pi == len(p)
 }
 
 func validateConfig(cfg *Config) error {
