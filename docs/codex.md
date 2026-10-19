@@ -17,9 +17,10 @@ For manual setup, see [Manual configuration](#manual-configuration) below.
 
 The proxy auto-detects whether each backend supports the Responses API natively:
 
-1. **First request**: the proxy checks the endpoint with a body-independent `OPTIONS` probe.
+1. **First request**: the proxy checks the endpoint with a body-independent `OPTIONS` probe. Only a 2xx or 405 answer whose `Allow` header lists `POST` proves the route exists (CORS-enabled servers answer `OPTIONS` with 2xx on every path, so a bare 2xx is ignored); a 404 proves it is absent. Anything else is inconclusive and the real request decides.
 2. **Route available**: the real Responses request is passed through unchanged.
-3. **Route absent**: the proxy uses Chat Completions translation.
+3. **Route absent**: the proxy uses Chat Completions translation. A real request answered by 404/405 with a body such as `{"detail":"Not Found"}` means the route is missing; a 404 carrying an OpenAI-style "model does not exist" error means only the model is wrong and is reported as such instead of translating.
+4. **Native 5xx** (`auto` mode only): the request is retried through translation, and the native route is skipped for two minutes. Unpatched vLLM fails on Responses features such as `additional_tools`; translation handles them.
 
 This means:
 - **OpenAI, Azure OpenAI** and other native backends work at full fidelity — encrypted compaction, built-in tools, reasoning tokens, everything passes through untouched.
@@ -41,11 +42,11 @@ Control how the proxy handles Responses API requests per model:
 models:
   # Auto-detect (default — omit responses_mode or set to "auto"):
   - name: qwen-3.5
-    backend: http://192.168.13.30:8000/v1
+    backend: http://gpu-a.internal.example:8000/v1
 
   # Force translation (skip probe for backends you know are Chat Completions only):
   - name: MiniMax-M2.5
-    backend: http://192.168.100.10:8000/v1
+    backend: http://gpu-b.internal.example:8000/v1
     responses_mode: translate
 
   # Force native passthrough (for OpenAI or backends with full Responses API):
@@ -58,7 +59,7 @@ In `auto` mode, the one-time probe adds a single round-trip on the first request
 
 ## Translation details
 
-When translating for non-native backends, the proxy maps between the two API formats:
+When translating for non-native backends, the proxy maps between the two API formats.
 
 ### Request translation (Responses -> Chat Completions)
 
@@ -66,27 +67,82 @@ When translating for non-native backends, the proxy maps between the two API for
 |---|---|
 | `input` (string) | Single user message |
 | `input` (array of items) | Messages array (see below) |
-| `instructions` | System message (prepended) |
+| `instructions` + leading `system`/`developer` messages | One merged `system` message (see below) |
 | `tools` (function type) | `tools` with nested `function` wrapper |
-| `tool_choice` | `tool_choice` (pass through) |
+| `tools` (`namespace`) and `additional_tools` input items | Flattened function tools (see below) |
+| `tools` (`custom`, freeform) | Function with one string parameter `input` |
+| `tool_choice` | `tool_choice`; `{type: function\|custom, name}` becomes the chat form with the flattened name |
 | `max_output_tokens` | `max_completion_tokens` |
-| `reasoning.effort` | `reasoning_effort` |
-| `text.format` | `response_format` |
+| `reasoning.effort` | `reasoning_effort` (passed through untouched; the set of valid values is backend-specific, e.g. `xhigh`) |
+| `text.format` (`json_schema`, `json_object`) | `response_format` |
 | `temperature`, `top_p`, `user` | Pass through |
+| `text.verbosity`, `reasoning.summary`, `reasoning.context`, `include`, `store: false`, `prompt_cache_key`, `client_metadata` | Dropped (no equivalent) |
+| `previous_response_id`, `store: true` | HTTP 400 (`previous_response_id_not_supported` / `store_not_supported`): server-side conversation state cannot be honored |
+
+The model's configured sampling `defaults` are applied to the translated request; values the client set always win.
+
+### System prompt and developer messages
+
+Codex sends its base prompt as the first `developer` message(s) and an empty `instructions`. Strict chat templates (Qwen, Gemma and others) reject a system message anywhere but first, and prefix caches need a byte-stable prefix, so the proxy builds **one** `system` message:
+
+- `instructions` (if any), then every message of the **leading contiguous run** of `system`/`developer` messages, in order.
+- Parts are joined with exactly one blank line (`"\n\n"`); text parts inside one message are joined the same way. Items that are not messages (`additional_tools`, `reasoning`) do not end the run.
+
+A `developer` (or `system`) message that appears **after** the first user/assistant item (for example "Approved command prefix saved") is mapped per the per-model `developer_role` option:
+
+| `developer_role` | Result |
+|---|---|
+| `user` (default) | `{role: "user", content: "<developer>\n{text}\n</developer>"}` — accepted by every chat template |
+| `system` | `{role: "system", content: "{text}"}` — a mid-conversation system message; strict templates reject it |
+| `developer` | `{role: "developer", content: "{text}"}` — only for backends that understand the role |
+
+```yaml
+models:
+  - name: qwen-3.8
+    backend: http://gpu-a.internal.example:8000/v1
+    responses_mode: translate
+    developer_role: user      # user (default) | system | developer
+```
 
 Input item type mapping:
 
 | Responses input item | Chat Completions message |
 |---|---|
 | `{role: "user", content: "..."}` | `{role: "user", content: "..."}` |
-| `{role: "developer", content: "..."}` | `{role: "developer", content: "..."}` |
+| `{role: "developer"\|"system", ...}` | Merged system message, or per `developer_role` (see above) |
 | `{type: "message", role: "assistant", content: [...]}` | `{role: "assistant", content: "..."}` |
-| `{type: "function_call", call_id, name, arguments}` | Merged into assistant message `tool_calls` |
-| `{type: "function_call_output", call_id, output}` | `{role: "tool", tool_call_id, content}` |
-| `{type: "reasoning", ...}` | Dropped (no equivalent) |
+| `{type: "function_call", call_id, name, arguments}` | Merged into assistant message `tool_calls` (name flattened if `namespace` is set) |
+| `{type: "custom_tool_call", call_id, name, input}` | Assistant `tool_calls` entry with arguments `{"input": "..."}` |
+| `{type: "function_call_output"\|"custom_tool_call_output", call_id, output}` | `{role: "tool", tool_call_id, content}` |
+| `{type: "reasoning", ...}` | Its text (`content` reasoning_text parts, else `summary`) becomes `reasoning_content` on the next assistant message; `encrypted_content` is ignored |
+| `{type: "additional_tools", tools: [...]}` | Not a message: its tools are added to the request's tools |
 | `{type: "compaction", ...}` | Dropped (no equivalent) |
 
-Non-function tool definitions (`web_search_preview`, `code_interpreter`, etc.) are dropped since Chat Completions backends cannot execute them. Codex sends `local_shell_call` and `custom_tool_call` as function-type tools, so they translate normally.
+Server-side tool types (`web_search_preview`, `code_interpreter`, ...) are dropped since Chat Completions backends cannot execute them; `web_search` is handled by the proxy's search processor when configured.
+
+### Namespaces and freeform tools
+
+Codex groups some tools in a `namespace` (for example `multi_agent_v1`) and, for auto-review, delivers its tools in an `additional_tools` input item. Chat Completions has neither, so each namespaced tool becomes a plain function:
+
+- A top-level tool keeps its name.
+- A tool `NAME` in namespace `NS` is exposed as **`NS__NAME`** (two underscores), characters outside `[A-Za-z0-9_-]` replaced by `_`, at most 64 characters (longer names are cut and given an 8-hex hash suffix).
+- The implicit `functions` namespace drops its prefix when the bare name is free, so the reviewer sees `exec`, not `functions__exec`.
+- On a collision (a top-level tool always wins) the full `NS__NAME` is tried, then `_2`, `_3`, ...
+
+When the model calls such a tool, the response carries the original identity: a `function_call` item with `name: NAME` and `namespace: NS`.
+
+A `custom` (freeform) tool — `exec`, `apply_patch` — becomes a function whose single parameter is the string `input`; a lark/regex grammar is appended to its description for the model to follow. The model's call is returned as a `custom_tool_call` item (`input` = the string, plus `namespace` when it has one), with `response.custom_tool_call_input.delta` / `.done` events (the whole input is sent in one delta when the call completes) and the usual `output_item.added` / `.done`.
+
+### Auto-review
+
+Codex's auto-review (`approvals_reviewer = "auto_review"`) sends a separate streamed request with `model: "codex-auto-review"`, no top-level `tools`, an `additional_tools` item, and a JSON-schema `text.format`. Point that model name at a configured model with an alias:
+
+```yaml
+aliases:
+  codex-auto-review: qwen-3.8
+```
+
+The request translates as above; `text.format` becomes `response_format`, and the final message is a normal `output_text` message holding the JSON verdict. When structured output was requested, the proxy buffers the reply and strips Markdown fences or prose around the JSON so Codex can parse it. Codex gives the reviewer 90 seconds and treats any failure as a denial.
 
 ### Response translation (Chat Completions -> Responses)
 
@@ -94,16 +150,40 @@ Streaming responses are translated event-by-event:
 
 | Chat Completions chunk | Responses API event |
 |---|---|
-| First chunk with `delta.role` | `response.created`, `output_item.added`, `content_part.added` |
-| `delta.content` | `response.output_text.delta` |
-| `delta.tool_calls[i]` with `id` | `response.output_item.added` (function_call) |
-| `delta.tool_calls[i].function.arguments` | `response.function_call_arguments.delta` |
-| `finish_reason: "stop"` | All `*.done` events, `response.completed` |
-| `finish_reason: "tool_calls"` | Tool call `*.done` events, `response.completed` |
+| First chunk | `response.created` |
+| `delta.reasoning` / `reasoning_content` / `<think>` | `reasoning` item with `response.reasoning_summary_text.delta` **and** `response.reasoning_text.delta`; done item has both `summary` and `content: [{type: "reasoning_text"}]` |
+| `delta.content` | `output_item.added`, `content_part.added`, `response.output_text.delta` |
+| `delta.tool_calls[i]` (new `index`, or a new `id` on the same index) | `response.output_item.added` (`function_call` or `custom_tool_call`) |
+| `delta.tool_calls[i].function.arguments` | `response.function_call_arguments.delta` (freeform tools: one `response.custom_tool_call_input.delta` at the end) |
+| `finish_reason: "stop"` / `"tool_calls"` | All `*.done` events, `response.completed` |
 | `finish_reason: "length"` | `response.incomplete` |
-| Usage chunk | Included in `response.completed` |
+| `finish_reason: "content_filter"` | `response.failed` (`content_filter`) |
+| Usage chunk | `usage` in `response.completed`, including `input_tokens_details.cached_tokens` and `output_tokens_details.reasoning_tokens` |
+| Stream ends without `finish_reason`, read error, or an `{"error": ...}` chunk | `response.failed` (`stream_truncated`, `stream_interrupted`, `upstream_error`); cut-off tool calls are never completed |
+
+Tool calls are tracked by their `index`, so deltas without an `id`, repeated ids and id-less calls are all handled. A stream that ends without `[DONE]` but after a `finish_reason` still completes (a warning is logged). SSE lines up to 16 MB are accepted.
 
 Non-streaming responses are translated as a single JSON object.
+
+### Errors
+
+An upstream error that arrives before any byte is streamed is returned as a real HTTP error with an OpenAI-style body `{"error": {"message", "type", "code"}}`; once a stream is open it becomes a `response.failed` event. Raw backend bodies are never forwarded; URLs and IP addresses are removed from the messages that are.
+
+| Upstream | Client sees | `code` |
+|---|---|---|
+| 400 / 4xx naming a context-length problem | 400 | `context_length_exceeded` (Codex compacts and retries) |
+| other 400 / 422 | 400 | `invalid_prompt` |
+| 401 / 403 (the proxy's backend credential was rejected) | 502 | `upstream_auth_error` |
+| 429 | 429 (+ `Retry-After`) | `rate_limit_exceeded` |
+| 503 | 503 (+ `Retry-After`) | `server_is_overloaded` |
+| other 5xx | same status | `upstream_error` |
+| backend unreachable / timeout | 502 / 504 | `upstream_unreachable` / `upstream_timeout` |
+
+Failed attempts count against the backend's circuit breaker.
+
+### Timeouts
+
+The model's `timeout` (default 300 s) bounds connecting and waiting for response headers, and non-streaming bodies. For a streaming request it is disarmed once the upstream answers with an event stream, so long generations are never cut; liveness then comes from the client's own inactivity handling.
 
 ## Context compaction
 
@@ -111,7 +191,7 @@ Long Codex sessions may trigger context compaction to manage the growing convers
 
 **Native backends**: The `/v1/responses/compact` request is passed through directly, preserving OpenAI's encrypted compaction format.
 
-**Translated backends**: The proxy sends the conversation to the backend with a summarization prompt and returns the result as preserved user messages plus a summary assistant message. This is functionally similar to Codex's own inline compaction path for non-OpenAI providers.
+**Translated backends**: The proxy sends the conversation to the backend with a summarization prompt (merged into the single leading system message) and returns the result as preserved user messages plus a summary assistant message. `<think>…</think>` blocks are stripped from the summary. This is functionally similar to Codex's own inline compaction path for non-OpenAI providers.
 
 **Note**: When using the config generator's custom provider setup (`model_provider = "go-llm-proxy"`), Codex automatically uses its client-side inline compaction, which goes through the regular `/v1/responses` endpoint. The `/v1/responses/compact` handler serves as a fallback for alternative configurations.
 

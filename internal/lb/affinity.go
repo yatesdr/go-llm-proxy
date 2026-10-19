@@ -28,12 +28,19 @@ func AffinityKey(body []byte) uint64 {
 		System       json.RawMessage   `json:"system"`
 		Instructions string            `json:"instructions"`
 		Input        json.RawMessage   `json:"input"`
+		// PromptCacheKey (Responses API) names the session outright; clients
+		// such as Codex set it to their conversation id.
+		PromptCacheKey string `json:"prompt_cache_key"`
 	}
 	if err := json.Unmarshal(body, &probe); err != nil {
 		return 0
 	}
 
 	h := fnv.New64a()
+	if probe.PromptCacheKey != "" {
+		_, _ = h.Write([]byte("prompt_cache_key\x00" + probe.PromptCacheKey))
+		return h.Sum64()
+	}
 	wrote := false
 	write := func(b []byte) {
 		if len(b) == 0 {

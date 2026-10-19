@@ -400,6 +400,10 @@ func (d *modelInputDTO) toConfig(cfg *config.Config, originalName string) (confi
 	} else if existing != nil {
 		m.MessagesMode = existing.MessagesMode
 	}
+	// developer_role is config-only (no admin UI field): keep it across edits.
+	if existing != nil {
+		m.DeveloperRole = existing.DeveloperRole
+	}
 	m.AWSSecretKey = resolveModelSecret(d.AWSSecretKey, existing, func(x *config.ModelConfig) string { return x.AWSSecretKey })
 	m.AWSSessionToken = resolveModelSecret(d.AWSSession, existing, func(x *config.ModelConfig) string { return x.AWSSessionToken })
 	if d.Defaults != nil {

@@ -267,6 +267,32 @@ func TestValidateConfig_UnknownMessagesMode(t *testing.T) {
 	}
 }
 
+func TestValidateConfig_DeveloperRole(t *testing.T) {
+	for _, role := range []string{"", "user", "system", "developer"} {
+		cfg := validConfig()
+		cfg.Models[0].DeveloperRole = role
+		if err := validateConfig(cfg); err != nil {
+			t.Fatalf("expected no error for developer_role %q, got: %v", role, err)
+		}
+	}
+	cfg := validConfig()
+	cfg.Models[0].DeveloperRole = "assistant"
+	err := validateConfig(cfg)
+	if err == nil || !strings.Contains(err.Error(), "unknown developer_role") {
+		t.Fatalf("expected unknown developer_role error, got: %v", err)
+	}
+}
+
+func TestApplySamplingDefaults_MaxTokensRespectsMaxCompletionTokens(t *testing.T) {
+	maxTokens := 1024
+	model := &ModelConfig{Name: "test", Defaults: &SamplingDefaults{MaxNewTokens: &maxTokens}}
+	req := map[string]any{"max_completion_tokens": 77}
+	model.ApplySamplingDefaults(req)
+	if _, ok := req["max_tokens"]; ok {
+		t.Errorf("max_tokens default must not be added next to a client max_completion_tokens: %v", req)
+	}
+}
+
 func TestValidateConfig_DashboardRequiresMetrics(t *testing.T) {
 	cfg := validConfig()
 	cfg.UsageDashboard = true

@@ -59,6 +59,14 @@ type ChunkUsage struct {
 	CompletionTokens    int                  `json:"completion_tokens"`
 	TotalTokens         int                  `json:"total_tokens"`
 	PromptTokensDetails *PromptTokensDetails `json:"prompt_tokens_details,omitempty"`
+	// CompletionTokensDetails carries the reasoning-token breakdown some
+	// backends report; absent otherwise.
+	CompletionTokensDetails *CompletionTokensDetails `json:"completion_tokens_details,omitempty"`
+}
+
+// CompletionTokensDetails mirrors OpenAI's per-completion-token breakdown.
+type CompletionTokensDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
 }
 
 // PromptTokensDetails mirrors OpenAI's extension surfacing cache-hit and

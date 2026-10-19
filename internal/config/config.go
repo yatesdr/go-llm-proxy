@@ -179,6 +179,10 @@ const (
 	ResponsesModeNative    = "native"    // always passthrough
 	ResponsesModeTranslate = "translate" // always translate to Chat Completions
 
+	DeveloperRoleUser      = "user"      // default: later developer messages become <developer>-wrapped user messages
+	DeveloperRoleSystem    = "system"    // mid-conversation system messages (strict chat templates reject these)
+	DeveloperRoleDeveloper = "developer" // pass the developer role through unchanged
+
 	MessagesModeAuto      = ""          // default: anthropic backends passthrough, others translate
 	MessagesModeNative    = "native"    // always passthrough (force Anthropic protocol to backend)
 	MessagesModeTranslate = "translate" // always translate Anthropic Messages to Chat Completions
@@ -205,6 +209,7 @@ type ModelConfig struct {
 	Type             string            `yaml:"type"`                         // backend type: "" or "openai" (default), "anthropic"
 	ResponsesMode    string            `yaml:"responses_mode"`               // "auto" (default), "native", or "translate"
 	MessagesMode     string            `yaml:"messages_mode"`                // "auto" (default), "native", or "translate"
+	DeveloperRole    string            `yaml:"developer_role,omitempty"`     // Responses translation: role for developer messages that follow the first user/assistant turn — "user" (default, wrapped in <developer> tags), "system", or "developer"
 	ContextWindow    int               `yaml:"context_window"`               // max context tokens (0 = auto-detect from backend)
 	SupportsVision   bool              `yaml:"supports_vision"`              // model handles images natively
 	SupportsAudio    bool              `yaml:"supports_audio"`               // model handles audio (transcription or audio input)
@@ -711,6 +716,12 @@ func validateConfig(cfg *Config) error {
 			return fmt.Errorf("model %q has unknown responses_mode %q (must be %q, %q, or omitted)", m.Name, m.ResponsesMode, ResponsesModeNative, ResponsesModeTranslate)
 		}
 
+		switch m.DeveloperRole {
+		case "", DeveloperRoleUser, DeveloperRoleSystem, DeveloperRoleDeveloper:
+		default:
+			return fmt.Errorf("model %q has unknown developer_role %q (must be %q, %q, %q, or omitted)", m.Name, m.DeveloperRole, DeveloperRoleUser, DeveloperRoleSystem, DeveloperRoleDeveloper)
+		}
+
 		switch m.MessagesMode {
 		case "", "auto", MessagesModeNative, MessagesModeTranslate:
 		default:
@@ -938,7 +949,9 @@ func (m *ModelConfig) ApplySamplingDefaults(chatReq map[string]any) {
 		}
 	}
 	if d.MaxNewTokens != nil {
-		if _, exists := chatReq["max_tokens"]; !exists {
+		_, hasMaxTokens := chatReq["max_tokens"]
+		_, hasMaxCompletion := chatReq["max_completion_tokens"]
+		if !hasMaxTokens && !hasMaxCompletion {
 			chatReq["max_tokens"] = *d.MaxNewTokens
 			applied = append(applied, fmt.Sprintf("max_tokens=%d", *d.MaxNewTokens))
 		}

@@ -833,6 +833,9 @@ func modelConfigNode(m ModelConfig) *yaml.Node {
 	if m.MessagesMode != "" {
 		add("messages_mode", stringNode(m.MessagesMode))
 	}
+	if m.DeveloperRole != "" {
+		add("developer_role", stringNode(m.DeveloperRole))
+	}
 	if m.ContextWindow != 0 {
 		add("context_window", intNode(m.ContextWindow))
 	}

@@ -130,6 +130,7 @@ models:
 | `timeout` | no | `300` | Request timeout in seconds |
 | `type` | no | `"openai"` | Backend protocol: `"openai"`, `"anthropic"`, or `"bedrock"` (see [Bedrock backends](#bedrock-backends)) |
 | `responses_mode` | no | `"auto"` | Responses API handling: `"auto"`, `"native"`, or `"translate"` (see [Responses mode](#responses-mode)) |
+| `developer_role` | no | `"user"` | Translated Responses requests: how a `developer` message after the first turn is sent — `"user"` (wrapped in `<developer>` tags), `"system"`, or `"developer"`. Leading developer/system messages always merge into one system message. See [docs/codex.md](codex.md#system-prompt-and-developer-messages) |
 | `messages_mode` | no | `"auto"` | Messages API handling: `"auto"`, `"native"`, or `"translate"` (see [Messages mode](#messages-mode)) |
 | `context_window` | no | `0` | Max context tokens. `0` = auto-detect from backend at startup |
 | `defaults` | no | — | Default sampling parameters (see below) |

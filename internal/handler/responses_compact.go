@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -92,7 +91,7 @@ func (h *ResponsesHandler) HandleCompact(w http.ResponseWriter, r *http.Request)
 
 	// Try native passthrough unless forced to translate.
 	if !h.shouldTranslate(model, "/responses/compact") {
-		if h.tryNativePassthrough(ctx, w, r, body, req.Model, req.aliasFrom, model, "/responses/compact", keyName, keyHash, startTime) {
+		if h.tryNativePassthrough(ctx, func() {}, w, r, body, req.Model, req.aliasFrom, model, "/responses/compact", keyName, keyHash, startTime) {
 			return
 		}
 		if h.shouldForceNative(model) {
@@ -104,18 +103,19 @@ func (h *ResponsesHandler) HandleCompact(w http.ResponseWriter, r *http.Request)
 	// Fall back to model-based summarization.
 	slog.Info("proxying compact request (summarizing)", "model", req.Model, "key", keyName)
 
-	messages, err := translateInput(req.Input, req.Instructions)
+	// The summarization prompt joins the request's own system text in one
+	// leading system message (strict chat templates allow only one).
+	allTools := append(append([]json.RawMessage(nil), req.Tools...), collectAdditionalTools(req.Input)...)
+	summaryMessages, err := translateInputWith(req.Input, req.Instructions, translateOptions{
+		DeveloperRole: model.DeveloperRole,
+		SystemPrefix:  compactSystemPrompt,
+		Tools:         translateTools(allTools).Registry,
+	})
 	if err != nil {
 		slog.Error("compact input translation failed", "model", req.Model, "error", err)
 		httputil.WriteError(w, http.StatusBadRequest, "request translation failed")
 		return
 	}
-
-	// Build a summarization request: system prompt + full conversation + summarize instruction.
-	summaryMessages := []map[string]any{
-		{"role": "system", "content": compactSystemPrompt},
-	}
-	summaryMessages = append(summaryMessages, messages...)
 	summaryMessages = append(summaryMessages, map[string]any{
 		"role":    "user",
 		"content": "Now produce the summary.",
@@ -126,6 +126,9 @@ func (h *ResponsesHandler) HandleCompact(w http.ResponseWriter, r *http.Request)
 		"messages": summaryMessages,
 		"stream":   false,
 	}
+
+	downgradePDFData(chatReq)
+	model.ApplySamplingDefaults(chatReq)
 
 	chatBody, err := json.Marshal(chatReq)
 	if err != nil {
@@ -152,6 +155,9 @@ func (h *ResponsesHandler) HandleCompact(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		slog.Error("compact upstream failed", "error", err, "model", req.Model)
+		if r.Context().Err() == nil {
+			lb.RecordOutcome(model.Backend, false)
+		}
 		httputil.WriteError(w, http.StatusBadGateway, "upstream request failed")
 		return
 	}
@@ -161,9 +167,12 @@ func (h *ResponsesHandler) HandleCompact(w http.ResponseWriter, r *http.Request)
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, api.MaxResponseBodySize))
 		slog.Error("compact upstream returned error",
 			"model", req.Model, "status", resp.StatusCode, "body", string(errBody))
-		// Sanitized error: never forward raw backend error bodies to the client.
-		// They may contain internal URLs, backend API keys, or infrastructure details.
-		httputil.WriteError(w, resp.StatusCode, fmt.Sprintf("backend returned HTTP %d", resp.StatusCode))
+		writeUpstreamError(w, classifyUpstreamError(resp.StatusCode, errBody, resp.Header))
+		logUsage(h.usage, usageLogInput{
+			startTime: startTime, statusCode: resp.StatusCode, keyName: keyName, keyHash: keyHash,
+			model: req.Model, aliasFrom: req.aliasFrom, backend: model.Backend, endpoint: "/v1/responses/compact",
+			requestBytes: int64(len(chatBody)), responseBytes: int64(len(errBody)),
+		})
 		return
 	}
 
@@ -181,7 +190,10 @@ func (h *ResponsesHandler) HandleCompact(w http.ResponseWriter, r *http.Request)
 
 	summaryText := ""
 	if len(chatResp.Choices) > 0 && chatResp.Choices[0].Message.Content != nil {
-		summaryText = *chatResp.Choices[0].Message.Content
+		// Reasoning models may inline <think>…</think>; the summary must not
+		// carry it into the compacted history.
+		_, summaryText = stripThinkTags(*chatResp.Choices[0].Message.Content)
+		summaryText = strings.TrimSpace(summaryText)
 	}
 
 	// Build compacted output: preserved user messages + summary as assistant message.
