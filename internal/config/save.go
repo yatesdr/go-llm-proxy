@@ -583,6 +583,11 @@ func renameModelReferences(root *yaml.Node, oldName, newName string) {
 			}
 		}
 	}
+	if autoMode := findMappingValue(root, "auto_mode"); autoMode != nil {
+		if value := findMappingValue(autoMode, "model"); value != nil && value.Value == oldName {
+			value.Value = newName
+		}
+	}
 	models := findMappingValue(root, "models")
 	if models == nil || models.Kind != yaml.SequenceNode {
 		return
@@ -655,6 +660,9 @@ func modelReferrers(cfg *Config, name string) []string {
 			}
 		}
 	}
+	if cfg.AutoMode != nil && cfg.AutoMode.Model == name {
+		refs = append(refs, "auto_mode.model")
+	}
 	if cfg.Processors.Vision == name {
 		refs = append(refs, "processors.vision")
 	}
@@ -713,6 +721,11 @@ func stripModelReferences(root *yaml.Node, modelName string) {
 			} else {
 				modelsVal.Content = filtered
 			}
+		}
+	}
+	if am := findMappingValue(root, "auto_mode"); am != nil && am.Kind == yaml.MappingNode {
+		if v := findMappingValue(am, "model"); v != nil && v.Value == modelName {
+			deleteMappingValue(root, "auto_mode")
 		}
 	}
 	procs := findMappingValue(root, "processors")
@@ -801,6 +814,26 @@ func (cs *ConfigStore) UpdateProcessors(p ProcessorsConfig) error {
 			}
 			setMappingValue(procs, "web_search_keys", seq)
 		}
+		return nil
+	})
+}
+
+// UpdateAutoMode sets or clears the auto_mode block. An empty model removes
+// it (interception off); blockProbability 0 omits the threshold (default 0.5).
+func (cs *ConfigStore) UpdateAutoMode(model string, blockProbability float64) error {
+	if model == "" {
+		return cs.mutateYAML(func(root *yaml.Node) error {
+			deleteMappingValue(root, "auto_mode")
+			return nil
+		})
+	}
+	return cs.mutateYAML(func(root *yaml.Node) error {
+		node := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		node.Content = append(node.Content, stringNode("model"), stringNode(model))
+		if blockProbability > 0 {
+			node.Content = append(node.Content, stringNode("block_probability"), floatNode(blockProbability))
+		}
+		setMappingValue(root, "auto_mode", node)
 		return nil
 	})
 }

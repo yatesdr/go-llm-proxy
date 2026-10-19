@@ -111,6 +111,38 @@ type ConnectConfig struct {
 	Application string `yaml:"application,omitempty"` // X-Eidonix-Application label (default go-llm-proxy)
 }
 
+// AutoModeConfig turns on interception of Claude Code's auto-mode classifier
+// requests on /v1/messages. The classifier is answered by one logprob read on
+// Model instead of a generated reply. No block, no interception.
+type AutoModeConfig struct {
+	// Model names a configured model (or alias) with an OpenAI-compatible
+	// backend that supports logprobs and continue_final_message.
+	Model string `yaml:"model"`
+	// BlockProbability is the p_block at or above which an action is blocked
+	// (default 0.5). Lower it to be stricter.
+	BlockProbability float64 `yaml:"block_probability,omitempty"`
+}
+
+// DefaultAutoModeBlockProbability is the block threshold when unset.
+const DefaultAutoModeBlockProbability = 0.5
+
+// Threshold returns the effective block probability.
+func (a *AutoModeConfig) Threshold() float64 {
+	if a == nil || a.BlockProbability <= 0 {
+		return DefaultAutoModeBlockProbability
+	}
+	return a.BlockProbability
+}
+
+// AutoModeModel returns the configured decision model, resolving an alias, or
+// nil when auto mode is off or the model is missing.
+func (c *Config) AutoModeModel() *ModelConfig {
+	if c == nil || c.AutoMode == nil || c.AutoMode.Model == "" {
+		return nil
+	}
+	return FindModel(c, ResolveModelName(c, c.AutoMode.Model))
+}
+
 type Config struct {
 	Listen                 string            `yaml:"listen"`
 	Models                 []ModelConfig     `yaml:"models"`
@@ -129,6 +161,7 @@ type Config struct {
 	AdminPassword          string            `yaml:"admin_password"`            // password for /admin (falls back to usage_dashboard_password)
 	Connect                *ConnectConfig    `yaml:"connect,omitempty"`         // Eidonix connect hub for connect:// backends
 	HealthInterval         int               `yaml:"health_interval,omitempty"` // seconds between backend health probes (default 30)
+	AutoMode               *AutoModeConfig   `yaml:"auto_mode,omitempty"`       // Claude Code auto-mode classifier interception
 }
 
 // DefaultHealthInterval is the backend probe period when health_interval is unset.
@@ -752,6 +785,22 @@ func validateConfig(cfg *Config) error {
 		}
 		if !names[target] {
 			return fmt.Errorf("alias %q references unknown model %q", alias, target)
+		}
+	}
+
+	if a := cfg.AutoMode; a != nil {
+		if a.Model == "" {
+			return fmt.Errorf("auto_mode.model is required")
+		}
+		if a.BlockProbability < 0 || a.BlockProbability > 1 {
+			return fmt.Errorf("auto_mode.block_probability must be between 0 and 1")
+		}
+		target := FindModel(cfg, ResolveModelName(cfg, a.Model))
+		if target == nil {
+			return fmt.Errorf("auto_mode.model references unknown model %q", a.Model)
+		}
+		if target.Type != "" && target.Type != BackendOpenAI {
+			return fmt.Errorf("auto_mode.model %q must use an OpenAI-compatible backend (logprobs and continue_final_message), not %q", a.Model, target.Type)
 		}
 	}
 
