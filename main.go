@@ -111,11 +111,16 @@ func main() {
 		slog.Info("usage logging enabled", "db", dbPath)
 	}
 
+	// Point connect:// backends at the Eidonix connect hub (defaults apply when
+	// the config has no connect block). Re-applied on every reload below.
+	httputil.SetConnect(cfg.ConnectSettings())
+
 	// Auto-detect context window sizes from backends (async, non-blocking).
 	config.DetectContextWindows(cs)
 
-	// Start health checker for model availability tracking.
-	healthStore := config.NewHealthStore(cs, 30*time.Second, 5*time.Second)
+	// Start health checker for model availability tracking. The probe
+	// interval (health_interval, default 30s) is read once at startup.
+	healthStore := config.NewHealthStore(cs, cfg.EffectiveHealthInterval(), 5*time.Second)
 	// Let the usage-logging funnel update backend health from real request
 	// outcomes (esp. external backends, which are otherwise probed only once).
 	handler.SetHealthStore(healthStore)
@@ -139,6 +144,7 @@ func main() {
 	dashRl := ratelimit.NewRateLimiter(cfg.TrustedProxies)
 
 	cs.SetOnReload(func(newCfg *config.Config) {
+		httputil.SetConnect(newCfg.ConnectSettings())
 		rl.SetTrustedProxies(newCfg.TrustedProxies)
 		healthStore.RefreshFromConfig()
 		// Re-probe all backends so a changed key/backend reflects immediately,
@@ -201,6 +207,7 @@ func main() {
 		mux.Handle("GET /admin/chat", admin.RequirePage(admin.ModelsPage))
 		mux.Handle("GET /admin/models/data", admin.RequireAPI(admin.ModelsData))
 		mux.Handle("POST /admin/models/mutate", admin.RequireAPI(admin.ModelsMutate))
+		mux.Handle("GET /admin/connect/data", admin.RequireAPI(admin.ConnectData))
 		mux.Handle("POST /admin/backends/probe", admin.RequireAPI(admin.BackendsProbe))
 		mux.Handle("GET /admin/audio", admin.RequirePage(admin.AudioPage))
 		mux.Handle("GET /admin/audio/data", admin.RequireAPI(admin.AudioData))

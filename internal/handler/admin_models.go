@@ -3,7 +3,6 @@ package handler
 import (
 	"log/slog"
 	"net/http"
-	"net/url"
 	"sort"
 	"time"
 
@@ -42,6 +41,7 @@ func (h *AdminHandler) ModelsPage(w http.ResponseWriter, r *http.Request) {
     <tbody id="modelsBody"><tr><td colspan="7" class="empty-cell">Loading…</td></tr></tbody>
   </table></div>
 </div>
+` + connectCardHTML + `
 </div>
 <div id="pane-helpers" style="display:none">
 <div class="card">
@@ -286,8 +286,8 @@ func (h *AdminHandler) BackendsProbe(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if u, err := url.Parse(req.URL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "url must be a valid http(s) URL")
+	if err := config.ValidateBackendURL(req.URL); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "url must be a valid http(s) or connect:// URL")
 		return
 	}
 	key := ""
@@ -652,7 +652,7 @@ var dotTitle=b.url?(b.disabled?'disabled':(b.online===true?('online \u00b7 '+(b.
 var dotCls=b.disabled?'health-unknown':(b.online===true?'health-online':(b.online===false?'health-offline':'health-unknown'));
 row.innerHTML='<div class="be-row">'+
  '<span><span class="health-dot '+dotCls+'" title="'+escAttr(dotTitle)+'"></span></span>'+
- '<input class="be-url" type="url" placeholder="http://server:8000/v1" value="'+escAttr(b.url||'')+'">'+
+ '<input class="be-url" type="url" placeholder="http://server:8000/v1 or connect://site/service/v1" value="'+escAttr(b.url||'')+'">'+
  '<span class="be-keywrap"><input class="be-key" type="password" placeholder="'+escAttr(b.has_api_key?(b.api_key_mask+' \u2014 blank keeps'):'optional')+'"><button type="button" class="copy-icon be-clearkey" title="Clear the stored key on save">&times;</button></span>'+
  '<input class="be-weight" type="number" min="1" value="'+(b.weight||1)+'" title="Load-balancing weight">'+
  '<input class="be-max" type="number" min="0" value="'+(b.max_inflight||0)+'" title="Max concurrent (0 = unlimited)">'+
@@ -716,5 +716,5 @@ if(history.replaceState)history.replaceState(null,'',h?'?tab=helpers':(a?'?tab=a
 }
 var initialLLMTab=new URLSearchParams(location.search).get('tab');
 if(initialLLMTab==='helpers'||initialLLMTab==='aliasing')switchLLMTab(initialLLMTab);
-document.addEventListener('keydown',function(e){if(e.key==='Escape')closeModel();});attachFilter('modelFilter','modelsBody');loadModels();`
+document.addEventListener('keydown',function(e){if(e.key==='Escape')closeModel();});attachFilter('modelFilter','modelsBody');loadModels();` + connectPanelJS
 }
