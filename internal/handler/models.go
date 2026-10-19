@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"strings"
 
 	"go-llm-proxy/internal/auth"
 	"go-llm-proxy/internal/config"
@@ -60,6 +61,9 @@ func (h *ModelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	aliasNames := make([]string, 0, len(cfg.Aliases))
 	for alias := range cfg.Aliases {
+		if strings.ContainsAny(alias, "*?") {
+			continue // glob patterns are matching rules, not model IDs
+		}
 		aliasNames = append(aliasNames, alias)
 	}
 	sort.Strings(aliasNames)

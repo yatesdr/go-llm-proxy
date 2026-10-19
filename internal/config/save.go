@@ -523,6 +523,11 @@ func (cs *ConfigStore) UpdateModel(originalName string, m ModelConfig) error {
 	for _, existing := range cur.Models {
 		if existing.Name == originalName {
 			found = true
+			// The admin form has no editor for thinking_off; keep what the
+			// operator wrote in the YAML file.
+			if len(m.ThinkingOff) == 0 {
+				m.ThinkingOff = existing.ThinkingOff
+			}
 			break
 		}
 	}
@@ -843,6 +848,9 @@ func modelConfigNode(m ModelConfig) *yaml.Node {
 	if m.RewriteVision != "" {
 		add("rewrite_vision", stringNode(m.RewriteVision))
 	}
+	if m.RewriteDocuments != "" {
+		add("rewrite_documents", stringNode(m.RewriteDocuments))
+	}
 	if m.RewriteWebSearch != "" {
 		add("rewrite_web_search", stringNode(m.RewriteWebSearch))
 	}
@@ -872,6 +880,12 @@ func modelConfigNode(m ModelConfig) *yaml.Node {
 	}
 	if m.Processors != nil && (m.Processors.Vision != "" || m.Processors.OCR != "" || m.Processors.WebSearchKey != "") {
 		add("processors", processorsNode(*m.Processors))
+	}
+	if len(m.ThinkingOff) > 0 {
+		node := &yaml.Node{}
+		if err := node.Encode(m.ThinkingOff); err == nil {
+			add("thinking_off", node)
+		}
 	}
 	return n
 }
