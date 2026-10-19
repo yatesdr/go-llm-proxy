@@ -99,8 +99,11 @@ configured aliases are saved to YAML and hot-reloaded.
 
 `thinking_off` (optional, any model) is a raw object merged into the Chat
 Completions request when a Messages client sends `thinking.type: "disabled"`
-(Claude Code's auto-mode classifier does). Example for chat templates that
-read `enable_thinking`: `thinking_off: {chat_template_kwargs: {enable_thinking: false}}`.
+(Claude Code's auto-mode classifier does). Examples:
+`thinking_off: {chat_template_kwargs: {enable_thinking: false}}` for templates
+that honour `enable_thinking`; `thinking_off: {chat_template_kwargs:
+{reasoning_effort: low}}` where switching thinking off breaks the reasoning
+parser (GLM-5.3 on vLLM). Test against your server.
 See [claude-code.md](claude-code.md#auto-mode-and-side-queries).
 
 ```yaml

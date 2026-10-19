@@ -39,10 +39,19 @@ Most users don't need to set this — `auto` handles everything correctly.
 
 Claude Code's auto-mode permission classifier and its side queries are small, non-streaming requests that expect an answer immediately: `max_tokens: 64`, `thinking: {type: "disabled"}`, `temperature: 1` and `stop_sequences: ["</block>"]`, with the reply starting `<block>yes` or `<block>no`. A reasoning model that thinks first would spend all 64 tokens on reasoning and return nothing, so the proxy lets you say how to switch thinking off for each model with `thinking_off`. It is a raw JSON object merged into the Chat Completions request whenever the client sends `thinking.type: "disabled"`:
 
+Test the setting against your server before relying on it: send the classifier-shaped request above with and without `thinking_off` and check the reply text starts `<block>`. Templates differ. On a GLM-5.3 vLLM build with a reasoning parser, for example, `enable_thinking: false` made the model put its reasoning into the answer (no opening tag), while the default, or a lower `reasoning_effort`, kept reasoning in its own field and returned a bare `<block>no` in under 20 tokens.
+
 ```yaml
 models:
-  # GLM and Qwen3-style chat templates
+  # GLM-5.3 behind vLLM's reasoning parser: keep thinking, just make it short
   - name: glm-5.3
+    backend: http://backend.example:8000/v1
+    thinking_off:
+      chat_template_kwargs:
+        reasoning_effort: low
+
+  # Qwen3-style chat templates that honour enable_thinking
+  - name: qwen3
     backend: http://backend.example:8000/v1
     thinking_off:
       chat_template_kwargs:
