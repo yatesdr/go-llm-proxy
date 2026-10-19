@@ -17,6 +17,21 @@ func TestAffinityKey_StableAcrossTurns(t *testing.T) {
 	}
 }
 
+func TestAffinityKey_PromptCacheKey(t *testing.T) {
+	// The same prompt_cache_key sticks even when the opening items differ
+	// (e.g. the auto-review side request vs the main turn share a session key
+	// only if the client says so); different keys separate sessions.
+	a := []byte(`{"prompt_cache_key":"sess-1","input":[{"role":"user","content":"one"}]}`)
+	b := []byte(`{"prompt_cache_key":"sess-1","input":[{"role":"user","content":"two"}]}`)
+	c := []byte(`{"prompt_cache_key":"sess-2","input":[{"role":"user","content":"one"}]}`)
+	if AffinityKey(a) == 0 || AffinityKey(a) != AffinityKey(b) {
+		t.Error("same prompt_cache_key should give the same affinity")
+	}
+	if AffinityKey(a) == AffinityKey(c) {
+		t.Error("different prompt_cache_key should give different affinity")
+	}
+}
+
 func TestAffinityKey_DistinguishesSessions(t *testing.T) {
 	a := []byte(`{"messages":[{"role":"system","content":"You are helpful."},{"role":"user","content":"session A opener"}]}`)
 	b := []byte(`{"messages":[{"role":"system","content":"You are helpful."},{"role":"user","content":"session B opener"}]}`)
