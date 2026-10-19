@@ -1,0 +1,44 @@
+# go-llm-proxy next to an Eidonix connect hub.
+#
+# No published ports: other containers reach the proxy as
+# http://go-llm-proxy:8080 over the eidonix-edge network (for example from
+# a reverse proxy), and the proxy reaches remote sites through the hub at
+# http://connect:8080 over the eidonix-connect network.
+#
+# Both networks are created elsewhere (by the hub / edge stacks) and must
+# already exist:  docker network ls | grep eidonix
+#
+# Usage (from this directory):
+#   mkdir -p config && cp ../config.yaml.example config/config.yaml
+#   docker compose -f compose.connect.yaml up -d --build
+#
+# See docs/connect.md.
+services:
+  go-llm-proxy:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: go-llm-proxy
+    restart: unless-stopped
+    environment:
+      - GO_LLM_ADMIN_PASSWORD=${GO_LLM_ADMIN_PASSWORD:-}
+      - GO_LLM_USAGE_DASHBOARD_PASSWORD=${GO_LLM_USAGE_DASHBOARD_PASSWORD:-}
+    volumes:
+      # Mount the directory, not the file: the admin UI saves config changes
+      # via an atomic write+rename, which fails against a single-file bind mount.
+      - ./config:/config
+      - proxy-data:/data
+    networks:
+      eidonix-connect: {}
+      eidonix-edge:
+        aliases:
+          - go-llm-proxy
+
+networks:
+  eidonix-connect:
+    external: true
+  eidonix-edge:
+    external: true
+
+volumes:
+  proxy-data:

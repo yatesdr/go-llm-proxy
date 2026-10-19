@@ -78,6 +78,19 @@ models:
   #   aws_secret_key: ...
   #   # aws_session_token: ...        # optional, for temporary STS credentials
   #
+# ── Eidonix connect ────────────────────────────────────────────────────────────
+# Optional. Backends written connect://<site>/<service>/<path> are reached
+# through an eidonix-connect hub (docs/connect.md). Works anywhere a backend URL
+# does: models, audio, documents, Qdrant. Both fields below have these defaults.
+# connect:
+#   url: http://connect:8080
+#   application: go-llm-proxy
+#
+# Example backend:   - url: connect://site-a/chat/v1
+#
+# Seconds between backend health probes (default 30; restart to change).
+# health_interval: 30
+
 # ── Model aliases ──
 # Exact, case-sensitive alternate IDs for configured chat models. Targets must
 # be model names above; aliases cannot target other aliases.

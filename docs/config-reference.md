@@ -14,6 +14,8 @@ go-llm-proxy is configured via a single YAML file (default: `config.yaml`). See 
 | `usage_db` | `"usage.db"` | Path to the SQLite usage database |
 | `usage_dashboard` | `false` | Enable the usage dashboard at `/usage` |
 | `usage_dashboard_password` | — | Required when dashboard is enabled. Falls back to `GO_LLM_USAGE_DASHBOARD_PASSWORD` if unset — see below |
+| `connect` | — | Optional [Eidonix connect](connect.md) hub: `url` (default `http://connect:8080`) and `application` (default `go-llm-proxy`). Backends written `connect://<site>/<service>/<path>` are reached through it |
+| `health_interval` | `30` | Seconds between backend health probes. Read at startup (restart to change). Disabled backends are never probed; connect backends are judged from the hub catalog every 15 s instead |
 | `admin_password` | — | Enables the admin UI at `/admin` on its own; when unset, `/admin` uses the dashboard password (and requires the dashboard to be enabled). Falls back to `GO_LLM_ADMIN_PASSWORD` if unset — see below |
 
 ### Environment variable overrides
@@ -441,6 +443,10 @@ In `auto` mode, the proxy determines the behavior from the model's `type` field 
 
 The translation supports text, tool calling, reasoning tokens (emitted as thinking blocks), and streaming. See [claude-code.md](claude-code.md) for full details.
 
+## Connect backends
+
+Anywhere a backend URL is accepted (model backends, audio, documents, vision and other processor models, Qdrant), `connect://<site>/<service>/<path>` can be used instead of `http(s)://`. It resolves to `<connect.url>/<site>/<service>/<path>`, with `X-Eidonix-Application` and `X-Eidonix-For` labels, and its health comes from the hub catalog. See [connect.md](connect.md).
+
 ## Context window detection
 
 At startup, the proxy queries each backend to discover context window sizes:
@@ -479,7 +485,7 @@ services:
 
 | Field | Required | Description |
 |---|---|---|
-| `qdrant.backend` | yes | Qdrant server URL |
+| `qdrant.backend` | yes | Qdrant server URL (`http(s)://` or `connect://<site>/<service>`) |
 | `qdrant.api_key` | no | API key sent to the Qdrant backend |
 | `qdrant.app_keys` | yes | Application keys for proxy authentication |
 | `qdrant.app_keys[].name` | yes | Friendly name (used for isolation and logging) |

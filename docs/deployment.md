@@ -13,6 +13,10 @@ Production deployment details for go-llm-proxy.
 7. Disable config generator after setup, or protect with nginx auth
 8. Set up systemd for automatic restart (see below)
 
+## Next to an Eidonix connect hub
+
+To reach services at remote sites through an [eidonix-connect](connect.md) hub, run the proxy with `docker/compose.connect.yaml`: no published ports, attached to the external `eidonix-connect` and `eidonix-edge` Docker networks (alias `go-llm-proxy`). See [connect.md](connect.md#deploying-next-to-the-hub).
+
 ## Optional system dependencies
 
 For scanned-PDF OCR via rasterization (recommended when using a dedicated OCR model like paddleOCR-VL):
