@@ -134,6 +134,9 @@ func newAutoEnv(t *testing.T, stub *decisionStub, mutate func(*config.Config, st
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Drain the usage writer before t.TempDir's cleanup removes its database
+	// (cleanups run last-in first-out); Close is idempotent.
+	t.Cleanup(func() { _ = ul.Close() })
 	cs := config.NewTestConfigStore(cfg)
 	env := &autoEnv{stub: stub, usage: ul, dbPath: dbPath}
 	env.handler = auth.AuthMiddleware(cs, NewMessagesHandler(cs, ul, nil))
