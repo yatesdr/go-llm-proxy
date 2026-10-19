@@ -131,8 +131,8 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// upstream Do call (so a backend that never answers is cut off) and is
 	// disarmed only once a streaming response has started successfully: a
 	// wall-clock cap on a live stream severs healthy long generations (see
-	// requestTimeout).
-	ctx, cancel, disarmTimeout := requestTimeout(r.Context(), model.Timeout)
+	// requestTimeout and disarmIfStream).
+	ctx, cancel, disarmTimeout := armUntilHeaders(r.Context(), model)
 	defer cancel()
 
 	// AWS Bedrock backends use the Converse API (translated from Anthropic
@@ -234,6 +234,7 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := h.client.Do(upReq)
+	// TODO(merge): lb.RecordAttempt(model.Backend, status, err, ctx.Err() != nil)
 	if err != nil {
 		if ctx.Err() != nil {
 			h.failBeforeStream(w, headersAlreadySent, http.StatusGatewayTimeout, "api_error", "upstream request timed out")
@@ -273,7 +274,7 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	reqBytes := int64(len(chatBody))
 	if req.Stream {
-		disarmTimeout() // headers arrived: the stream may run as long as it needs
+		disarmIfStream(resp, disarmTimeout) // a live stream may run as long as it needs
 		h.handleStreaming(w, resp, req, model, chatReq, reqBytes, keyName, keyHash, startTime, headersAlreadySent)
 	} else {
 		h.handleNonStreaming(w, resp, req, model, chatReq, reqBytes, keyName, keyHash, startTime)
@@ -330,6 +331,7 @@ func (h *MessagesHandler) handleNativePassthrough(ctx context.Context, disarmTim
 	slog.Info("proxying messages request (native)", "model", req.Model, "key", keyName)
 
 	resp, err := h.client.Do(upReq)
+	// TODO(merge): lb.RecordAttempt(model.Backend, status, err, ctx.Err() != nil)
 	if err != nil {
 		if ctx.Err() != nil {
 			httputil.WriteAnthropicError(w, http.StatusGatewayTimeout, "api_error", "upstream request timed out")
@@ -366,9 +368,7 @@ func (h *MessagesHandler) handleNativePassthrough(ctx context.Context, disarmTim
 	copyRetryHeaders(w, resp.Header)
 	httputil.SetSecurityHeaders(w)
 	w.WriteHeader(resp.StatusCode)
-	if req.Stream || strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
-		disarmTimeout() // headers arrived: a live stream is not wall-clock capped
-	}
+	disarmIfStream(resp, disarmTimeout) // a live stream is not wall-clock capped
 
 	flusher, canFlush := w.(http.Flusher)
 	buf := make([]byte, 4096)

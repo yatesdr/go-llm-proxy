@@ -802,3 +802,37 @@ func TestCompat_CountTokensNativeFallsBackOn404(t *testing.T) {
 		t.Fatalf("expected estimate fallback, got %d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestCompat_HeaderWaitTimeoutBoundsStreamingRequest(t *testing.T) {
+	release := make(chan struct{})
+	h, _ := newCompatHandler(t, config.ModelConfig{Timeout: 1}, false, func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	})
+	defer close(release)
+	start := time.Now()
+	w := postMessages(h, `{"model":"test-model","max_tokens":10,"stream":true,"messages":[{"role":"user","content":"x"}]}`)
+	if w.Code != http.StatusGatewayTimeout {
+		t.Fatalf("expected 504, got %d: %s", w.Code, w.Body.String())
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Fatalf("timeout did not fire promptly: %v", time.Since(start))
+	}
+}
+
+func TestCompat_StreamOutlivesModelTimeout(t *testing.T) {
+	h, _ := newCompatHandler(t, config.ModelConfig{Timeout: 1}, false, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		f := w.(http.Flusher)
+		f.Flush()
+		time.Sleep(1500 * time.Millisecond) // longer than the model timeout
+		fmt.Fprintf(w, "data: %s\n\ndata: %s\n\ndata: [DONE]\n\n", chunk(`{"content":"still here"}`, ""), chunk(`{}`, "stop"))
+	})
+	w := postMessages(h, `{"model":"test-model","max_tokens":10,"stream":true,"messages":[{"role":"user","content":"x"}]}`)
+	if !strings.Contains(w.Body.String(), "still here") || !strings.Contains(w.Body.String(), "message_stop") {
+		t.Fatalf("live stream was cut by the header timeout: %s", w.Body.String())
+	}
+}
