@@ -17,6 +17,11 @@ type contextKey int
 const keyContextKey contextKey = iota
 
 func withKeyContext(ctx context.Context, key *config.KeyConfig) context.Context {
+	// The key name also rides along as the caller label sent to connect
+	// backends (X-Eidonix-For).
+	if key != nil {
+		ctx = httputil.WithCaller(ctx, key.Name)
+	}
 	return context.WithValue(ctx, keyContextKey, key)
 }
 

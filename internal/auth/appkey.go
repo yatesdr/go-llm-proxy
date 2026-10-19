@@ -15,6 +15,9 @@ type appKeyContextKey struct{}
 // so handler tests can set up authenticated requests without going through
 // the middleware.
 func WithAppKeyContext(ctx context.Context, key *config.AppKeyConfig) context.Context {
+	if key != nil {
+		ctx = httputil.WithCaller(ctx, key.Name)
+	}
 	return context.WithValue(ctx, appKeyContextKey{}, key)
 }
 
