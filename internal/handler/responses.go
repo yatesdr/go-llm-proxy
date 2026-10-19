@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -129,15 +128,16 @@ func (h *ResponsesHandler) probeNativeRoute(ctx context.Context, model *config.M
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return true, true
-	}
-	if resp.StatusCode == http.StatusMethodNotAllowed {
+	// Only a response that names POST in Allow proves the route exists:
+	// CORS-enabled servers answer OPTIONS with 2xx on every path, so a bare
+	// 2xx proves nothing.
+	if (resp.StatusCode >= 200 && resp.StatusCode < 300) || resp.StatusCode == http.StatusMethodNotAllowed {
 		for _, method := range strings.Split(resp.Header.Get("Allow"), ",") {
 			if strings.EqualFold(strings.TrimSpace(method), http.MethodPost) {
 				return true, true
 			}
 		}
+		return false, false
 	}
 	if resp.StatusCode == http.StatusNotFound {
 		return false, true
@@ -148,7 +148,7 @@ func (h *ResponsesHandler) probeNativeRoute(ctx context.Context, model *config.M
 // tryNativePassthrough attempts to forward the request directly to the
 // backend's native Responses API endpoint. It returns false only when auto
 // mode has conclusive evidence that translation should be used.
-func (h *ResponsesHandler) tryNativePassthrough(ctx context.Context, w http.ResponseWriter, r *http.Request, body []byte, modelName, aliasFrom string, model *config.ModelConfig, path, keyName, keyHash string, startTime time.Time) bool {
+func (h *ResponsesHandler) tryNativePassthrough(ctx context.Context, disarm func(), w http.ResponseWriter, r *http.Request, body []byte, modelName, aliasFrom string, model *config.ModelConfig, path, keyName, keyHash string, startTime time.Time) bool {
 	forceNative := h.shouldForceNative(model)
 	routeSupported := forceNative
 	if !forceNative {
@@ -191,25 +191,52 @@ func (h *ResponsesHandler) tryNativePassthrough(ctx context.Context, w http.Resp
 	if err != nil {
 		// Network error — don't cache (may be transient), let caller try translation.
 		slog.Warn("native responses probe failed", "backend", model.Backend, "error", err)
+		if r.Context().Err() == nil {
+			lb.RecordOutcome(model.Backend, false) // TODO(merge): lb.RecordAttempt
+		}
 		return false
 	}
 
-	// In auto mode, an unprobed 404/405 can still mean the route is absent.
-	// Never interpret a 500 as missing endpoint support: it may be a transient
-	// or request-specific backend failure and must be returned to the client.
+	// In auto mode, an unprobed 404/405 can mean the route is absent. A 404
+	// carrying an OpenAI-style "model not found" error means the route exists
+	// and only the model is wrong: report that instead of translating, and
+	// leave the route cache alone.
 	if !forceNative && !routeSupported && (resp.StatusCode == http.StatusNotFound ||
 		resp.StatusCode == http.StatusMethodNotAllowed) {
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
+		if resp.StatusCode == http.StatusNotFound && looksLikeModelMissing(errBody) {
+			slog.Warn("native responses backend does not know the model",
+				"backend", model.Backend, "model", modelName, "body", cleanUpstreamMessage(string(errBody)))
+			ue := classifyUpstreamError(resp.StatusCode, errBody, resp.Header)
+			ue.Message = "model not found on backend"
+			writeUpstreamError(w, ue)
+			return true
+		}
 		h.storeNativeSupport(model, path, false)
 		slog.Info("backend does not support native Responses API endpoint, falling back to translation",
 			"backend", model.Backend, "path", path, "model", modelName, "status", resp.StatusCode)
 		return false
 	}
 
+	// A native 5xx in auto mode falls back to translation for this request:
+	// an unpatched vLLM fails on Responses features (additional_tools,
+	// namespaces) that Chat Completions translation handles. The native route
+	// is then skipped for a short while instead of being retried on every
+	// request.
+	if !forceNative && resp.StatusCode >= http.StatusInternalServerError {
+		io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		lb.RecordOutcome(model.Backend, false) // TODO(merge): lb.RecordAttempt
+		h.storeNativeSupport(model, path, false)
+		slog.Warn("native responses request failed, falling back to translation",
+			"backend", model.Backend, "path", path, "model", modelName, "status", resp.StatusCode)
+		return false
+	}
+
 	// A non-5xx response establishes route support even when an OPTIONS probe
-	// was inconclusive. A conclusive route probe remains authoritative across
-	// transient upstream failures. Do not promote an ambiguous 5xx to native.
-	if !forceNative && (routeSupported || resp.StatusCode < http.StatusInternalServerError) {
+	// was inconclusive.
+	if !forceNative && resp.StatusCode < http.StatusInternalServerError {
 		_, previouslyKnown := h.loadNativeSupport(model, path)
 		h.storeNativeSupport(model, path, true)
 		if !previouslyKnown {
@@ -221,23 +248,23 @@ func (h *ResponsesHandler) tryNativePassthrough(ctx context.Context, w http.Resp
 
 	slog.Info("proxying native responses request", "model", modelName, "path", path, "key", keyName)
 
-	// For error responses, sanitize before sending to the client.
+	// For error responses, send a cleaned error with the right status/code.
 	if resp.StatusCode >= 400 {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, api.MaxResponseBodySize))
 		slog.Error("upstream returned error (native passthrough)",
 			"model", modelName, "status", resp.StatusCode, "body", string(errBody))
-		httputil.WriteError(w, resp.StatusCode, fmt.Sprintf("backend returned HTTP %d", resp.StatusCode))
-		if h.usage != nil {
-			rec := usage.UsageRecord{
-				Timestamp: startTime, KeyHash: keyHash, KeyName: keyName,
-				Model: modelName, AliasFrom: aliasFrom, Endpoint: "/v1" + path, StatusCode: resp.StatusCode,
-				RequestBytes: int64(len(body)), ResponseBytes: int64(len(errBody)),
-				DurationMS: time.Since(startTime).Milliseconds(),
-			}
-			h.usage.Log(rec)
-		}
+		writeUpstreamError(w, classifyUpstreamError(resp.StatusCode, errBody, resp.Header))
+		logUsage(h.usage, usageLogInput{
+			startTime: startTime, statusCode: resp.StatusCode, keyName: keyName, keyHash: keyHash,
+			model: modelName, aliasFrom: aliasFrom, backend: model.Backend, endpoint: "/v1" + path,
+			requestBytes: int64(len(body)), responseBytes: int64(len(errBody)),
+		})
 		return true
 	}
+
+	// Streaming bodies must outlive the per-model timeout: it guarded the
+	// connect and the wait for headers, which have now succeeded.
+	disarmIfStream(resp, disarm)
 
 	// Forward response headers.
 	for k := range AllowedResponseHeaders {
@@ -270,21 +297,11 @@ func (h *ResponsesHandler) tryNativePassthrough(ctx context.Context, w http.Resp
 	}
 
 	// Log usage (token counts unavailable for passthrough without buffering).
-	if h.usage != nil {
-		rec := usage.UsageRecord{
-			Timestamp:     startTime,
-			KeyHash:       keyHash,
-			KeyName:       keyName,
-			Model:         modelName,
-			AliasFrom:     aliasFrom,
-			Endpoint:      "/v1" + path,
-			StatusCode:    resp.StatusCode,
-			RequestBytes:  int64(len(body)),
-			ResponseBytes: totalBytes,
-			DurationMS:    time.Since(startTime).Milliseconds(),
-		}
-		h.usage.Log(rec)
-	}
+	logUsage(h.usage, usageLogInput{
+		startTime: startTime, statusCode: resp.StatusCode, keyName: keyName, keyHash: keyHash,
+		model: modelName, aliasFrom: aliasFrom, backend: model.Backend, endpoint: "/v1" + path,
+		requestBytes: int64(len(body)), responseBytes: totalBytes,
+	})
 
 	return true
 }
@@ -357,18 +374,17 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	startTime := time.Now()
 
-	// model.Timeout guards connect/headers and non-streaming bodies;
-	// streaming requests disarm it up front — a wall-clock cap on a
-	// live stream severs healthy long generations (see requestTimeout).
-	ctx, cancel, disarmTimeout := requestTimeout(r.Context(), model.Timeout)
+	// model.Timeout guards connect, the wait for response headers and
+	// non-streaming bodies. It stays armed until the upstream has answered
+	// with headers; a streaming exchange then disarms it, because a
+	// wall-clock cap on a live stream severs healthy long generations (see
+	// requestTimeout).
+	ctx, cancel, disarmTimeout := armUntilHeaders(r.Context(), model)
 	defer cancel()
-	if req.Stream {
-		disarmTimeout()
-	}
 
 	// Try native passthrough unless forced to translate.
 	if !h.shouldTranslate(model, "/responses") {
-		if h.tryNativePassthrough(ctx, w, r, body, req.Model, req.aliasFrom, model, "/responses", keyName, keyHash, startTime) {
+		if h.tryNativePassthrough(ctx, disarmTimeout, w, r, body, req.Model, req.aliasFrom, model, "/responses", keyName, keyHash, startTime) {
 			return
 		}
 		// For native mode, don't fall back to translation — the backend must handle it.
@@ -381,14 +397,26 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Translate Responses API -> Chat Completions.
 	slog.Info("proxying responses request (translated)", "model", req.Model, "key", keyName)
 
-	messages, err := translateInput(req.Input, req.Instructions)
+	// Server-side conversation state cannot be honored over Chat Completions.
+	if req.PreviousResponseID != "" {
+		writeUpstreamError(w, upstreamError{Status: http.StatusBadRequest, Type: "invalid_request_error",
+			Code:    "previous_response_id_not_supported",
+			Message: "previous_response_id is not supported for this model; resend the full conversation in input"})
+		return
+	}
+	if req.Store != nil && *req.Store {
+		writeUpstreamError(w, upstreamError{Status: http.StatusBadRequest, Type: "invalid_request_error",
+			Code:    "store_not_supported",
+			Message: "store=true is not supported for this model; set store to false"})
+		return
+	}
+
+	chatReq, err := prepareChatRequest(&req, model)
 	if err != nil {
 		slog.Error("responses input translation failed", "model", req.Model, "error", err)
 		httputil.WriteError(w, http.StatusBadRequest, "request translation failed")
 		return
 	}
-
-	chatReq := buildChatRequest(req, model.Model, messages)
 
 	// Run pipeline pre-send processors (vision, PDF, etc.).
 	// For streaming requests, send SSE keepalives during processing to prevent
@@ -403,25 +431,7 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			if headersAlreadySent {
 				// Headers already flushed at 200 — emit an SSE error event.
-				failedData, _ := json.Marshal(map[string]any{
-					"type": "response.failed",
-					"response": map[string]any{
-						"id":     api.RandomID("resp_"),
-						"object": "response",
-						"model":  req.Model,
-						"status": "failed",
-						"error": map[string]any{
-							"type":    "server_error",
-							"message": "internal processing error",
-						},
-						"output": []any{},
-					},
-					"sequence_number": 0,
-				})
-				fmt.Fprintf(w, "event: response.failed\ndata: %s\n\n", failedData)
-				if f, ok := w.(http.Flusher); ok {
-					f.Flush()
-				}
+				writeFailedEvent(w, req.Model, "server_error", "server_error", "internal processing error")
 			} else {
 				slog.Error("pipeline processing failed", "model", req.Model, "error", err)
 				httputil.WriteError(w, http.StatusInternalServerError, "internal processing error")
@@ -436,6 +446,11 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"model", req.Model, "key", keyName, "error", ctx.Err())
 		return
 	}
+
+	// PDFs the pipeline did not consume go upstream as OpenAI `file` parts.
+	downgradePDFData(chatReq)
+	// Per-model sampling defaults; values the client set are kept.
+	model.ApplySamplingDefaults(chatReq)
 
 	chatBody, err := json.Marshal(chatReq)
 	if err != nil {
@@ -466,57 +481,38 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.client.Do(upReq)
 	if err != nil {
+		ue := upstreamError{Status: http.StatusBadGateway, Type: "server_error",
+			Code: "upstream_unreachable", Message: "upstream request failed"}
 		if ctx.Err() != nil {
-			httputil.WriteError(w, http.StatusGatewayTimeout, "upstream request timed out")
-			return
+			ue = upstreamError{Status: http.StatusGatewayTimeout, Type: "server_error",
+				Code: "upstream_timeout", Message: "upstream request timed out"}
+		}
+		if r.Context().Err() == nil {
+			lb.RecordOutcome(model.Backend, false) // TODO(merge): lb.RecordAttempt
 		}
 		slog.Error("upstream request failed", "error", err, "model", req.Model)
-		httputil.WriteError(w, http.StatusBadGateway, "upstream request failed")
+		respondUpstreamFailure(w, req.Model, headersAlreadySent, ue)
 		return
 	}
 	defer resp.Body.Close()
 
-	// Forward upstream error responses.
+	// Upstream error before any response byte: surface the real status with a
+	// cleaned message and code (context_length_exceeded, rate_limit_exceeded,
+	// ...), as a response.failed event only if a stream is already open.
 	if resp.StatusCode >= 400 {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, api.MaxResponseBodySize))
 		slog.Error("upstream returned error for translated request",
 			"model", req.Model, "status", resp.StatusCode, "body", string(errBody))
-
-		if req.Stream {
-			// Client expects SSE. Wrap the error as a response.failed event
-			// so Codex sees a proper terminal event instead of a raw JSON body
-			// on a connection it expected to be SSE.
-			httputil.SetSecurityHeaders(w)
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.Header().Set("Cache-Control", "no-cache")
-			w.WriteHeader(http.StatusOK)
-			failedData, _ := json.Marshal(map[string]any{
-				"type": "response.failed",
-				"response": map[string]any{
-					"id":         api.RandomID("resp_"),
-					"object":     "response",
-					"created_at": float64(time.Now().Unix()),
-					"model":      req.Model,
-					"status":     "failed",
-					"error": map[string]any{
-						"type":    "upstream_error",
-						"message": fmt.Sprintf("backend returned HTTP %d", resp.StatusCode),
-					},
-					"output": []any{},
-				},
-				"sequence_number": 0,
-			})
-			fmt.Fprintf(w, "event: response.failed\ndata: %s\n\n", failedData)
-			if f, ok := w.(http.Flusher); ok {
-				f.Flush()
-			}
-			return
-		}
-
-		// Sanitized error: never forward raw backend error bodies to the client.
-		httputil.WriteError(w, resp.StatusCode, fmt.Sprintf("backend returned HTTP %d", resp.StatusCode))
+		respondUpstreamFailure(w, req.Model, headersAlreadySent, classifyUpstreamError(resp.StatusCode, errBody, resp.Header))
+		logUsage(h.usage, usageLogInput{
+			startTime: startTime, statusCode: resp.StatusCode, keyName: keyName, keyHash: keyHash,
+			model: req.Model, aliasFrom: req.aliasFrom, backend: model.Backend, endpoint: "/v1/responses",
+			requestBytes: int64(len(chatBody)), responseBytes: int64(len(errBody)),
+		})
 		return
 	}
+
+	disarmIfStream(resp, disarmTimeout)
 
 	reqBytes := int64(len(chatBody))
 	if req.Stream {
@@ -566,63 +562,51 @@ func (h *ResponsesHandler) handleNonStreaming(w http.ResponseWriter, resp *http.
 	var outputText string
 	status := "completed"
 	var incompleteDetails any
+	var respErr any
 
 	if len(chatResp.Choices) > 0 {
 		choice := chatResp.Choices[0]
 		msg := choice.Message
 
-		// Emit reasoning from JSON field (reasoning or reasoning_content).
-		if r := msg.EffectiveReasoning(); r != nil && *r != "" {
+		reasoningText := ""
+		if r := msg.EffectiveReasoning(); r != nil {
+			reasoningText = *r
+		}
+
+		var contentText string
+		if msg.Content != nil && *msg.Content != "" {
+			// Strip <think>...</think> tags from content; route to reasoning.
+			thinkText, rest := stripThinkTags(*msg.Content)
+			contentText = rest
+			if thinkText != "" && reasoningText == "" {
+				reasoningText = thinkText
+			}
+		}
+		if req.jsonMode && len(msg.ToolCalls) == 0 {
+			contentText = cleanStructuredOutput(contentText)
+		}
+
+		if reasoningText != "" {
+			output = append(output, reasoningOutputItem(api.RandomID("rs_"), reasoningText))
+		}
+
+		if contentText != "" {
+			outputText = contentText
 			output = append(output, map[string]any{
-				"id":   api.RandomID("rs_"),
-				"type": "reasoning",
-				"summary": []any{map[string]any{
-					"type": "summary_text",
-					"text": *r,
+				"id":     api.RandomID("msg_"),
+				"type":   "message",
+				"role":   "assistant",
+				"status": "completed",
+				"content": []any{map[string]any{
+					"type":        "output_text",
+					"text":        contentText,
+					"annotations": []any{},
 				}},
 			})
 		}
 
-		if msg.Content != nil && *msg.Content != "" {
-			// Strip <think>...</think> tags from content; route to reasoning.
-			thinkText, contentText := stripThinkTags(*msg.Content)
-
-			if thinkText != "" && msg.EffectiveReasoning() == nil {
-				output = append(output, map[string]any{
-					"id":   api.RandomID("rs_"),
-					"type": "reasoning",
-					"summary": []any{map[string]any{
-						"type": "summary_text",
-						"text": thinkText,
-					}},
-				})
-			}
-
-			if contentText != "" {
-				outputText = contentText
-				output = append(output, map[string]any{
-					"id":     api.RandomID("msg_"),
-					"type":   "message",
-					"role":   "assistant",
-					"status": "completed",
-					"content": []any{map[string]any{
-						"type":        "output_text",
-						"text":        contentText,
-						"annotations": []any{},
-					}},
-				})
-			}
-		}
-
 		for _, tc := range msg.ToolCalls {
-			output = append(output, map[string]any{
-				"id":        api.RandomID("fc_"),
-				"type":      "function_call",
-				"call_id":   tc.ID,
-				"name":      tc.Function.Name,
-				"arguments": tc.Function.Arguments,
-				"status":    "completed",
-			})
+			output = append(output, toolCallOutputItem(req.tools, api.RandomID("fc_"), tc.ID, tc.Function.Name, tc.Function.Arguments, "completed"))
 		}
 
 		switch choice.FinishReason {
@@ -631,19 +615,11 @@ func (h *ResponsesHandler) handleNonStreaming(w http.ResponseWriter, resp *http.
 			incompleteDetails = map[string]any{"reason": "max_output_tokens"}
 		case "content_filter":
 			status = "failed"
+			respErr = map[string]any{"code": "content_filter", "message": "the response was blocked by the backend's content filter"}
 		}
 	}
 
-	var usageObj any
-	if chatResp.Usage != nil {
-		usageObj = map[string]any{
-			"input_tokens":          chatResp.Usage.PromptTokens,
-			"input_tokens_details":  nil,
-			"output_tokens":         chatResp.Usage.CompletionTokens,
-			"output_tokens_details": nil,
-			"total_tokens":          chatResp.Usage.TotalTokens,
-		}
-	}
+	usageObj := responsesUsage(chatResp.Usage)
 
 	response := map[string]any{
 		"id":                 respID,
@@ -651,7 +627,7 @@ func (h *ResponsesHandler) handleNonStreaming(w http.ResponseWriter, resp *http.
 		"created_at":         createdAt,
 		"model":              chatResp.Model,
 		"status":             status,
-		"error":              nil,
+		"error":              respErr,
 		"incomplete_details": incompleteDetails,
 		"output":             output,
 		"output_text":        outputText,
@@ -673,4 +649,16 @@ func (h *ResponsesHandler) handleNonStreaming(w http.ResponseWriter, resp *http.
 
 func (h *ResponsesHandler) sendChatRequest(ctx context.Context, chatReq map[string]any, model *config.ModelConfig) (*api.ChatResponse, error) {
 	return sendChatCompletionsRequest(ctx, h.client, chatReq, model)
+}
+
+// reasoningOutputItem builds a completed reasoning item carrying the text both
+// as a summary (what clients display) and as reasoning_text content (what
+// clients replay verbatim in later requests).
+func reasoningOutputItem(id, text string) map[string]any {
+	return map[string]any{
+		"id":      id,
+		"type":    "reasoning",
+		"summary": []any{map[string]any{"type": "summary_text", "text": text}},
+		"content": []any{map[string]any{"type": "reasoning_text", "text": text}},
+	}
 }

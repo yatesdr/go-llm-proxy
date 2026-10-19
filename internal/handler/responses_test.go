@@ -130,8 +130,8 @@ func TestTranslateInput_DeveloperRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if msgs[0]["role"] != "developer" {
-		t.Fatalf("expected developer role to be preserved, got %v", msgs[0]["role"])
+	if msgs[0]["role"] != "system" || msgs[0]["content"] != "Be concise" {
+		t.Fatalf("expected leading developer message to become the system message, got %v", msgs[0])
 	}
 }
 
@@ -149,14 +149,14 @@ func TestTranslateInput_LateDeveloperRolePreservesOrderAndPriority(t *testing.T)
 	if len(msgs) != 5 {
 		t.Fatalf("expected 5 messages, got %d: %v", len(msgs), msgs)
 	}
-	wantRoles := []string{"system", "user", "assistant", "developer", "user"}
+	wantRoles := []string{"system", "user", "assistant", "user", "user"}
 	for i, want := range wantRoles {
 		if got := msgs[i]["role"]; got != want {
 			t.Fatalf("message %d: expected role %q, got %v", i, want, got)
 		}
 	}
-	if got := msgs[3]["content"]; got != "Approved command prefix saved: ls" {
-		t.Fatalf("developer content changed: %v", got)
+	if got := msgs[3]["content"]; got != "<developer>\nApproved command prefix saved: ls\n</developer>" {
+		t.Fatalf("later developer message not wrapped: %v", got)
 	}
 }
 
@@ -195,7 +195,7 @@ func TestTranslateTools_FunctionTools(t *testing.T) {
 	tools := []json.RawMessage{
 		json.RawMessage(`{"type":"function","name":"get_weather","description":"Get weather","parameters":{"type":"object","properties":{}},"strict":true}`),
 	}
-	result, _ := translateTools(tools)
+	result := translateTools(tools).Tools
 	if len(result) != 1 {
 		t.Fatalf("expected 1 tool, got %d", len(result))
 	}
@@ -216,7 +216,8 @@ func TestTranslateTools_SkipsNonFunction(t *testing.T) {
 		json.RawMessage(`{"type":"web_search_preview"}`),
 		json.RawMessage(`{"type":"function","name":"fn1"}`),
 	}
-	result, stripped := translateTools(tools)
+	tt := translateTools(tools)
+	result, stripped := tt.Tools, tt.Stripped
 	if len(result) != 1 {
 		t.Fatalf("expected 1 tool (non-function skipped), got %d", len(result))
 	}
@@ -960,7 +961,7 @@ func TestResponsesHandler_NativeModeNoFallback(t *testing.T) {
 	}
 }
 
-func TestResponsesHandler_AutoModeDoesNotTreat500AsUnsupported(t *testing.T) {
+func TestResponsesHandler_AutoModeFallsBackToTranslationOnNative5xx(t *testing.T) {
 	var responseCalls, chatCalls int
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -974,7 +975,8 @@ func TestResponsesHandler_AutoModeDoesNotTreat500AsUnsupported(t *testing.T) {
 			w.WriteHeader(http.StatusInternalServerError)
 		case "/v1/chat/completions":
 			chatCalls++
-			w.WriteHeader(http.StatusOK)
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"id":"c1","model":"test-model","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"translated"}}]}`))
 		}
 	}))
 	defer ts.Close()
@@ -988,12 +990,13 @@ func TestResponsesHandler_AutoModeDoesNotTreat500AsUnsupported(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
-		if w.Code != http.StatusInternalServerError {
-			t.Fatalf("request %d: expected upstream 500, got %d: %s", i+1, w.Code, w.Body.String())
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "translated") {
+			t.Fatalf("request %d: expected translated 200, got %d: %s", i+1, w.Code, w.Body.String())
 		}
 	}
-	if responseCalls != 2 || chatCalls != 0 {
-		t.Fatalf("expected native requests without translation fallback, responses=%d chat=%d", responseCalls, chatCalls)
+	// The failed native attempt is not repeated on every request.
+	if responseCalls != 1 || chatCalls != 2 {
+		t.Fatalf("expected one native attempt then translation, responses=%d chat=%d", responseCalls, chatCalls)
 	}
 }
 
@@ -1479,43 +1482,34 @@ func TestResponsesHandler_StreamingReasoningItems(t *testing.T) {
 	}
 }
 
-func TestResponsesHandler_StreamingErrorEvent(t *testing.T) {
-	// When backend returns an error during streaming, proxy should emit response.failed.
+func TestResponsesHandler_UpstreamRateLimitBeforeStreamingIsHTTP429(t *testing.T) {
 	handler, ts := newTestResponsesHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "7")
 		w.WriteHeader(http.StatusTooManyRequests)
-		w.Write([]byte(`{"error":{"message":"Rate limit exceeded","type":"rate_limit_error"}}`))
+		w.Write([]byte(`{"error":{"message":"Rate limit exceeded at http://10.1.2.3:8000","type":"rate_limit_error"}}`))
 	})
 	defer ts.Close()
 
 	body := `{"model":"test-model","input":"Hello","stream":true}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
-	// The proxy should return 200 with an SSE response.failed event.
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 (SSE error event), got %d", w.Code)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected real HTTP 429 before streaming, got %d", w.Code)
 	}
-	events := parseSSEEvents(w.Body.String())
-	var foundFailed bool
-	for _, e := range events {
-		if e.event == "response.failed" {
-			foundFailed = true
-			var d map[string]any
-			json.Unmarshal([]byte(e.data), &d)
-			resp := d["response"].(map[string]any)
-			if resp["status"] != "failed" {
-				t.Errorf("expected status=failed, got %v", resp["status"])
-			}
-			errObj := resp["error"].(map[string]any)
-			if errObj["type"] != "upstream_error" {
-				t.Errorf("expected error type=upstream_error, got %v", errObj["type"])
-			}
-		}
+	if w.Header().Get("Retry-After") != "7" {
+		t.Errorf("Retry-After not forwarded: %q", w.Header().Get("Retry-After"))
 	}
-	if !foundFailed {
-		t.Error("expected response.failed event for upstream error")
+	var resp struct {
+		Error map[string]any `json:"error"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Error["code"] != "rate_limit_exceeded" {
+		t.Errorf("expected code rate_limit_exceeded, got %v", resp.Error)
+	}
+	if strings.Contains(w.Body.String(), "10.1.2.3") {
+		t.Errorf("upstream address leaked: %s", w.Body.String())
 	}
 }
 
