@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -33,30 +34,42 @@ func ProbeBackendForModel(backendURL, apiKey, backendType, modelForDetection str
 
 	res := ProbeResult{}
 
-	req, err := http.NewRequest(http.MethodHead, backendURL, nil)
-	if err != nil {
-		res.Error = "invalid backend URL: " + err.Error()
-		return res
-	}
-	if apiKey != "" {
-		if backendType == BackendAnthropic {
-			req.Header.Set("X-Api-Key", apiKey)
-		} else {
-			req.Header.Set("Authorization", "Bearer "+apiKey)
+	if httputil.IsConnectURL(backendURL) {
+		// Never HEAD through the hub: ask its catalog instead.
+		ctx, cancel := context.WithTimeout(context.Background(), client.Timeout)
+		up, reason := CheckConnectBackend(ctx, client, backendURL)
+		cancel()
+		if !up {
+			res.Error = reason
+			return res
 		}
+		res.Reachable = true
+	} else {
+		req, err := http.NewRequest(http.MethodHead, backendURL, nil)
+		if err != nil {
+			res.Error = "invalid backend URL: " + err.Error()
+			return res
+		}
+		if apiKey != "" {
+			if backendType == BackendAnthropic {
+				req.Header.Set("X-Api-Key", apiKey)
+			} else {
+				req.Header.Set("Authorization", "Bearer "+apiKey)
+			}
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			res.Error = err.Error()
+			return res
+		}
+		resp.Body.Close()
+		res.Status = resp.StatusCode
+		if resp.StatusCode >= 500 {
+			res.Error = fmt.Sprintf("server error: HTTP %d", resp.StatusCode)
+			return res
+		}
+		res.Reachable = true
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		res.Error = err.Error()
-		return res
-	}
-	resp.Body.Close()
-	res.Status = resp.StatusCode
-	if resp.StatusCode >= 500 {
-		res.Error = fmt.Sprintf("server error: HTTP %d", resp.StatusCode)
-		return res
-	}
-	res.Reachable = true
 
 	if backendType == BackendAnthropic {
 		if ctx, err := detectAnthropic(client, backendURL, modelForDetection, apiKey); err == nil && ctx > 0 {

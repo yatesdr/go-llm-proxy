@@ -12,6 +12,8 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"gopkg.in/yaml.v3"
+
+	"go-llm-proxy/internal/httputil"
 )
 
 type ProcessorsConfig struct {
@@ -101,22 +103,58 @@ type PaddleOCRConfig struct {
 	Timeout        int             `yaml:"timeout,omitempty"`
 }
 
+// ConnectConfig points the proxy at an Eidonix connect hub. Backends written
+// as connect://<site>/<service>/<path> are reached through it. Both fields are
+// optional; the block may be omitted entirely.
+type ConnectConfig struct {
+	URL         string `yaml:"url,omitempty"`         // hub base URL (default http://connect:8080)
+	Application string `yaml:"application,omitempty"` // X-Eidonix-Application label (default go-llm-proxy)
+}
+
 type Config struct {
 	Listen                 string            `yaml:"listen"`
 	Models                 []ModelConfig     `yaml:"models"`
 	Aliases                map[string]string `yaml:"aliases,omitempty"` // client-facing alias -> canonical model name
 	Keys                   []KeyConfig       `yaml:"keys"`
-	Services               ServicesConfig    `yaml:"services"`                 // external service proxies (Qdrant, etc.)
-	Processors             ProcessorsConfig  `yaml:"processors"`               // global processor defaults
-	Audio                  AudioConfig       `yaml:"audio,omitempty"`          // transcription and text-to-speech workloads
-	Documents              DocumentsConfig   `yaml:"documents,omitempty"`      // native document-processing workloads
-	TrustedProxies         []string          `yaml:"trusted_proxies"`          // CIDR or IPs allowed to set X-Real-IP
-	ServeConfigGenerator   bool              `yaml:"serve_config_generator"`   // enable the config generator page at GET /
-	LogMetrics             bool              `yaml:"log_metrics"`              // enable per-request usage logging to SQLite
-	UsageDB                string            `yaml:"usage_db"`                 // path to SQLite usage database (default: usage.db)
-	UsageDashboard         bool              `yaml:"usage_dashboard"`          // enable the usage dashboard at /usage
-	UsageDashboardPassword string            `yaml:"usage_dashboard_password"` // password for the usage dashboard
-	AdminPassword          string            `yaml:"admin_password"`           // password for /admin (falls back to usage_dashboard_password)
+	Services               ServicesConfig    `yaml:"services"`                  // external service proxies (Qdrant, etc.)
+	Processors             ProcessorsConfig  `yaml:"processors"`                // global processor defaults
+	Audio                  AudioConfig       `yaml:"audio,omitempty"`           // transcription and text-to-speech workloads
+	Documents              DocumentsConfig   `yaml:"documents,omitempty"`       // native document-processing workloads
+	TrustedProxies         []string          `yaml:"trusted_proxies"`           // CIDR or IPs allowed to set X-Real-IP
+	ServeConfigGenerator   bool              `yaml:"serve_config_generator"`    // enable the config generator page at GET /
+	LogMetrics             bool              `yaml:"log_metrics"`               // enable per-request usage logging to SQLite
+	UsageDB                string            `yaml:"usage_db"`                  // path to SQLite usage database (default: usage.db)
+	UsageDashboard         bool              `yaml:"usage_dashboard"`           // enable the usage dashboard at /usage
+	UsageDashboardPassword string            `yaml:"usage_dashboard_password"`  // password for the usage dashboard
+	AdminPassword          string            `yaml:"admin_password"`            // password for /admin (falls back to usage_dashboard_password)
+	Connect                *ConnectConfig    `yaml:"connect,omitempty"`         // Eidonix connect hub for connect:// backends
+	HealthInterval         int               `yaml:"health_interval,omitempty"` // seconds between backend health probes (default 30)
+}
+
+// DefaultHealthInterval is the backend probe period when health_interval is unset.
+const DefaultHealthInterval = 30
+
+// EffectiveHealthInterval returns the backend probe period.
+func (c *Config) EffectiveHealthInterval() time.Duration {
+	if c == nil || c.HealthInterval <= 0 {
+		return DefaultHealthInterval * time.Second
+	}
+	return time.Duration(c.HealthInterval) * time.Second
+}
+
+// ConnectSettings returns the hub URL and application label with defaults applied.
+func (c *Config) ConnectSettings() (hubURL, application string) {
+	var url, app string
+	if c != nil && c.Connect != nil {
+		url, app = c.Connect.URL, c.Connect.Application
+	}
+	if url == "" {
+		url = httputil.DefaultConnectURL
+	}
+	if app == "" {
+		app = httputil.DefaultConnectApplication
+	}
+	return strings.TrimRight(url, "/"), app
 }
 
 // EffectiveAdminPassword returns the password guarding /admin: admin_password
@@ -490,6 +528,25 @@ func validateConfig(cfg *Config) error {
 		slog.Warn("no API keys configured — all requests will be unauthenticated")
 	}
 
+	if cfg.HealthInterval < 0 {
+		return fmt.Errorf("health_interval must not be negative")
+	}
+	if c := cfg.Connect; c != nil && c.URL != "" {
+		u, err := url.Parse(c.URL)
+		if err != nil {
+			return fmt.Errorf("connect.url is invalid: %w", err)
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return fmt.Errorf("connect.url must use http or https scheme, got %q", u.Scheme)
+		}
+		if u.Host == "" {
+			return fmt.Errorf("connect.url missing host")
+		}
+		if u.User != nil {
+			return fmt.Errorf("connect.url must not contain credentials")
+		}
+	}
+
 	if cfg.UsageDashboard {
 		if !cfg.LogMetrics {
 			return fmt.Errorf("usage_dashboard requires log_metrics to be enabled")
@@ -748,15 +805,8 @@ func validateConfig(cfg *Config) error {
 		if q.Backend == "" {
 			return fmt.Errorf("services.qdrant missing backend")
 		}
-		u, err := url.Parse(q.Backend)
-		if err != nil {
-			return fmt.Errorf("services.qdrant has invalid backend URL: %w", err)
-		}
-		if u.Scheme != "http" && u.Scheme != "https" {
-			return fmt.Errorf("services.qdrant backend must use http or https scheme, got %q", u.Scheme)
-		}
-		if u.Host == "" {
-			return fmt.Errorf("services.qdrant backend missing host")
+		if err := validateBackendURL("services.qdrant", q.Backend); err != nil {
+			return err
 		}
 
 		appKeys := make(map[string]bool)

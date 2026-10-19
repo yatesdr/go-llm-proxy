@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"net/url"
+
+	"go-llm-proxy/internal/httputil"
 )
 
 // BackendConfig describes one upstream server in a logical model or
@@ -36,14 +38,21 @@ func (cfg *Config) EffectiveBackends(m *ModelConfig) []BackendConfig {
 }
 
 // validateBackendURL enforces the same URL rules as the single-backend field:
-// http(s) scheme, a host, and no embedded credentials.
+// http(s) scheme (or connect://<site>/<service>/<path>), a host, and no
+// embedded credentials.
 func validateBackendURL(label, backendURL string) error {
+	if httputil.IsConnectURL(backendURL) {
+		if _, _, _, err := httputil.ParseConnectURL(backendURL); err != nil {
+			return fmt.Errorf("%s backend: %w", label, err)
+		}
+		return nil
+	}
 	u, err := url.Parse(backendURL)
 	if err != nil {
 		return fmt.Errorf("%s has invalid backend URL: %w", label, err)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("%s backend must use http or https scheme, got %q", label, u.Scheme)
+		return fmt.Errorf("%s backend must use http or https scheme (or connect://site/service), got %q", label, u.Scheme)
 	}
 	if u.Host == "" {
 		return fmt.Errorf("%s backend missing host", label)
@@ -75,4 +84,10 @@ func validateBackendList(label string, backends []BackendConfig) error {
 		}
 	}
 	return nil
+}
+
+// ValidateBackendURL checks a single backend URL the way config loading does:
+// http(s) or connect://<site>/<service>/<path>, with a host and no credentials.
+func ValidateBackendURL(backendURL string) error {
+	return validateBackendURL("backend", backendURL)
 }

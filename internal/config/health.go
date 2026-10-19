@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"sync"
 	"time"
+
+	"go-llm-proxy/internal/httputil"
 )
 
 // ModelHealth represents the health status of a single model backend.
@@ -59,7 +61,16 @@ type backendRef struct {
 	apiKey   string
 	typ      string
 	external bool
+	connect  bool // connect:// backend: health comes from the hub catalog
 	models   []string
+}
+
+func newBackendRef(url, apiKey, typ string) *backendRef {
+	return &backendRef{
+		url: url, apiKey: apiKey, typ: typ,
+		external: isExternalBackend(url),
+		connect:  httputil.IsConnectURL(url),
+	}
 }
 
 // collectBackendRefs builds the set of unique backend URLs across chat, audio,
@@ -69,14 +80,12 @@ func collectBackendRefs(cfg *Config) map[string]*backendRef {
 	for i := range cfg.Models {
 		m := &cfg.Models[i]
 		for _, b := range cfg.EffectiveBackends(m) {
+			if b.Disabled {
+				continue // drained: never probed
+			}
 			ref, ok := refs[b.URL]
 			if !ok {
-				ref = &backendRef{
-					url:      b.URL,
-					apiKey:   b.APIKey,
-					typ:      m.Type,
-					external: isExternalBackend(b.URL),
-				}
+				ref = newBackendRef(b.URL, b.APIKey, m.Type)
 				refs[b.URL] = ref
 			}
 			ref.models = append(ref.models, m.Name)
@@ -84,8 +93,11 @@ func collectBackendRefs(cfg *Config) map[string]*backendRef {
 	}
 	addWorkload := func(backends []BackendConfig) {
 		for _, b := range backends {
+			if b.Disabled {
+				continue
+			}
 			if _, ok := refs[b.URL]; !ok {
-				refs[b.URL] = &backendRef{url: b.URL, apiKey: b.APIKey, external: isExternalBackend(b.URL)}
+				refs[b.URL] = newBackendRef(b.URL, b.APIKey, "")
 			}
 		}
 	}
@@ -132,6 +144,9 @@ func (hs *HealthStore) initFromConfig() {
 // (not localhost or a private IP range). External backends are checked once
 // at startup and then updated based on actual usage, not periodic polling.
 func isExternalBackend(backendURL string) bool {
+	if httputil.IsConnectURL(backendURL) {
+		return false // reached through the hub; polled via its catalog
+	}
 	u, err := url.Parse(backendURL)
 	if err != nil {
 		return false // can't parse, assume local
@@ -174,13 +189,16 @@ func isExternalBackend(backendURL string) bool {
 // are re-evaluated immediately instead of showing a status frozen from the
 // last process start. Probes run asynchronously; the call does not block.
 func (hs *HealthStore) RecheckAll() {
-	client := &http.Client{
-		Timeout: hs.checkTimeout,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-	hs.checkAllInitial(context.Background(), client)
+	hs.checkAllInitial(context.Background(), hs.newClient())
+}
+
+// newClient returns a probe client: the shared transport (so probes reuse
+// connections and follow the same dial rules as traffic) with the probe
+// timeout and no redirect following.
+func (hs *HealthStore) newClient() *http.Client {
+	client := httputil.NewHTTPClient()
+	client.Timeout = hs.checkTimeout
+	return client
 }
 
 // RefreshFromConfig syncs the health map after a config reload.
@@ -270,12 +288,7 @@ func (hs *HealthStore) Start(ctx context.Context) {
 		"interval", hs.checkInterval,
 		"timeout", hs.checkTimeout)
 
-	client := &http.Client{
-		Timeout: hs.checkTimeout,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+	client := hs.newClient()
 
 	hs.wg.Add(1)
 	go hs.runChecker(ctx, client)
@@ -302,6 +315,8 @@ func (hs *HealthStore) runChecker(ctx context.Context, client *http.Client) {
 
 	ticker := time.NewTicker(hs.checkInterval)
 	defer ticker.Stop()
+	connectTicker := time.NewTicker(connectPollInterval)
+	defer connectTicker.Stop()
 
 	// Initial check includes ALL backends (including external).
 	hs.checkAllInitial(ctx, client)
@@ -313,18 +328,25 @@ func (hs *HealthStore) runChecker(ctx context.Context, client *http.Client) {
 		case <-hs.stopCh:
 			return
 		case <-ticker.C:
-			// Periodic checks skip external backends.
 			hs.checkAll(ctx, client)
+		case <-connectTicker.C:
+			hs.checkConnect(ctx, client, collectBackendRefs(hs.config.Get()))
 		}
 	}
 }
 
-// checkAll probes all local (non-external) backend URLs.
-// External backends are only checked once at startup via checkAllInitial.
+// checkAll probes the plain (non-connect) backends on the periodic tick.
+// External backends (public hostnames) are not polled while healthy — real
+// traffic keeps their status current and probing someone else's API on a
+// timer is wasteful — but one that is DOWN is re-probed every tick, so a
+// backend that was unreachable at boot recovers without needing traffic.
+// Connect backends are handled by checkConnect.
 func (hs *HealthStore) checkAll(ctx context.Context, client *http.Client) {
 	for _, ref := range collectBackendRefs(hs.config.Get()) {
-		// Skip external backends - they're updated via RecordUsage instead.
-		if ref.external {
+		if ref.connect {
+			continue
+		}
+		if ref.external && hs.backendKnownOnline(ref.url) {
 			continue
 		}
 		hs.wg.Add(1)
@@ -332,12 +354,64 @@ func (hs *HealthStore) checkAll(ctx context.Context, client *http.Client) {
 	}
 }
 
+// backendKnownOnline reports whether the last probe of url succeeded.
+func (hs *HealthStore) backendKnownOnline(url string) bool {
+	hs.mu.RLock()
+	defer hs.mu.RUnlock()
+	bh, ok := hs.backends[url]
+	return ok && bh.Online
+}
+
 // checkAllInitial probes ALL backend URLs including external ones.
-// Called once at startup to establish initial state.
+// Called at startup and after a config reload to establish state.
 func (hs *HealthStore) checkAllInitial(ctx context.Context, client *http.Client) {
-	for _, ref := range collectBackendRefs(hs.config.Get()) {
+	refs := collectBackendRefs(hs.config.Get())
+	for _, ref := range refs {
+		if ref.connect {
+			continue
+		}
 		hs.wg.Add(1)
 		go hs.checkOne(ctx, client, ref)
+	}
+	hs.checkConnect(ctx, client, refs)
+}
+
+// checkConnect judges every connect:// backend from the hub catalog: one
+// request per site, never a probe through the hub. A backend is up when its
+// site is online and the service is present and healthy; otherwise it is down
+// with the hub's reason (or "connect hub unreachable").
+func (hs *HealthStore) checkConnect(ctx context.Context, client *http.Client, refs map[string]*backendRef) {
+	bySite := make(map[string][]*backendRef)
+	for _, ref := range refs {
+		if !ref.connect {
+			continue
+		}
+		site, _, _, err := httputil.ParseConnectURL(ref.url)
+		if err != nil {
+			hs.updateBackendHealth(ref, false, "invalid backend URL: "+err.Error())
+			continue
+		}
+		bySite[site] = append(bySite[site], ref)
+	}
+	if len(bySite) == 0 {
+		return
+	}
+	hubURL, application := hs.config.Get().ConnectSettings()
+	for site, siteRefs := range bySite {
+		hs.wg.Add(1)
+		go func() {
+			defer hs.wg.Done()
+			cat, err := FetchHubCatalog(ctx, client, hubURL, application, site)
+			for _, ref := range siteRefs {
+				if err != nil {
+					hs.updateBackendHealth(ref, false, err.Error())
+					continue
+				}
+				_, service, _, _ := httputil.ParseConnectURL(ref.url)
+				up, reason := cat.serviceState(site, service)
+				hs.updateBackendHealth(ref, up, reason)
+			}
+		}()
 	}
 }
 
