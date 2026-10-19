@@ -61,6 +61,15 @@ func (h *AdminHandler) ModelsPage(w http.ResponseWriter, r *http.Request) {
   </div>
 </div>
 <div class="btn-row"><button class="btn btn-primary" type="button" onclick="saveHelpers()">Save helpers</button></div>
+<div class="card" style="margin-top:18px">
+  <h2>Claude Code auto mode</h2>
+  <p class="helper-text" style="margin:0 0 10px">Answers the permission classifier of <span class="mono">claude --permission-mode auto</span> from one logprob read on this model instead of a generated reply. The model's backend must support <span class="mono">logprobs</span> and <span class="mono">continue_final_message</span> (vLLM, SGLang). Off by default.</p>
+  <div class="field-grid">
+    <div class="field"><label>Decision model</label><select id="autoModeModel"></select></div>
+    <div class="field"><label title="Actions whose block probability is at or above this are blocked. Default 0.5.">Block probability</label><input id="autoModeThreshold" type="number" min="0.01" max="1" step="0.05" placeholder="0.5"></div>
+  </div>
+  <div class="btn-row" style="margin-top:12px"><button class="btn btn-primary" type="button" onclick="saveAutoMode()">Save auto mode</button></div>
+</div>
 </div>
 <div id="pane-aliasing" style="display:none">
 <div class="card">
@@ -142,6 +151,7 @@ func (h *AdminHandler) ModelsData(w http.ResponseWriter, r *http.Request) {
 			"legacy_audio":    cfg.Processors.Audio, "legacy_ocr": cfg.Processors.OCR,
 			"vision_models":   cfg.Processors.EffectiveVisionModels(),
 			"web_search_keys": searchKeyEntriesJSON(cfg.Processors.EffectiveSearchKeys()),
+			"auto_mode":       autoModeJSON(cfg.AutoMode),
 		},
 	})
 }
@@ -202,6 +212,14 @@ func resolveBackendRows(existing []config.BackendConfig, rows []backendInputDTO)
 	return out
 }
 
+// autoModeJSON describes the auto_mode block for the admin page.
+func autoModeJSON(a *config.AutoModeConfig) map[string]any {
+	if a == nil {
+		return map[string]any{"model": "", "block_probability": 0}
+	}
+	return map[string]any{"model": a.Model, "block_probability": a.BlockProbability}
+}
+
 func (h *AdminHandler) ModelsMutate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Action       string         `json:"action"`
@@ -211,6 +229,9 @@ func (h *AdminHandler) ModelsMutate(w http.ResponseWriter, r *http.Request) {
 		Target       string         `json:"target"`
 		Force        bool           `json:"force"`
 		Model        *modelInputDTO `json:"model"`
+		// auto_mode action: an empty AutoModel switches interception off.
+		AutoModel        string  `json:"auto_model"`
+		BlockProbability float64 `json:"block_probability"`
 	}
 	if err := decodeJSONBody(r, &req, 128*1024); err != nil {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid request body")
@@ -268,6 +289,13 @@ func (h *AdminHandler) ModelsMutate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Info("admin: model alias deleted", "alias", req.Alias)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	case "auto_mode":
+		if err := h.cs.UpdateAutoMode(req.AutoModel, req.BlockProbability); err != nil {
+			writeMutateError(w, err)
+			return
+		}
+		slog.Info("admin: auto mode updated", "model", req.AutoModel, "block_probability", req.BlockProbability)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	default:
 		httputil.WriteError(w, http.StatusBadRequest, "unknown action")
@@ -563,6 +591,22 @@ function renderHelpers(){
   chatState.searchList.forEach(function(e,i){e.keepIndex=i;});
   renderVisionCascade();
   renderSearchCascade();
+  renderAutoMode();
+}
+function renderAutoMode(){
+  var a=chatState.helpers.auto_mode||{model:'',block_probability:0};
+  var sel=document.getElementById('autoModeModel');
+  var opts='<option value="">Off</option>'+chatState.models.filter(function(m){return !m.type||m.type==='openai';}).map(function(m){return '<option value="'+escAttr(m.name)+'">'+esc(m.name)+'</option>';}).join('');
+  if(a.model&&!chatState.models.some(function(m){return m.name===a.model;}))opts+='<option value="'+escAttr(a.model)+'">'+esc(a.model)+'</option>';
+  sel.innerHTML=opts;sel.value=a.model||'';
+  document.getElementById('autoModeThreshold').value=a.block_probability?a.block_probability:'';
+}
+function saveAutoMode(){
+  var t=parseFloat(document.getElementById('autoModeThreshold').value);
+  apiPost('/admin/models/mutate',{action:'auto_mode',auto_model:document.getElementById('autoModeModel').value,block_probability:isNaN(t)?0:t}).then(function(r){
+    if(!r.ok){flash(r.json.error&&r.json.error.message||'Save failed','error');return;}
+    flash('Auto mode saved','success');loadModels();
+  });
 }
 function renderVisionCascade(){
   var el=document.getElementById('visionCascade');

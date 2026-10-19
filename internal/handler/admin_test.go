@@ -617,3 +617,33 @@ func TestOriginMatches(t *testing.T) {
 		t.Error("no origin/referer should not match")
 	}
 }
+
+func TestModelsMutateAutoMode(t *testing.T) {
+	h, cs, _ := newAdminTestHandler(t)
+	post := func(payload map[string]any) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(payload)
+		w := httptest.NewRecorder()
+		h.RequireAPI(h.ModelsMutate).ServeHTTP(w, authedRequest(t, h, http.MethodPost, "/admin/models/mutate", body))
+		return w
+	}
+
+	if w := post(map[string]any{"action": "auto_mode", "auto_model": "model-b", "block_probability": 0.4}); w.Code != http.StatusOK {
+		t.Fatalf("set: %d %s", w.Code, w.Body.String())
+	}
+	if a := cs.Get().AutoMode; a == nil || a.Model != "model-b" || a.Threshold() != 0.4 {
+		t.Fatalf("auto_mode not saved: %+v", a)
+	}
+
+	w := httptest.NewRecorder()
+	h.RequireAPI(h.ModelsData).ServeHTTP(w, authedRequest(t, h, http.MethodGet, "/admin/models/data", nil))
+	if !strings.Contains(w.Body.String(), `"auto_mode":{"block_probability":0.4,"model":"model-b"}`) {
+		t.Fatalf("models data lacks auto_mode: %s", w.Body.String())
+	}
+
+	if w := post(map[string]any{"action": "auto_mode", "auto_model": "nope"}); w.Code == http.StatusOK {
+		t.Fatal("unknown model must be refused")
+	}
+	if w := post(map[string]any{"action": "auto_mode", "auto_model": ""}); w.Code != http.StatusOK || cs.Get().AutoMode != nil {
+		t.Fatalf("clear: %d, auto_mode %+v", w.Code, cs.Get().AutoMode)
+	}
+}
