@@ -279,7 +279,7 @@ func TestResponsesHandler_StreamErrorObjectIsFailed(t *testing.T) {
 	stub := &chatStub{}
 	h, ts := newCodexHandler(t, stub.handler([]string{
 		chunk(`{"content":"hi"}`, ""),
-		`{"error":{"message":"engine died at http://10.0.0.5:8000","code":500}}`,
+		`{"error":{"message":"engine died at http://203.0.113.2:8000","code":500}}`,
 	}, false), nil)
 	defer ts.Close()
 	w := post(h, `{"model":"test-model","input":"hi","stream":true}`)
@@ -287,7 +287,7 @@ func TestResponsesHandler_StreamErrorObjectIsFailed(t *testing.T) {
 	if len(failed) != 1 || hasEvent(w, "response.completed") {
 		t.Fatalf("expected only response.failed:\n%s", w.Body.String())
 	}
-	if strings.Contains(w.Body.String(), "10.0.0.5") {
+	if strings.Contains(w.Body.String(), "203.0.113.2") {
 		t.Fatal("upstream address leaked")
 	}
 }
@@ -703,7 +703,7 @@ func TestResponsesHandler_ContextLengthErrorIsHTTP400BeforeStreaming(t *testing.
 		h, ts := newCodexHandler(t, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(`{"error":{"message":"This model's maximum context length is 131072 tokens. However, you requested 140000 tokens. Contact http://10.9.8.7:8000/help","type":"BadRequestError","code":400}}`))
+			w.Write([]byte(`{"error":{"message":"This model's maximum context length is 131072 tokens. However, you requested 140000 tokens. Contact http://203.0.113.3:8000/help","type":"BadRequestError","code":400}}`))
 		}, nil)
 		w := post(h, fmt.Sprintf(`{"model":"test-model","input":"hi","stream":%v}`, stream))
 		ts.Close()
@@ -718,7 +718,7 @@ func TestResponsesHandler_ContextLengthErrorIsHTTP400BeforeStreaming(t *testing.
 		if r.Error["code"] != "context_length_exceeded" {
 			t.Fatalf("stream=%v: code %v", stream, r.Error)
 		}
-		if !strings.Contains(fmt.Sprint(r.Error["message"]), "131072") || strings.Contains(w.Body.String(), "10.9.8.7") {
+		if !strings.Contains(fmt.Sprint(r.Error["message"]), "131072") || strings.Contains(w.Body.String(), "203.0.113.3") {
 			t.Fatalf("stream=%v: message not cleaned properly: %v", stream, r.Error["message"])
 		}
 	}

@@ -1486,7 +1486,7 @@ func TestResponsesHandler_UpstreamRateLimitBeforeStreamingIsHTTP429(t *testing.T
 	handler, ts := newTestResponsesHandler(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", "7")
 		w.WriteHeader(http.StatusTooManyRequests)
-		w.Write([]byte(`{"error":{"message":"Rate limit exceeded at http://10.1.2.3:8000","type":"rate_limit_error"}}`))
+		w.Write([]byte(`{"error":{"message":"Rate limit exceeded at http://203.0.113.1:8000","type":"rate_limit_error"}}`))
 	})
 	defer ts.Close()
 
@@ -1508,7 +1508,7 @@ func TestResponsesHandler_UpstreamRateLimitBeforeStreamingIsHTTP429(t *testing.T
 	if resp.Error["code"] != "rate_limit_exceeded" {
 		t.Errorf("expected code rate_limit_exceeded, got %v", resp.Error)
 	}
-	if strings.Contains(w.Body.String(), "10.1.2.3") {
+	if strings.Contains(w.Body.String(), "203.0.113.1") {
 		t.Errorf("upstream address leaked: %s", w.Body.String())
 	}
 }

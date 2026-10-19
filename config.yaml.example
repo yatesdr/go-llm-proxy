@@ -27,6 +27,7 @@ models:
     # context_window: 131072         # set manually if auto-detect fails (default: auto)
     # supports_vision: false         # set true if the model handles images natively
     # responses_mode: auto           # auto | native | translate (for Codex CLI)
+    # developer_role: user           # user | system | developer (later developer messages when translating)
     # messages_mode: auto            # auto | native | translate (for Claude Code)
     # defaults:                      # injected when the client doesn't send its own
     #   temperature: 0.7
