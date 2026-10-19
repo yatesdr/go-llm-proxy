@@ -534,6 +534,14 @@ func splitToolResultContent(raw json.RawMessage) (string, []any) {
 			media = append(media, translateImageBlock(b))
 		case "document":
 			media = append(media, translateDocumentParts(b)...)
+		case "tool_reference":
+			// Claude Code's ToolSearch result: the named deferred tool is
+			// loaded from now on (referencedDeferredTools adds it to tools).
+			var name string
+			json.Unmarshal(b["tool_name"], &name)
+			if name != "" {
+				texts = append(texts, "Tool "+name+" is now loaded and can be called.")
+			}
 		case "search_result":
 			var title string
 			json.Unmarshal(b["title"], &title)
@@ -561,17 +569,25 @@ func splitToolResultContent(raw json.RawMessage) (string, []any) {
 // translateAnthropicToolsToChat converts Anthropic tool definitions to Chat
 // Completions format: {name, input_schema} -> {type: "function", function: {name, parameters}}.
 // Server tools (web_search_20250305 etc.) are stripped and returned in the second value.
-func translateAnthropicToolsToChat(tools []json.RawMessage) ([]map[string]any, []string) {
+//
+// Deferred tools (`defer_loading: true`, Claude Code's tool search) are sent
+// only once a tool_reference in the conversation has loaded them, as the
+// Anthropic API does; until then the model knows them only by name.
+func translateAnthropicToolsToChat(tools []json.RawMessage, loaded map[string]bool) ([]map[string]any, []string) {
 	var result []map[string]any
 	var strippedServerTools []string
 	for _, raw := range tools {
 		var tool struct {
-			Name        string          `json:"name"`
-			Type        string          `json:"type"`
-			Description string          `json:"description"`
-			InputSchema json.RawMessage `json:"input_schema"`
+			Name         string          `json:"name"`
+			Type         string          `json:"type"`
+			Description  string          `json:"description"`
+			InputSchema  json.RawMessage `json:"input_schema"`
+			DeferLoading bool            `json:"defer_loading"`
 		}
 		if json.Unmarshal(raw, &tool) != nil {
+			continue
+		}
+		if tool.DeferLoading && !loaded[tool.Name] {
 			continue
 		}
 		// Skip server tools (web_search, code_execution, etc.)
@@ -593,6 +609,42 @@ func translateAnthropicToolsToChat(tools []json.RawMessage) ([]map[string]any, [
 		})
 	}
 	return result, strippedServerTools
+}
+
+// referencedDeferredTools returns the tool names that tool_reference blocks in
+// the conversation's tool results have loaded.
+func referencedDeferredTools(messages []json.RawMessage) map[string]bool {
+	loaded := map[string]bool{}
+	for _, raw := range messages {
+		var m struct {
+			Content json.RawMessage `json:"content"`
+		}
+		var blocks []struct {
+			Type    string          `json:"type"`
+			Content json.RawMessage `json:"content"`
+		}
+		if json.Unmarshal(raw, &m) != nil || json.Unmarshal(m.Content, &blocks) != nil {
+			continue
+		}
+		for _, b := range blocks {
+			if b.Type != "tool_result" {
+				continue
+			}
+			var refs []struct {
+				Type     string `json:"type"`
+				ToolName string `json:"tool_name"`
+			}
+			if json.Unmarshal(b.Content, &refs) != nil {
+				continue
+			}
+			for _, r := range refs {
+				if r.Type == "tool_reference" && r.ToolName != "" {
+					loaded[r.ToolName] = true
+				}
+			}
+		}
+	}
+	return loaded
 }
 
 // translateAnthropicToolChoice converts Anthropic tool_choice to OpenAI format.
@@ -662,7 +714,7 @@ func buildChatRequestFromAnthropic(req messagesRequest, backendModel string) (ma
 
 	// Tools.
 	if len(req.Tools) > 0 {
-		tools, strippedServerTools := translateAnthropicToolsToChat(req.Tools)
+		tools, strippedServerTools := translateAnthropicToolsToChat(req.Tools, referencedDeferredTools(req.Messages))
 		if len(tools) > 0 {
 			chatReq["tools"] = tools
 			if tc := translateAnthropicToolChoice(req.ToolChoice, true); tc != nil {

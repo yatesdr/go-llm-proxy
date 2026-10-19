@@ -440,7 +440,7 @@ func TestTranslateAnthropicTools(t *testing.T) {
 	tools := []json.RawMessage{
 		json.RawMessage(`{"name":"get_weather","description":"Get weather","input_schema":{"type":"object","properties":{"location":{"type":"string"}},"required":["location"]},"cache_control":{"type":"ephemeral"}}`),
 	}
-	result, _ := translateAnthropicToolsToChat(tools)
+	result, _ := translateAnthropicToolsToChat(tools, nil)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 tool, got %d", len(result))
 	}
@@ -461,7 +461,7 @@ func TestTranslateAnthropicTools_SkipsServerTools(t *testing.T) {
 		json.RawMessage(`{"type":"web_search_20250305","name":"web_search"}`),
 		json.RawMessage(`{"name":"get_weather","description":"Get weather","input_schema":{}}`),
 	}
-	result, stripped := translateAnthropicToolsToChat(tools)
+	result, stripped := translateAnthropicToolsToChat(tools, nil)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 tool (server tool stripped), got %d", len(result))
 	}
