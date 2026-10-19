@@ -46,18 +46,17 @@ func (p *ProxyHandler) handleAnthropicChat(
 		return
 	}
 
-	ctx, cancel, disarmTimeout := requestTimeout(r.Context(), model.Timeout)
+	// The timeout stays armed until the headers arrive; only a 2xx event
+	// stream disarms it (see armUntilHeaders).
+	ctx, cancel, disarmTimeout := armUntilHeaders(r.Context(), model)
 	defer cancel()
-	if parsedReq.Stream {
-		disarmTimeout()
-	}
 
 	selected := model
 	resp, err := sendAnthropicMessagesHTTP(ctx, p.client, anthropicBody, selected, r.Header, parsedReq.Stream)
 	if (err != nil && ctx.Err() == nil) || (err == nil && resp.StatusCode >= 500) {
-		lb.RecordOutcome(selected.Backend, false)
 		if alternate, altRelease := lb.ResolveAlternate(cfg, selected, selected.Backend); alternate != nil {
 			defer altRelease()
+			lb.RecordAttempt(selected.Backend, statusOf(resp), err, false)
 			slog.Warn("failing over translated anthropic chat request",
 				"model", modelName, "failed", selected.Backend, "alternate", alternate.Backend, "error", err)
 			if resp != nil {
@@ -68,7 +67,7 @@ func (p *ProxyHandler) handleAnthropicChat(
 		}
 	}
 	if err != nil {
-		lb.RecordOutcome(selected.Backend, false)
+		lb.RecordAttempt(selected.Backend, 0, err, r.Context().Err() != nil)
 		if ctx.Err() != nil {
 			if r.Context().Err() == nil {
 				httputil.WriteError(w, http.StatusGatewayTimeout, "upstream request timed out")
@@ -80,6 +79,7 @@ func (p *ProxyHandler) handleAnthropicChat(
 		return
 	}
 	defer resp.Body.Close()
+	disarmIfStream(resp, disarmTimeout)
 
 	if requestID := resp.Header.Get("Request-Id"); requestID != "" {
 		w.Header().Set("Request-Id", requestID)

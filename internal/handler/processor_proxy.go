@@ -171,12 +171,12 @@ func proxyWorkload(w http.ResponseWriter, r *http.Request, wr workloadRequest) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(wr.Timeout)*time.Second)
 	defer cancel()
-	client := httputil.NewHTTPClientWithResponseHeaderTimeout(time.Duration(wr.Timeout) * time.Second)
+	client := httputil.NewHTTPClient() // the context deadline above bounds the wait
 	resp, err := doWorkloadRequest(ctx, client, r, selected, wr)
 	if (err != nil && ctx.Err() == nil) || (err == nil && resp.StatusCode >= 500) {
-		lb.RecordOutcome(selected.URL, false)
 		if alternate, altRelease := lb.ResolveAlternateBackend(wr.Backends, selected.URL); alternate != nil {
 			defer altRelease()
+			lb.RecordAttempt(selected.URL, statusOf(resp), err, false)
 			if resp != nil {
 				resp.Body.Close()
 			}
@@ -186,7 +186,7 @@ func proxyWorkload(w http.ResponseWriter, r *http.Request, wr workloadRequest) {
 		}
 	}
 	if err != nil {
-		lb.RecordOutcome(selected.URL, false)
+		lb.RecordAttempt(selected.URL, 0, err, r.Context().Err() != nil)
 		if ctx.Err() != nil {
 			httputil.WriteError(w, http.StatusGatewayTimeout, "upstream request timed out")
 		} else {
@@ -195,7 +195,7 @@ func proxyWorkload(w http.ResponseWriter, r *http.Request, wr workloadRequest) {
 		return
 	}
 	defer resp.Body.Close()
-	lb.RecordOutcome(selected.URL, resp.StatusCode < 500)
+	lb.RecordAttempt(selected.URL, resp.StatusCode, nil, false)
 
 	contentType := resp.Header.Get("Content-Type")
 	isAudioResponse := strings.HasPrefix(strings.ToLower(contentType), "audio/")

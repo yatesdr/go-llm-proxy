@@ -234,10 +234,10 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	upstreamURL := strings.TrimRight(model.Backend, "/") + relPath
 
-	// model.Timeout guards the connect/header phase and non-streaming
-	// bodies; it is disarmed below once the response turns out to be a
-	// stream (see requestTimeout).
-	ctx, cancel, disarmTimeout := requestTimeout(r.Context(), model.Timeout)
+	// model.Timeout bounds the wait for response headers and non-streaming
+	// bodies; it is disarmed below once the response turns out to be a 2xx
+	// event stream (see armUntilHeaders).
+	ctx, cancel, disarmTimeout := armUntilHeaders(r.Context(), model)
 	defer cancel()
 
 	upReq, err := http.NewRequestWithContext(ctx, r.Method, upstreamURL, bytes.NewReader(body))
@@ -276,9 +276,11 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// before anything was written to the client — retries once on another
 	// model replica. A cold prefix cache beats a 502.
 	if (err != nil && ctx.Err() == nil) || (err == nil && resp.StatusCode >= 500) {
-		lb.RecordOutcome(model.Backend, false)
 		if alt, altRelease := lb.ResolveAlternate(cfg, model, model.Backend); alt != nil {
 			defer altRelease()
+			// The failed attempt is recorded here; with no alternate the
+			// outcome is recorded once, below / by logUsage.
+			lb.RecordAttempt(model.Backend, statusOf(resp), err, false)
 			slog.Warn("failing over to alternate backend",
 				"model", modelName, "failed", model.Backend, "alternate", alt.Backend, "error", err)
 			if resp != nil {
@@ -302,7 +304,7 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		lb.RecordOutcome(model.Backend, false)
+		lb.RecordAttempt(model.Backend, 0, err, r.Context().Err() != nil)
 		if ctx.Err() != nil {
 			httputil.WriteError(w, http.StatusGatewayTimeout, "upstream request timed out")
 			return
@@ -314,9 +316,7 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 
 	isStreaming := strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream")
-	if isStreaming {
-		disarmTimeout()
-	}
+	disarmIfStream(resp, disarmTimeout)
 
 	copyResponseHeaders(w, resp)
 	httputil.SetSecurityHeaders(w)
