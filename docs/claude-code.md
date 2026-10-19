@@ -18,7 +18,10 @@ The translation handles:
 - Tool calling round-trips (tool_use ↔ tool_calls, tool_result ↔ role:tool)
 - Reasoning tokens → thinking blocks (models like MiniMax emit reasoning that appears as thinking in Claude Code)
 - System prompts, stop sequences, temperature, max tokens
-- Errors wrapped in Anthropic format
+- Errors wrapped in Anthropic format (see [Errors](#errors-and-retries))
+- Documents (PDF, text, content and URL sources), images and documents inside tool results
+- Structured outputs (`output_config.format` json_schema becomes `response_format`) and `output_config.effort` (becomes `reasoning_effort`)
+- Tool turns in the order Chat Completions templates expect (tool messages first, then user text)
 
 ### `messages_mode`
 
@@ -31,6 +34,57 @@ Control the translation behavior per model:
 | `translate` | Force translation to Chat Completions |
 
 Most users don't need to set this — `auto` handles everything correctly.
+
+### Auto mode and side queries
+
+Claude Code's auto-mode permission classifier and its side queries are small, non-streaming requests that expect an answer immediately: `max_tokens: 64`, `thinking: {type: "disabled"}`, `temperature: 1` and `stop_sequences: ["</block>"]`, with the reply starting `<block>yes` or `<block>no`. A reasoning model that thinks first would spend all 64 tokens on reasoning and return nothing, so the proxy lets you say how to switch thinking off for each model with `thinking_off`. It is a raw JSON object merged into the Chat Completions request whenever the client sends `thinking.type: "disabled"`:
+
+```yaml
+models:
+  # GLM and Qwen3-style chat templates
+  - name: glm-5.3
+    backend: http://backend.example:8000/v1
+    thinking_off:
+      chat_template_kwargs:
+        enable_thinking: false
+
+  # DeepSeek-style servers that take a top-level flag
+  - name: deepseek-v4
+    backend: http://backend.example:8000/v1
+    thinking_off:
+      thinking: false
+      chat_template_kwargs:
+        thinking: false
+```
+
+Without `thinking_off` the disabled-thinking hint is simply dropped. A configured `defaults.reasoning_effort` is not applied to a request that disabled thinking when `thinking_off` is set. When thinking is not disabled, `output_config.effort` (`low`, `medium`, `high`, `xhigh`; `max` is sent as `xhigh`) is forwarded as `reasoning_effort`; `thinking.budget_tokens` has no portable equivalent and is ignored.
+
+Other fields Claude Code sends are mapped as follows: `stop_sequences` becomes `stop`; `output_config.format` / `output_format` of type `json_schema` becomes `response_format: {type: "json_schema", json_schema: {name, schema, strict: true}}`; `tool_choice.disable_parallel_tool_use` becomes `parallel_tool_calls: false`; the model's `defaults:` (temperature, top_p, ...) fill in anything the client did not send; and when the model's `context_window` is known, `max_tokens` is lowered so prompt plus completion fit.
+
+### Documents, images and tool results
+
+- A base64 PDF `document` block is converted to text by the pipeline for every model, including vision-capable ones (no Chat Completions backend accepts a raw PDF part). Set `rewrite_documents: off` on a model to skip this; leftover PDFs are then sent as OpenAI `file` parts (`file_data` data URL plus `filename`).
+- `text` documents are inlined (with title and context as a heading), `content` documents have their text/image blocks inlined, and `url` documents are fetched by the proxy through its SSRF-safe client (32 MB limit, no private addresses, no redirects). `citations` and `cache_control` are ignored.
+- Images and documents inside a `tool_result` cannot travel in a `role: tool` message, so they are placed in a user message directly after the tool messages, labelled with the originating tool use id. A tool error (`is_error`) is prefixed with `[tool error]`.
+- Earlier assistant `thinking` blocks are replayed to the backend as `reasoning_content` (and `reasoning`) so reasoning templates keep their chain of thought.
+
+### Errors and retries
+
+Backend failures are returned as Anthropic errors with the status and `error.type` the client acts on:
+
+| Backend status | Client sees |
+|---|---|
+| 400 / 422 | 400 `invalid_request_error` |
+| 401 / 403 | 502 `api_error` (the proxy's credentials failed, not the client's) |
+| 404 | 404 `not_found_error` |
+| 413 | 413 `request_too_large` |
+| 429 | 429 `rate_limit_error` |
+| 500 | 500 `api_error` |
+| 503 / 529 | same status, `overloaded_error` |
+
+The backend's own message is passed through with URLs, addresses and credentials removed. vLLM, SGLang and llama.cpp context-length errors are rewritten to `prompt is too long: N tokens > M maximum` (or ``input length and `max_tokens` exceed context limit: N + MAX > M`` when only the completion overflows), which makes Claude Code compact the conversation or shrink `max_tokens` instead of failing. `Retry-After`, `Retry-After-Ms`, `X-Should-Retry` and `anthropic-ratelimit-*` headers are forwarded. For streaming requests the real HTTP status is returned whenever nothing has been streamed yet.
+
+Once streaming starts the proxy sends `message_start` and a `ping` straight away and a `ping` every 15 seconds while the backend is quiet (long prompt processing). A stream that ends without a `finish_reason`, or with a read error, ends with an `overloaded_error` event rather than a normal `end_turn`, so the client retries instead of accepting a half-written answer or tool call.
 
 ## Configuration file
 
@@ -103,6 +157,16 @@ Save as `claude-proxy.sh`, make executable (`chmod +x`), and run.
 
 ## Model selection
 
+Claude Code appends suffixes such as `[1m]` to model IDs and uses its own names (`claude-haiku-4-5-20251001`). Besides exact `aliases:` entries, the proxy accepts glob patterns and strips a trailing `[...]` suffix before matching:
+
+```yaml
+aliases:
+  claude-haiku-*: qwen-3.5-9b     # any Haiku ID
+  claude-*: glm-5.3               # everything else starting with claude-
+```
+
+Matching order: real model name, exact alias, then (with the `[...]` suffix removed) the same two, then globs. `*` matches any run of characters and `?` one character; with several matching globs the most specific (longest literal text) wins. Glob aliases are not listed by `GET /v1/models`.
+
 Claude Code has three model slots. Each can be mapped to any model in your proxy:
 
 - **Sonnet** — the default model used for most tasks
@@ -113,7 +177,7 @@ All three can point to the same model if you only have one.
 
 ## Thinking / reasoning support
 
-For **translated backends** (non-Anthropic): if the model emits reasoning tokens (like MiniMax-M2.5), the proxy converts them to Anthropic thinking blocks that appear in Claude Code's output. These use placeholder signatures — Claude Code stores them and passes them back, but they never reach a real Anthropic API for validation. On subsequent turns, the proxy strips thinking blocks before sending to the Chat Completions backend.
+For **translated backends** (non-Anthropic): if the model emits reasoning tokens (like MiniMax-M2.5), the proxy converts them to Anthropic thinking blocks that appear in Claude Code's output. These use placeholder signatures — Claude Code stores them and passes them back, but they never reach a real Anthropic API for validation. On subsequent turns, the proxy replays thinking blocks to the Chat Completions backend as `reasoning_content`.
 
 Set `*_SUPPORTED_CAPABILITIES` to `"thinking,interleaved_thinking"` so Claude Code displays the thinking content. Leave empty for models that don't emit reasoning tokens.
 
@@ -183,6 +247,6 @@ models:
 - **Prompt caching**: Stripped silently. All translated requests are uncached.
 - **Server-side web search**: Not available directly, but the proxy can execute web searches via Tavily when `web_search_key` is configured in the `processors` block. Alternatively, use Tavily MCP.
 - **Image support**: Text-only models work with images when a vision processor is configured. Otherwise, the proxy returns a clear error with configuration guidance.
-- **PDF support**: The proxy can extract text from PDFs for text-only backends when a vision processor is configured (vision fallback for scanned PDFs).
+- **PDF support**: The proxy extracts text from PDFs for every translated model (vision fallback for scanned PDFs when a vision processor is configured).
 
 Native Anthropic backends have full fidelity — all features work through passthrough. Use `force_pipeline: true` on an Anthropic model to override and use proxy-side processing instead.

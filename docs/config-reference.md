@@ -71,12 +71,16 @@ remaps ~1/N of active sessions.
 ## Model aliases
 
 Aliases let clients use an alternate model ID while routing to an existing
-configured chat model. They are exact and case-sensitive.
+configured chat model. They are case-sensitive. An alias containing `*` or `?`
+is a glob pattern, tried after exact model and alias names; a trailing
+bracket suffix such as `[1m]` is ignored when matching. With several matching
+patterns the most specific wins.
 
 ```yaml
 aliases:
   codex-reviewer-model: glm-5.3
   fast-review: qwen3.5-9b
+  claude-haiku-*: qwen3.5-9b   # glob: every Haiku ID Claude Code sends
 ```
 
 Every target must match a `models[].name`. Alias IDs cannot duplicate a real
@@ -90,6 +94,12 @@ model from the **Model Aliasing** tab. The capture list is in-memory only;
 configured aliases are saved to YAML and hot-reloaded.
 
 ## Model fields
+
+`thinking_off` (optional, any model) is a raw object merged into the Chat
+Completions request when a Messages client sends `thinking.type: "disabled"`
+(Claude Code's auto-mode classifier does). Example for chat templates that
+read `enable_thinking`: `thinking_off: {chat_template_kwargs: {enable_thinking: false}}`.
+See [claude-code.md](claude-code.md#auto-mode-and-side-queries).
 
 ```yaml
 models:
