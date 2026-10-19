@@ -775,11 +775,21 @@ function claudeEnvVars(apiKey){
     ["ANTHROPIC_DEFAULT_HAIKU_MODEL", haikuId],
     ["ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME", displayName(haikuId)],
     ["ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES", thinkingCaps("haikuThinking")],
-    ["DISABLE_PROMPT_CACHING", "1"],
-    ["CLAUDE_CODE_DISABLE_1M_CONTEXT", "1"],
     ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"],
     ["CLAUDE_CODE_AUTO_MODE_SERVER", "0"],
     ["API_TIMEOUT_MS", "900000"]
+  ].concat(claudeContextVars(sonnetId));
+}
+
+// The main model (the Sonnet slot, Claude Code's default) sets the context:
+// its window, and auto-compaction at 85% of it. Unknown window: Claude Code's
+// own default (200K) applies.
+function claudeContextVars(modelId){
+  var m = getModel(modelId);
+  if(!m || !(m.context_window > 0)) return [];
+  return [
+    ["CLAUDE_CODE_MAX_CONTEXT_TOKENS", String(m.context_window)],
+    ["CLAUDE_CODE_AUTO_COMPACT_WINDOW", String(Math.floor(m.context_window * 0.85))]
   ];
 }
 
