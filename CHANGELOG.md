@@ -6,6 +6,11 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Claude Code auto mode: an optional `auto_mode` block (`model`,
+  `block_probability`) answers the permission classifier requests on
+  `/v1/messages` from the first-token logprobs of a decision model instead of a
+  generated reply, with a fallback to the ordinary translated path. Settable on
+  the admin Model Helpers tab. See docs/claude-code.md.
 - Messages endpoint: per-model `thinking_off` (raw object merged into the Chat
   Completions request when the client disables thinking), `output_config.effort`
   to `reasoning_effort`, `output_config.format` json_schema to `response_format`,
@@ -32,6 +37,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Chat Completions responses keep `choices[].logprobs` (streaming and not)
+  when the proxy re-serializes them to strip reasoning and think tags.
 - Admin model saves no longer drop `rewrite_documents`.
 - Reasoning arriving after text no longer reuses the text block's index;
   repeated tool-call ids no longer open duplicate tool blocks.

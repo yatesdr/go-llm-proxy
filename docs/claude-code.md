@@ -70,6 +70,8 @@ Without `thinking_off` the disabled-thinking hint is simply dropped. A configure
 
 Other fields Claude Code sends are mapped as follows: `stop_sequences` becomes `stop`; `output_config.format` / `output_format` of type `json_schema` becomes `response_format: {type: "json_schema", json_schema: {name, schema, strict: true}}`; `tool_choice.disable_parallel_tool_use` becomes `parallel_tool_calls: false`; the model's `defaults:` (temperature, top_p, ...) fill in anything the client did not send; and when the model's `context_window` is known, `max_tokens` is lowered so prompt plus completion fit.
 
+For a reliable score rather than a short generated reply, enable the decision head described under [Auto mode](#auto-mode).
+
 ### Documents, images and tool results
 
 - A base64 PDF `document` block is converted to text by the pipeline for every model, including vision-capable ones (no Chat Completions backend accepts a raw PDF part). Set `rewrite_documents: off` on a model to skip this; leftover PDFs are then sent as OpenAI `file` parts (`file_data` data URL plus `filename`).
@@ -148,6 +150,52 @@ exec env \
 ```
 
 Save as `claude-proxy.sh`, make executable (`chmod +x`), and run.
+
+## Auto mode
+
+`claude --permission-mode auto` has Claude Code review every action that is not read-only or a working-directory edit (shell commands, network access, subagent spawns) with a classifier. Behind a gateway, Claude Code first asks for server-side review (a `safeguards` field in the request body). The proxy does not return `safeguard_results`, so Claude Code falls back to sending the classifier request itself and shows a one-time notice that holds the first action.
+
+The classifier request is a separate, non-streaming `POST /v1/messages`:
+
+- `model` is `claude-sonnet-5` first (the default classifier model), then the session model if that fails. No alias is needed: when `auto_mode` is configured the proxy answers these requests whatever model name they carry.
+- `system` is a long security-monitor prompt containing the sentence "You are a security monitor for autonomous AI coding agents" and an output-format section; `messages` holds one user message with the transcript and a stage suffix.
+- **Stage 1** carries `stop_sequences: ["</severity>"]` and expects `<severity>N` (N from 0 to 100, 50 is the allow/block boundary). It runs for every reviewed action. **Stage 2** has no stop sequence, runs only after a stage 1 score above 50, and expects `<severity>N</severity>` plus `<category>Rule Name</category>` when blocking.
+- Older builds use `stop_sequences: ["</block>"]` and expect `<block>yes` or `<block>no`.
+
+### How the proxy answers
+
+With an `auto_mode` block configured, a request is treated as a classifier request when its system text contains the sentence above **and** either its `stop_sequences` include `</severity>` or `</block>`, or the system text contains `<severity>N</severity>` or `<block>`. Anything else (ordinary turns, a prompt that only mentions a security monitor) is handled normally. The format is severity unless only the block markers are present; the stage is 1 when `stop_sequences` is non-empty and 2 otherwise.
+
+The proxy then makes one Chat Completions call to the decision model: `max_tokens: 1`, `temperature: 0`, `logprobs: true`, `top_logprobs: 20`, `continue_final_message: true`, `add_generation_prompt: false`, with the system text, the user message and a final assistant message of `<severity>` (or `<block>`). GLM-5.3 tokenises each score 0 to 100 as one token, so the first token's `top_logprobs` is the score distribution. The proxy keeps the alternatives that are integers 0 to 100 (spaces trimmed), normalises them, and computes `p_block` (mass above 50) and the mean `E`. The reply number is `round(E)`, forced to the side `p_block` chooses (at least 51 when `p_block` is at or above `block_probability`, at most 49 otherwise), so it is never exactly 50. The generated text is never read: reasoning parsers may put it in `message.reasoning`.
+
+For a stage 2 block, a second short call (prefill `<severity>N</severity><category>`, `max_tokens: 16`, `stop: ["</category>"]`) fetches the rule name; if it fails the category is left out. In the block format the tokens `yes` and `no` are scored the same way.
+
+The reply is a normal Messages response (`model` is the requested name, usage comes from the upstream calls): `<severity>N` with `stop_reason: "stop_sequence"` for stage 1, `<severity>N</severity>` with `stop_reason: "end_turn"` for stage 2, `<block>yes` / `<block>no` for the older format. `stream: true` gets the same text as a minimal event sequence.
+
+If the decision call fails, returns no logprobs, or the numeric tokens hold less than half the probability mass, the request is not failed: it continues through the ordinary translated path with the model swapped to the decision model, so the reply is still a valid classifier answer. Each decision writes one log line (stage, format, `p_block`, severity, model, latency, fallback reason); prompt text is never logged.
+
+Interception applies to `/v1/messages` only, after authentication and rate limiting. The key must be allowed the `auto_mode.model` (see `keys[].models`); a key that is not gets the normal behaviour for the model it asked for. Usage is recorded under the decision model, with the requested name as `alias_from`. The decision model's backend may be a `connect://` URL. `/anthropic/v1/messages` is not intercepted.
+
+### Configuration
+
+```yaml
+auto_mode:
+  model: GLM-5.3-Flash      # a configured model (or alias); OpenAI-compatible backend
+  block_probability: 0.5    # optional; p_block at or above this blocks
+```
+
+The model's backend must support `logprobs` and `continue_final_message` (vLLM and SGLang do; servers that ignore either field fall back to the generative path on every request). The same setting is on the admin page under Chat, Model Helpers, "Claude Code auto mode".
+
+### Client settings
+
+```bash
+export ANTHROPIC_BASE_URL=http://your-proxy:8080
+export ANTHROPIC_AUTH_TOKEN=your-key
+export CLAUDE_CODE_AUTO_MODE_SERVER=0   # skip the server-side review probe and its one-time notice
+claude --permission-mode auto
+```
+
+Setting `CLAUDE_CODE_AUTO_MODE_SERVER=0` is recommended: Claude Code goes straight to its own classifier requests, which the proxy answers. Three blocks in a row, or twenty in total, pause auto mode and Claude Code prompts again. A reply it cannot parse is treated as a block.
 
 ## Key settings
 

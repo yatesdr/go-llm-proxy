@@ -92,6 +92,16 @@ models:
 # Seconds between backend health probes (default 30; restart to change).
 # health_interval: 30
 
+# ── Claude Code auto mode ──────────────────────────────────────────────────────
+# Optional. When set, the permission classifier requests that Claude Code sends
+# under `claude --permission-mode auto` are answered from one logprob read on
+# `model` instead of a generated reply (docs/claude-code.md, "Auto mode"). The
+# model's backend must be OpenAI-compatible and support `logprobs` and
+# `continue_final_message` (vLLM, SGLang). Without this block nothing changes.
+# auto_mode:
+#   model: my-model            # a configured model or alias
+#   block_probability: 0.5     # optional; blocks when p_block is at or above it
+
 # ── Model aliases ──
 # Exact, case-sensitive alternate IDs for configured chat models. Targets must
 # be model names above; aliases cannot target other aliases.
