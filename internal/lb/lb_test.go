@@ -1,6 +1,8 @@
 package lb
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"go-llm-proxy/internal/config"
@@ -77,5 +79,70 @@ func TestResolveModel_SkipsDrainedBackend(t *testing.T) {
 	}
 	if view.APIKey != "bk" {
 		t.Errorf("expected backend api key, got %q", view.APIKey)
+	}
+}
+
+func TestRecordOutcomeSuccessClearsProbeDown(t *testing.T) {
+	url := "http://probe-recover.test:8000"
+	SetProbeHealth(url, false)
+	if Status(url).ProbeDown != true {
+		t.Fatal("setup: probe-down not set")
+	}
+	RecordOutcome(url, false) // a failure must not clear it
+	if !Status(url).ProbeDown {
+		t.Fatal("failure cleared probe-down")
+	}
+	RecordOutcome(url, true) // real traffic worked: the backend is up
+	if Status(url).ProbeDown {
+		t.Fatal("real-traffic success should clear a stale probe-down verdict")
+	}
+}
+
+func TestProbeDownBackendRecoversViaTraffic(t *testing.T) {
+	backends := mkBackends(2, "boot-down")
+	key := uint64(99)
+	winner := selectBackend(backends, key)
+	other := backends[0]
+	if other.URL == winner.URL {
+		other = backends[1]
+	}
+	SetProbeHealth(winner.URL, false) // down at boot
+	if got := selectBackend(backends, key); got.URL != other.URL {
+		t.Fatalf("probe-down winner should be skipped, got %s", got.URL)
+	}
+	// Only the other is serving; once the winner is answered by traffic
+	// (e.g. a failover attempt or a direct request) it rejoins selection.
+	RecordOutcome(winner.URL, true)
+	if got := selectBackend(backends, key); got.URL != winner.URL {
+		t.Fatalf("recovered backend should rejoin selection, got %s", got.URL)
+	}
+}
+
+func TestRecordAttempt(t *testing.T) {
+	url := "http://record-attempt.test:8000"
+	boom := errors.New("boom")
+	cases := []struct {
+		name       string
+		status     int
+		err        error
+		clientGone bool
+		wantFailed bool
+		wantFails  int
+	}{
+		{"transport error", 0, boom, false, true, 1},
+		{"5xx", 503, nil, false, true, 2},
+		{"auth rejected", 401, nil, false, true, 3},
+		{"client hung up", 0, context.Canceled, true, false, 3},
+		{"429 no signal", 429, nil, false, false, 3},
+		{"400 no signal", 400, nil, false, false, 3},
+		{"2xx closes", 200, nil, false, false, 0},
+	}
+	for _, c := range cases {
+		if got := RecordAttempt(url, c.status, c.err, c.clientGone); got != c.wantFailed {
+			t.Errorf("%s: failed=%v want %v", c.name, got, c.wantFailed)
+		}
+		if got := Status(url).ConsecFails; got != c.wantFails {
+			t.Errorf("%s: consecutive failures=%d want %d", c.name, got, c.wantFails)
+		}
 	}
 }

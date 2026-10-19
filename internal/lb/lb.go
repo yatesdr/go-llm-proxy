@@ -85,6 +85,13 @@ func RecordOutcome(url string, success bool) {
 		if s.consecFails >= breakerThreshold {
 			slog.Info("lb: backend recovered, closing breaker", "backend", url)
 		}
+		if s.probeDown {
+			// A real request succeeded: the periodic probe's "down" verdict is
+			// stale (e.g. the backend was unreachable at boot). Traffic is the
+			// stronger evidence; the next probe re-asserts down if it is wrong.
+			slog.Info("lb: backend answered real traffic, clearing probe-down", "backend", url)
+			s.probeDown = false
+		}
 		s.consecFails = 0
 		return
 	}
@@ -95,6 +102,32 @@ func RecordOutcome(url string, success bool) {
 		}
 		s.openUntil = time.Now().Add(breakerOpenFor)
 	}
+}
+
+// RecordAttempt records the outcome of one upstream attempt for url and
+// reports whether it counted as a backend failure. Handlers call it for every
+// attempt, including ones that never produced a usable response, so breakers
+// open on any protocol path (chat, Messages, Responses, processors).
+//
+//   - err != nil, status >= 500, or 401/402/403 (credentials rejected) is a
+//     failure, unless clientGone;
+//   - 2xx with no error is a success;
+//   - anything else (other 4xx, 429, 3xx) carries no signal either way.
+//
+// clientGone must be true when the caller's own request context was cancelled
+// (the user hung up): that says nothing about the backend. A model timeout the
+// proxy imposed is NOT clientGone — a backend that never answers is a failure.
+func RecordAttempt(url string, status int, err error, clientGone bool) (failed bool) {
+	switch {
+	case clientGone:
+		return false
+	case err != nil, status >= 500, status == 401, status == 402, status == 403:
+		RecordOutcome(url, false)
+		return true
+	case status >= 200 && status < 300:
+		RecordOutcome(url, true)
+	}
+	return false
 }
 
 // SetProbeHealth records a periodic health-probe result for a backend URL.
