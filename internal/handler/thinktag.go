@@ -9,6 +9,7 @@ import "strings"
 type thinkTagFilter struct {
 	inside  bool   // currently inside a <think> block
 	pending string // buffered text that might be part of a tag boundary
+	started bool   // past the start of the content (stray-close check done)
 }
 
 // textSegment represents a piece of text that is either reasoning or content.
@@ -29,6 +30,24 @@ func (f *thinkTagFilter) Process(chunk string) []textSegment {
 	var segments []textSegment
 
 	for len(input) > 0 {
+		// With thinking turned off, some chat templates (GLM) make the model
+		// emit a lone </think> before its answer. Drop it, so an answer that
+		// must start with a verdict (Claude Code's approval classifier) does.
+		if !f.inside && !f.started {
+			t := strings.TrimLeft(input, " \t\r\n")
+			if strings.HasPrefix(t, thinkClose) {
+				input = t[len(thinkClose):]
+				f.started = true
+				continue
+			}
+			if t != "" && len(t) < len(thinkClose) && strings.HasPrefix(thinkClose, t) {
+				f.pending = input // may still become </think>
+				break
+			}
+			if t != "" {
+				f.started = true
+			}
+		}
 		if f.inside {
 			idx := strings.Index(input, thinkClose)
 			if idx >= 0 {
@@ -106,6 +125,10 @@ func longestTagSuffix(s, tag string) int {
 // stripThinkTags removes <think>...</think> blocks from a complete string,
 // returning (reasoning, content). Used for non-streaming responses.
 func stripThinkTags(s string) (reasoning, content string) {
+	// A lone </think> before the answer (see thinkTagFilter.Process).
+	if t := strings.TrimLeft(s, " \t\r\n"); strings.HasPrefix(t, thinkClose) {
+		s = t[len(thinkClose):]
+	}
 	var reasoningBuf, contentBuf strings.Builder
 	for len(s) > 0 {
 		openIdx := strings.Index(s, thinkOpen)

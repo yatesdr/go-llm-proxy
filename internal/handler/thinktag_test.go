@@ -209,3 +209,40 @@ func TestLongestTagSuffix(t *testing.T) {
 		}
 	}
 }
+
+func TestThinkFilterDropsLeadingStrayClose(t *testing.T) {
+	cases := [][]string{
+		{"</think><block>no"},
+		{"</th", "ink>", "<block>no"},
+		{"\n</think>\n", "<block>no"},
+	}
+	for _, chunks := range cases {
+		var f thinkTagFilter
+		var out string
+		for _, c := range chunks {
+			for _, seg := range f.Process(c) {
+				if !seg.IsReasoning {
+					out += seg.Text
+				}
+			}
+		}
+		for _, seg := range f.Flush() {
+			out += seg.Text
+		}
+		if strings.TrimSpace(out) != "<block>no" {
+			t.Errorf("%q: got %q", chunks, out)
+		}
+	}
+	// A </think> later in the answer is left alone.
+	var f thinkTagFilter
+	got := ""
+	for _, seg := range f.Process("answer </think> tail") {
+		got += seg.Text
+	}
+	if got != "answer </think> tail" {
+		t.Errorf("mid-answer close changed: %q", got)
+	}
+	if _, c := stripThinkTags("</think><block>yes"); c != "<block>yes" {
+		t.Errorf("stripThinkTags: %q", c)
+	}
+}
