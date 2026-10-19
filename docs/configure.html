@@ -902,6 +902,7 @@ function claudeEnvVars(apiKey){
     ["DISABLE_PROMPT_CACHING", "1"],
     ["CLAUDE_CODE_DISABLE_1M_CONTEXT", "1"],
     ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"],
+    ["CLAUDE_CODE_AUTO_MODE_SERVER", "0"],
     ["API_TIMEOUT_MS", "900000"]
   ];
 }
@@ -912,6 +913,7 @@ function genClaudeCode(apiKey, tavily){
 
   var settings = {
     attribution: { commit: "", pr: "" },
+    permissions: { defaultMode: "auto" },
     env: env
   };
 
@@ -969,7 +971,7 @@ function genClaudeCodeCommand(apiKey, tavily){
   }
   shLines.push("env \\");
   vars.forEach(function(kv){ shLines.push('  ' + kv[0] + '="' + kv[1] + '" \\'); });
-  shLines.push("  claude --settings '" + settingsJSON + "' \"$@\"");
+  shLines.push("  claude --permission-mode auto --settings '" + settingsJSON + "' \"$@\"");
   var shContent = shLines.join("\n") + "\n";
 
   var batLines = ["@echo off", "setlocal", "REM AI Coding Assistant: Claude Code start script", ""];
@@ -979,7 +981,7 @@ function genClaudeCodeCommand(apiKey, tavily){
     batLines.push('claude mcp remove tavily -s user 2>nul');
     batLines.push('claude mcp add-json tavily "' + tavilyMcpJSON.replace(/"/g, '\\"') + '" -s user');
   }
-  batLines.push("", 'claude --settings "' + settingsJSON.replace(/"/g, '\\"') + '" %*');
+  batLines.push("", 'claude --permission-mode auto --settings "' + settingsJSON.replace(/"/g, '\\"') + '" %*');
   var batContent = batLines.join("\r\n") + "\r\n";
 
   var ps1Lines = ["# AI Coding Assistant: Claude Code start script", ""];
@@ -989,7 +991,7 @@ function genClaudeCodeCommand(apiKey, tavily){
     ps1Lines.push("claude mcp remove tavily -s user 2>$null");
     ps1Lines.push("claude mcp add-json tavily '" + tavilyMcpJSON + "' -s user");
   }
-  ps1Lines.push("", "try {", "  claude --settings '" + settingsJSON + "' @args", "} finally {");
+  ps1Lines.push("", "try {", "  claude --permission-mode auto --settings '" + settingsJSON + "' @args", "} finally {");
   vars.forEach(function(kv){ ps1Lines.push('  Remove-Item Env:' + kv[0] + ' -ErrorAction SilentlyContinue'); });
   ps1Lines.push("}");
   var ps1Content = ps1Lines.join("\r\n") + "\r\n";
@@ -1027,7 +1029,7 @@ function genClaudeCodeCommand(apiKey, tavily){
         'Download <code>claude-start.bat</code> or <code>claude-start.ps1</code> using the buttons above.',
         'Replace <code>&lt;YOUR-API-KEY&gt;</code> placeholders with your actual credentials.',
         'For <strong>.bat</strong>: Double-click the file, or run from Command Prompt:<br><code>claude-start.bat</code>',
-        'For <strong>.ps1</strong>: Run from PowerShell:<br><code>.\\claude-start.ps1</code>',
+        'For <strong>.ps1</strong>: Run from PowerShell:<br><code>powershell -ExecutionPolicy Bypass -File .\\claude-start.ps1</code> (Windows refuses to run downloaded scripts by default; this allows it for this one run)',
         'Optional: move the script to a folder in your PATH for easy access.'
       ])
     }
@@ -1203,7 +1205,7 @@ function genCodexCommand(apiKey, tavily){
       windows: ol([
         'Download <code>codex-start.ps1</code> using the button above.',
         'Replace <code>&lt;YOUR-API-KEY&gt;</code> placeholders with your actual credentials.',
-        'Run from PowerShell:<br><code>.\\codex-start.ps1</code>',
+        'Run from PowerShell:<br><code>powershell -ExecutionPolicy Bypass -File .\\codex-start.ps1</code> (Windows refuses to run downloaded scripts by default; this allows it for this one run)',
         'Optional: move the script to a folder in your PATH.'
       ])
     }

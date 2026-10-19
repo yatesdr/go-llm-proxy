@@ -778,6 +778,7 @@ function claudeEnvVars(apiKey){
     ["DISABLE_PROMPT_CACHING", "1"],
     ["CLAUDE_CODE_DISABLE_1M_CONTEXT", "1"],
     ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"],
+    ["CLAUDE_CODE_AUTO_MODE_SERVER", "0"],
     ["API_TIMEOUT_MS", "900000"]
   ];
 }
@@ -788,6 +789,7 @@ function genClaudeCode(apiKey, tavily){
 
   var settings = {
     attribution: { commit: "", pr: "" },
+    permissions: { defaultMode: "auto" },
     env: env
   };
 
@@ -847,7 +849,7 @@ function genClaudeCodeCommand(apiKey, tavily){
   }
   shLines.push("env \\");
   vars.forEach(function(kv){ shLines.push('  ' + kv[0] + '="' + kv[1] + '" \\'); });
-  shLines.push("  claude --settings '" + settingsJSON + "' \"$@\"");
+  shLines.push("  claude --permission-mode auto --settings '" + settingsJSON + "' \"$@\"");
   var shContent = shLines.join("\n") + "\n";
 
   var batLines = ["@echo off", "setlocal", "REM go-llm-proxy: Claude Code start script", ""];
@@ -857,7 +859,7 @@ function genClaudeCodeCommand(apiKey, tavily){
     batLines.push('claude mcp remove tavily -s user 2>nul');
     batLines.push('claude mcp add-json tavily "' + tavilyMcpJSON.replace(/"/g,'\\"') + '" -s user');
   }
-  batLines.push("", 'claude --settings "' + settingsJSON.replace(/"/g, '\\"') + '" %*');
+  batLines.push("", 'claude --permission-mode auto --settings "' + settingsJSON.replace(/"/g, '\\"') + '" %*');
   var batContent = batLines.join("\r\n") + "\r\n";
 
   var ps1Lines = ["# go-llm-proxy: Claude Code start script", ""];
@@ -889,7 +891,7 @@ function genClaudeCodeCommand(apiKey, tavily){
   ps1Lines.push("", "$settingsFile = [System.IO.Path]::GetTempFileName()");
   ps1Lines.push("'" + settingsJSON + "' | Set-Content -Path $settingsFile -Encoding UTF8");
   ps1Lines.push("try {");
-  ps1Lines.push("  claude --settings $settingsFile @args");
+  ps1Lines.push("  claude --permission-mode auto --settings $settingsFile @args");
   ps1Lines.push("} finally {");
   ps1Lines.push("  Remove-Item $settingsFile -ErrorAction SilentlyContinue");
   vars.forEach(function(kv){ ps1Lines.push('  Remove-Item Env:' + kv[0] + ' -ErrorAction SilentlyContinue'); });
@@ -928,7 +930,7 @@ function genClaudeCodeCommand(apiKey, tavily){
       windows: ol([
         'Download <code>claude-proxy.bat</code> or <code>claude-proxy.ps1</code> using the buttons above.',
         'For <strong>.bat</strong>: Double-click the file, or run from Command Prompt:<br><code>claude-proxy.bat</code>',
-        'For <strong>.ps1</strong>: Run from PowerShell:<br><code>.\\claude-proxy.ps1</code>',
+        'For <strong>.ps1</strong>: Run from PowerShell:<br><code>powershell -ExecutionPolicy Bypass -File .\\claude-proxy.ps1</code> (Windows refuses to run downloaded scripts by default; this allows it for this one run)',
         'Optional: move the script to a folder in your PATH for easy access.'
       ])
     }
@@ -1105,7 +1107,7 @@ function genCodexCommand(apiKey, tavily){
       ]),
       windows: ol([
         'Download <code>codex-proxy.ps1</code> using the button above.',
-        'Run from PowerShell:<br><code>.\\codex-proxy.ps1</code>',
+        'Run from PowerShell:<br><code>powershell -ExecutionPolicy Bypass -File .\\codex-proxy.ps1</code> (Windows refuses to run downloaded scripts by default; this allows it for this one run)',
         'Optional: move the script to a folder in your PATH.'
       ])
     }
