@@ -90,7 +90,23 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	cfg := h.config.Get()
 	requestedModel := req.Model
-	req.Model = config.ResolveModelName(cfg, requestedModel)
+	resolvedModel := config.ResolveModelName(cfg, requestedModel)
+
+	// Claude Code auto mode: classifier requests are answered by the decision
+	// model whatever model name they ask for. On a miss the same request
+	// continues below with the model swapped, so the reply stays a valid
+	// classifier answer.
+	if cfg.AutoMode != nil && !requireAnthropic {
+		handled, fallbackModel := h.serveAutoMode(w, r, cfg, &req, body)
+		if handled {
+			return
+		}
+		if fallbackModel != "" {
+			resolvedModel = fallbackModel
+		}
+	}
+
+	req.Model = resolvedModel
 	if req.Model != requestedModel {
 		req.aliasFrom = requestedModel
 		body = RewriteModelName(body, req.Model)
