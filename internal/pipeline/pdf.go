@@ -712,3 +712,140 @@ func (p *Pipeline) describePDFViaVision(ctx context.Context, model *config.Model
 
 	return desc, nil
 }
+
+// RequestContainsPDFData reports whether a translated Chat Completions request
+// still carries pipeline-internal pdf_data / document_url parts (handlers use this to decide
+// whether to start SSE keepalives before slow PDF processing).
+func RequestContainsPDFData(chatReq map[string]any) bool {
+	found := false
+	forEachContentPart(chatReq, func(part map[string]any) bool {
+		if part["type"] == "pdf_data" || part["type"] == "document_url" {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// ConvertPDFDataToFileParts rewrites any remaining pdf_data parts into the
+// OpenAI Chat Completions "file" content part
+// ({"type":"file","file":{"file_data":"data:application/pdf;base64,...","filename":...}}).
+// No backend accepts the internal pdf_data type; this is the fallback for
+// requests where document rewriting is disabled (rewrite_documents: off) or a
+// processing stage left a part untouched.
+func ConvertPDFDataToFileParts(chatReq map[string]any) {
+	forEachContentPart(chatReq, func(part map[string]any) bool {
+		if part["type"] == "document_url" {
+			u, _ := part["url"].(string)
+			delete(part, "url")
+			delete(part, "filename")
+			part["type"] = "text"
+			part["text"] = "[document at " + u + " was not fetched: document rewriting is disabled]"
+			return true
+		}
+		if part["type"] != "pdf_data" {
+			return true
+		}
+		data, _ := part["data"].(string)
+		filename, _ := part["filename"].(string)
+		if filename == "" {
+			filename = "document.pdf"
+		}
+		delete(part, "data")
+		delete(part, "filename")
+		part["type"] = "file"
+		part["file"] = map[string]any{
+			"file_data": "data:application/pdf;base64," + data,
+			"filename":  filename,
+		}
+		return true
+	})
+}
+
+// forEachContentPart visits every map-shaped content part of every message.
+// fn may mutate the part in place; returning false stops the walk.
+func forEachContentPart(chatReq map[string]any, fn func(part map[string]any) bool) {
+	var messages []any
+	switch m := chatReq["messages"].(type) {
+	case []any:
+		messages = m
+	case []map[string]any:
+		messages = make([]any, len(m))
+		for i, msg := range m {
+			messages[i] = msg
+		}
+	default:
+		return
+	}
+	for _, msg := range messages {
+		msgMap, ok := msg.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch c := msgMap["content"].(type) {
+		case []any:
+			for _, part := range c {
+				if pm, ok := part.(map[string]any); ok && !fn(pm) {
+					return
+				}
+			}
+		case []map[string]any:
+			for _, pm := range c {
+				if !fn(pm) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// resolveDocumentURLs fetches url-sourced documents (document_url parts from
+// Anthropic document blocks) through the SSRF-safe client and rewrites them:
+// PDFs become pdf_data parts for processPDFs, text-like bodies become text, and
+// anything else (or a failed fetch) becomes a short placeholder.
+func resolveDocumentURLs(ctx context.Context, chatReq map[string]any) {
+	forEachContentPart(chatReq, func(part map[string]any) bool {
+		if part["type"] != "document_url" {
+			return true
+		}
+		rawURL, _ := part["url"].(string)
+		filename, _ := part["filename"].(string)
+		delete(part, "url")
+		delete(part, "filename")
+
+		body, contentType, err := fetchDocument(ctx, rawURL)
+		if err != nil {
+			slog.Warn("document url fetch failed", "error", err)
+			part["type"] = "text"
+			part["text"] = "[document could not be fetched: " + err.Error() + "]"
+			return true
+		}
+		switch {
+		case bytes.HasPrefix(body, []byte("%PDF-")) || contentType == "application/pdf":
+			part["type"] = "pdf_data"
+			part["data"] = base64.StdEncoding.EncodeToString(body)
+			if filename != "" {
+				part["filename"] = filename
+			}
+		case strings.HasPrefix(contentType, "text/") || contentType == "application/json":
+			text := string(body)
+			if len(text) > maxPDFTextLength {
+				text = text[:maxPDFTextLength] + "\n\n[document truncated at 100K characters]"
+			}
+			part["type"] = "text"
+			part["text"] = documentTextHeader(filename, rawURL) + text
+		default:
+			part["type"] = "text"
+			part["text"] = "[unsupported document type: " + contentType + "]"
+		}
+		return true
+	})
+}
+
+func documentTextHeader(filename, rawURL string) string {
+	if filename != "" {
+		return "[Document: " + filename + "]\n\n"
+	}
+	return "[Document: " + rawURL + "]\n\n"
+}

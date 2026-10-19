@@ -162,3 +162,65 @@ func preflightURLSafe(u *url.URL) bool {
 	}
 	return true
 }
+
+const (
+	documentFetchMaxSize = 32 * 1024 * 1024 // 32 MB
+	documentFetchTimeout = 30 * time.Second
+)
+
+// documentHTTPClient fetches url-sourced documents. It is the SSRF-safe
+// client; tests substitute a plain client because the safe dialer (rightly)
+// refuses loopback test servers.
+var documentHTTPClient = safeHTTPClient
+
+// fetchDocument downloads an http(s) document through the SSRF-safe client,
+// capped at documentFetchMaxSize. It returns the body and the bare
+// content-type (parameters stripped).
+func fetchDocument(ctx context.Context, rawURL string) ([]byte, string, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, "", fmt.Errorf("parse document url: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return nil, "", fmt.Errorf("unsupported document scheme %q", parsed.Scheme)
+	}
+	if !preflightURLSafe(parsed) {
+		return nil, "", errors.New("document URL targets a blocked host")
+	}
+
+	fetchCtx, cancel := context.WithTimeout(ctx, documentFetchTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("build document request: %w", err)
+	}
+	req.Header.Set("User-Agent", "go-llm-proxy/document-fetch")
+
+	client := documentHTTPClient
+	if client.Timeout < documentFetchTimeout {
+		// The shared client's 15 s cap suits images; documents get longer.
+		c := *client
+		c.Timeout = documentFetchTimeout
+		client = &c
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("fetch document: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("document fetch returned HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, documentFetchMaxSize+1))
+	if err != nil {
+		return nil, "", fmt.Errorf("read document body: %w", err)
+	}
+	if int64(len(body)) > documentFetchMaxSize {
+		return nil, "", fmt.Errorf("document exceeds %d byte limit", documentFetchMaxSize)
+	}
+	contentType := resp.Header.Get("Content-Type")
+	if i := strings.IndexByte(contentType, ';'); i >= 0 {
+		contentType = contentType[:i]
+	}
+	return body, strings.TrimSpace(strings.ToLower(contentType)), nil
+}
