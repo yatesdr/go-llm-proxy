@@ -57,10 +57,22 @@ func FetchHubCatalog(ctx context.Context, client *http.Client, hubURL, applicati
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if site != "" && resp.StatusCode == http.StatusNotFound && resp.Header.Get("X-Eidonix-Error") == "unknown_site" {
+		return &HubCatalog{}, nil // judged "unknown site" per backend
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("connect hub: %s", hubErrorText(resp, body))
 	}
 	var cat HubCatalog
+	if site != "" {
+		// /v1/catalog/<site> answers with the site object itself.
+		var one HubSite
+		if err := json.Unmarshal(body, &one); err != nil {
+			return nil, fmt.Errorf("connect hub: unreadable catalog: %w", err)
+		}
+		cat.Sites = []HubSite{one}
+		return &cat, nil
+	}
 	if err := json.Unmarshal(body, &cat); err != nil {
 		return nil, fmt.Errorf("connect hub: unreadable catalog: %w", err)
 	}

@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -85,6 +86,23 @@ func (f *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Eidonix-Error", "internal")
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(`{"error":{"code":"internal","message":"hub broke"}}`))
+		return
+	}
+	// Like the hub: /v1/catalog/<site> answers with the site object itself,
+	// or 404 unknown_site.
+	if site, ok := strings.CutPrefix(r.URL.Path, "/v1/catalog/"); ok {
+		var cat HubCatalog
+		_ = json.Unmarshal([]byte(body), &cat)
+		for _, s := range cat.Sites {
+			if s.Name == site {
+				one, _ := json.Marshal(s)
+				_, _ = w.Write(one)
+				return
+			}
+		}
+		w.Header().Set("X-Eidonix-Error", "unknown_site")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":{"code":"unknown_site","message":"no such site"}}`))
 		return
 	}
 	_, _ = w.Write([]byte(body))
