@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 )
 
 // ChatCompletionsPath is the backend endpoint for Chat Completions requests.
@@ -32,6 +33,9 @@ type ChunkChoice struct {
 	// StopReason is the vLLM/SGLang extension naming the stop string (a
 	// string) or stop token id (a number) that ended generation.
 	StopReason any `json:"stop_reason,omitempty"`
+	// Logprobs is carried verbatim so chunks the proxy re-serializes (think
+	// filtering, reasoning removal) keep the backend's token probabilities.
+	Logprobs json.RawMessage `json:"logprobs,omitempty"`
 }
 
 type ChunkDelta struct {
@@ -92,6 +96,8 @@ type ChatChoice struct {
 	Message      ChatChoiceMsg `json:"message"`
 	FinishReason string        `json:"finish_reason"`
 	StopReason   any           `json:"stop_reason,omitempty"`
+	// Logprobs is carried verbatim (see ChunkChoice.Logprobs).
+	Logprobs json.RawMessage `json:"logprobs,omitempty"`
 }
 
 type ChatChoiceMsg struct {
