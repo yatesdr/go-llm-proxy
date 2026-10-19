@@ -24,6 +24,15 @@ func TestValidateConfig_Valid(t *testing.T) {
 	}
 }
 
+func TestValidateConfig_BackendSpecificReasoningEffort(t *testing.T) {
+	cfg := validConfig()
+	effort := "xhigh"
+	cfg.Models[0].Defaults = &SamplingDefaults{ReasoningEffort: &effort}
+	if err := validateConfig(cfg); err != nil {
+		t.Fatalf("expected backend-specific reasoning effort to be accepted, got: %v", err)
+	}
+}
+
 func TestValidateConfig_NoKeys(t *testing.T) {
 	cfg := validConfig()
 	cfg.Keys = nil

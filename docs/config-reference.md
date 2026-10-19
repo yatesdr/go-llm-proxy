@@ -149,7 +149,7 @@ models:
 | `max_new_tokens` | int | Maximum tokens to generate (maps to `max_tokens`) |
 | `frequency_penalty` | float | Penalizes repeated tokens by frequency (0.0–2.0) |
 | `presence_penalty` | float | Penalizes tokens that have appeared at all (0.0–2.0) |
-| `reasoning_effort` | string | Thinking budget: `low`, `medium`, or `high` |
+| `reasoning_effort` | string | Backend-specific thinking budget, such as `low`, `medium`, `high`, or `xhigh` |
 | `stop` | list | Strings that trigger end of generation |
 
 ## Chat helpers

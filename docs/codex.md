@@ -17,15 +17,15 @@ For manual setup, see [Manual configuration](#manual-configuration) below.
 
 The proxy auto-detects whether each backend supports the Responses API natively:
 
-1. **First request**: the proxy forwards the Responses API request directly to the backend.
-2. **Backend returns 200**: the response is streamed through transparently. The backend is cached as native.
-3. **Backend returns 404**: the proxy falls back to Chat Completions translation and caches the result. All subsequent requests skip the probe.
+1. **First request**: the proxy checks the endpoint with a body-independent `OPTIONS` probe.
+2. **Route available**: the real Responses request is passed through unchanged.
+3. **Route absent**: the proxy uses Chat Completions translation.
 
 This means:
 - **OpenAI, Azure OpenAI** and other native backends work at full fidelity — encrypted compaction, built-in tools, reasoning tokens, everything passes through untouched.
 - **vLLM, llama-server, Ollama** and other Chat Completions backends get automatic translation — the proxy converts Responses API requests to Chat Completions and translates the streaming response back.
 
-The detection happens once per backend URL and endpoint path (so a backend that supports `/responses` but not `/responses/compact` is handled correctly). Results are cached for the lifetime of the proxy process.
+Detection is cached by backend URL, backend model, and endpoint path, so one bad model name cannot affect another model. Positive results expire after 30 minutes and negative results after 2 minutes, allowing backend upgrades or corrected configuration to take effect without restarting the proxy.
 
 ### `responses_mode`
 
@@ -33,7 +33,7 @@ Control how the proxy handles Responses API requests per model:
 
 | Value | Behavior |
 |---|---|
-| `auto` | Default. Probe backend on first request, cache the result, fall back to translation if 404. |
+| `auto` | Default. Probe the endpoint without a request body and use translation when the route is absent. |
 | `native` | Always passthrough. Never translate. Use for backends you know support `/v1/responses`. |
 | `translate` | Always translate to Chat Completions. Skip the probe entirely. |
 
@@ -79,7 +79,7 @@ Input item type mapping:
 | Responses input item | Chat Completions message |
 |---|---|
 | `{role: "user", content: "..."}` | `{role: "user", content: "..."}` |
-| `{role: "developer", content: "..."}` | `{role: "system", content: "..."}` |
+| `{role: "developer", content: "..."}` | `{role: "developer", content: "..."}` |
 | `{type: "message", role: "assistant", content: [...]}` | `{role: "assistant", content: "..."}` |
 | `{type: "function_call", call_id, name, arguments}` | Merged into assistant message `tool_calls` |
 | `{type: "function_call_output", call_id, output}` | `{role: "tool", tool_call_id, content}` |
@@ -179,7 +179,7 @@ export OPENAI_API_KEY=your-proxy-api-key
 | `base_url` | Your proxy URL including `/v1` |
 | `env_key` | Name of the env var holding the API key |
 | `wire_api = "responses"` | Tells Codex to use the Responses API (required) |
-| `model_reasoning_effort` | `"low"`, `"medium"`, or `"high"` |
+| `model_reasoning_effort` | Backend-specific; commonly `"low"`, `"medium"`, `"high"`, or `"xhigh"` |
 | `web_search` | Set to `"disabled"` for non-OpenAI backends |
 
 ## Context window

@@ -144,13 +144,9 @@ func translateInput(input json.RawMessage, instructions string) ([]map[string]an
 			continue // no Chat Completions equivalent
 
 		case item.Role != "":
-			role := item.Role
-			if role == "developer" {
-				role = "system"
-			}
 			content := translateContentForChat(item.Content, item.Role)
 			messages = append(messages, map[string]any{
-				"role":    role,
+				"role":    item.Role,
 				"content": content,
 			})
 

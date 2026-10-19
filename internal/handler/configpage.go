@@ -355,6 +355,7 @@ select,input[type="text"]{width:100%;font-family:inherit}
         <div class="field">
           <label for="codexEffort">Reasoning Effort</label>
           <select id="codexEffort">
+			<option value="xhigh">Extra High</option>
             <option value="high">High</option>
             <option value="medium" selected>Medium</option>
             <option value="low">Low</option>

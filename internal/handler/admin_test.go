@@ -103,6 +103,9 @@ func TestModelsPageHasDedicatedAliasingTab(t *testing.T) {
 		`>Model Aliasing</button>`,
 		`id="pane-aliasing"`,
 		`?tab=aliasing`,
+		`name="responses_mode"`,
+		`value="native">Native passthrough`,
+		`<option>xhigh</option>`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("models page missing %q", want)
@@ -359,6 +362,10 @@ func TestModelsMutateAddAndUpdate(t *testing.T) {
 			"backend":         "http://localhost:9000/v1",
 			"context_window":  32000,
 			"supports_vision": true,
+			"responses_mode":  "native",
+			"defaults": map[string]any{
+				"reasoning_effort": "xhigh",
+			},
 		},
 	})
 	r := authedRequest(t, h, "POST", "/admin/models/mutate", body)
@@ -367,7 +374,7 @@ func TestModelsMutateAddAndUpdate(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("add: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if m := config.FindModel(cs.Get(), "model-c"); m == nil || !m.SupportsVision {
+	if m := config.FindModel(cs.Get(), "model-c"); m == nil || !m.SupportsVision || m.ResponsesMode != config.ResponsesModeNative || m.Defaults == nil || m.Defaults.ReasoningEffort == nil || *m.Defaults.ReasoningEffort != "xhigh" {
 		t.Fatalf("added model missing or malformed: %+v", m)
 	}
 	// Update: rename + change context window

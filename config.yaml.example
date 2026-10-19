@@ -33,7 +33,7 @@ models:
     #   max_new_tokens: 4096
     #   frequency_penalty: 0.3       # prevents repetition loops (0.0–2.0)
     #   presence_penalty: 0.0        # encourages topic diversity (0.0–2.0)
-    #   reasoning_effort: medium     # thinking budget: low | medium | high
+    #   reasoning_effort: medium     # backend-specific, e.g. low | medium | high | xhigh
 
   # Cloud Anthropic backend (native passthrough — no translation needed)
   # - name: claude-sonnet-4

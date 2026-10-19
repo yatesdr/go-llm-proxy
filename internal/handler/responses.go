@@ -22,11 +22,11 @@ import (
 )
 
 // ResponsesHandler implements the OpenAI Responses API (POST /v1/responses).
-// By default, requests are proxied through to the backend transparently. If
-// the backend does not support the Responses API (returns 404), the handler
-// automatically falls back to translating requests into Chat Completions
-// format. Detection is cached per backend URL and endpoint path, so a backend
-// that supports /responses but not /responses/compact is handled correctly.
+// By default, the handler probes route support without a request body, proxies
+// native endpoints transparently, and otherwise translates requests into Chat
+// Completions format. Detection is cached per backend, model, and endpoint path,
+// so a backend that supports /responses but not /responses/compact is handled
+// correctly without letting one model's error affect another.
 //
 // Backends can control this via responses_mode in config: "auto" (default),
 // "native" (always passthrough), or "translate" (always translate).
@@ -36,11 +36,21 @@ type ResponsesHandler struct {
 	usage    *usage.UsageLogger
 	pipeline *pipeline.Pipeline
 
-	// nativeCache tracks which backend+path combinations support native
-	// Responses API endpoints. Key: "backendURL\x00path", Value: bool.
-	// Populated on first request per combination; never expires (restart to reset).
+	// nativeCache tracks native Responses API support. Positive and negative
+	// results expire so backend upgrades and corrected model configuration do
+	// not require a proxy restart.
 	nativeCache sync.Map
 }
+
+type nativeSupportEntry struct {
+	supported bool
+	expiresAt time.Time
+}
+
+const (
+	nativeSupportTTL     = 30 * time.Minute
+	nativeUnsupportedTTL = 2 * time.Minute
+)
 
 func NewResponsesHandler(cs *config.ConfigStore, usage *usage.UsageLogger, pipeline *pipeline.Pipeline) *ResponsesHandler {
 	return &ResponsesHandler{
@@ -51,7 +61,34 @@ func NewResponsesHandler(cs *config.ConfigStore, usage *usage.UsageLogger, pipel
 	}
 }
 
-func nativeCacheKey(backend, path string) string { return backend + "\x00" + path }
+func nativeCacheKey(model *config.ModelConfig, path string) string {
+	return model.Backend + "\x00" + model.Model + "\x00" + path
+}
+
+func (h *ResponsesHandler) loadNativeSupport(model *config.ModelConfig, path string) (bool, bool) {
+	key := nativeCacheKey(model, path)
+	value, ok := h.nativeCache.Load(key)
+	if !ok {
+		return false, false
+	}
+	entry, ok := value.(nativeSupportEntry)
+	if !ok || time.Now().After(entry.expiresAt) {
+		h.nativeCache.Delete(key)
+		return false, false
+	}
+	return entry.supported, true
+}
+
+func (h *ResponsesHandler) storeNativeSupport(model *config.ModelConfig, path string, supported bool) {
+	ttl := nativeSupportTTL
+	if !supported {
+		ttl = nativeUnsupportedTTL
+	}
+	h.nativeCache.Store(nativeCacheKey(model, path), nativeSupportEntry{
+		supported: supported,
+		expiresAt: time.Now().Add(ttl),
+	})
+}
 
 // shouldTranslate returns true if this backend+path should skip the native
 // probe and always use Chat Completions translation.
@@ -63,8 +100,8 @@ func (h *ResponsesHandler) shouldTranslate(model *config.ModelConfig, path strin
 		return false
 	}
 	// Auto mode: check the cache from previous probes.
-	if cached, ok := h.nativeCache.Load(nativeCacheKey(model.Backend, path)); ok {
-		return !cached.(bool)
+	if supported, ok := h.loadNativeSupport(model, path); ok {
+		return !supported
 	}
 	return false // Unknown — will probe.
 }
@@ -75,12 +112,59 @@ func (h *ResponsesHandler) shouldForceNative(model *config.ModelConfig) bool {
 	return model.ResponsesMode == config.ResponsesModeNative
 }
 
+// probeNativeRoute checks endpoint availability without using a real client
+// request as the capability probe. The bools are (supported, conclusive).
+func (h *ResponsesHandler) probeNativeRoute(ctx context.Context, model *config.ModelConfig, path string) (bool, bool) {
+	upstreamURL := strings.TrimRight(model.Backend, "/") + path
+	req, err := http.NewRequestWithContext(ctx, http.MethodOptions, upstreamURL, nil)
+	if err != nil {
+		return false, false
+	}
+	if model.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+model.APIKey)
+	}
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return false, false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return true, true
+	}
+	if resp.StatusCode == http.StatusMethodNotAllowed {
+		for _, method := range strings.Split(resp.Header.Get("Allow"), ",") {
+			if strings.EqualFold(strings.TrimSpace(method), http.MethodPost) {
+				return true, true
+			}
+		}
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return false, true
+	}
+	return false, false
+}
+
 // tryNativePassthrough attempts to forward the request directly to the
-// backend's native Responses API endpoint. Returns true if the backend
-// handled the request (any status except 404). Returns false if the
-// backend returned 404, meaning it does not support the endpoint —
-// the caller should fall back to translation.
+// backend's native Responses API endpoint. It returns false only when auto
+// mode has conclusive evidence that translation should be used.
 func (h *ResponsesHandler) tryNativePassthrough(ctx context.Context, w http.ResponseWriter, r *http.Request, body []byte, modelName, aliasFrom string, model *config.ModelConfig, path, keyName, keyHash string, startTime time.Time) bool {
+	forceNative := h.shouldForceNative(model)
+	routeSupported := forceNative
+	if !forceNative {
+		if supported, ok := h.loadNativeSupport(model, path); ok {
+			routeSupported = supported
+		} else if supported, conclusive := h.probeNativeRoute(ctx, model, path); conclusive {
+			h.storeNativeSupport(model, path, supported)
+			if !supported {
+				slog.Info("backend does not expose native Responses API endpoint, falling back to translation",
+					"backend", model.Backend, "path", path, "model", modelName)
+				return false
+			}
+			routeSupported = true
+		}
+	}
+
 	if model.Model != modelName {
 		body = RewriteModelName(body, model.Model)
 	}
@@ -110,23 +194,28 @@ func (h *ResponsesHandler) tryNativePassthrough(ctx context.Context, w http.Resp
 		return false
 	}
 
-	// 404, 405, 500 = backend does not support this endpoint.
-	// Some backends (e.g. SGLang) return 500 instead of 404 for unrecognized routes.
-	cacheKey := nativeCacheKey(model.Backend, path)
-	if resp.StatusCode == http.StatusNotFound ||
-		resp.StatusCode == http.StatusMethodNotAllowed ||
-		resp.StatusCode == http.StatusInternalServerError {
+	// In auto mode, an unprobed 404/405 can still mean the route is absent.
+	// Never interpret a 500 as missing endpoint support: it may be a transient
+	// or request-specific backend failure and must be returned to the client.
+	if !forceNative && !routeSupported && (resp.StatusCode == http.StatusNotFound ||
+		resp.StatusCode == http.StatusMethodNotAllowed) {
 		resp.Body.Close()
-		h.nativeCache.Store(cacheKey, false)
+		h.storeNativeSupport(model, path, false)
 		slog.Info("backend does not support native Responses API endpoint, falling back to translation",
 			"backend", model.Backend, "path", path, "model", modelName, "status", resp.StatusCode)
 		return false
 	}
 
-	// Backend handled it — cache as native and stream the response through.
-	if _, loaded := h.nativeCache.LoadOrStore(cacheKey, true); !loaded {
-		slog.Info("backend supports native Responses API endpoint",
-			"backend", model.Backend, "path", path)
+	// A non-5xx response establishes route support even when an OPTIONS probe
+	// was inconclusive. A conclusive route probe remains authoritative across
+	// transient upstream failures. Do not promote an ambiguous 5xx to native.
+	if !forceNative && (routeSupported || resp.StatusCode < http.StatusInternalServerError) {
+		_, previouslyKnown := h.loadNativeSupport(model, path)
+		h.storeNativeSupport(model, path, true)
+		if !previouslyKnown {
+			slog.Info("backend supports native Responses API endpoint",
+				"backend", model.Backend, "path", path)
+		}
 	}
 	defer resp.Body.Close()
 

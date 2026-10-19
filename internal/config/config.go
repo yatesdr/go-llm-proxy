@@ -155,7 +155,7 @@ type SamplingDefaults struct {
 	MaxNewTokens     *int     `yaml:"max_new_tokens"`    // maximum tokens to generate (maps to max_tokens)
 	FrequencyPenalty *float64 `yaml:"frequency_penalty"` // penalizes repeated tokens by frequency (0.0–2.0)
 	PresencePenalty  *float64 `yaml:"presence_penalty"`  // penalizes tokens that have appeared at all (0.0–2.0)
-	ReasoningEffort  *string  `yaml:"reasoning_effort"`  // thinking budget: low, medium, or high
+	ReasoningEffort  *string  `yaml:"reasoning_effort"`  // backend-specific thinking budget (for example low, medium, high, xhigh)
 	Stop             []string `yaml:"stop"`              // strings that trigger end of generation
 }
 
@@ -578,12 +578,8 @@ func validateConfig(cfg *Config) error {
 			return fmt.Errorf("model %q has unknown messages_mode %q (must be %q, %q, or omitted)", m.Name, m.MessagesMode, MessagesModeNative, MessagesModeTranslate)
 		}
 
-		if d := m.Defaults; d != nil && d.ReasoningEffort != nil {
-			switch *d.ReasoningEffort {
-			case "low", "medium", "high":
-			default:
-				return fmt.Errorf("model %q has unknown reasoning_effort %q (must be low, medium, or high)", m.Name, *d.ReasoningEffort)
-			}
+		if d := m.Defaults; d != nil && d.ReasoningEffort != nil && strings.TrimSpace(*d.ReasoningEffort) == "" {
+			return fmt.Errorf("model %q has empty reasoning_effort", m.Name)
 		}
 
 		if names[m.Name] {

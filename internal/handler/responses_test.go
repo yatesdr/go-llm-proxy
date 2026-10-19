@@ -130,8 +130,33 @@ func TestTranslateInput_DeveloperRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if msgs[0]["role"] != "system" {
-		t.Fatalf("expected developer to map to system, got %v", msgs[0]["role"])
+	if msgs[0]["role"] != "developer" {
+		t.Fatalf("expected developer role to be preserved, got %v", msgs[0]["role"])
+	}
+}
+
+func TestTranslateInput_LateDeveloperRolePreservesOrderAndPriority(t *testing.T) {
+	input := json.RawMessage(`[
+		{"role":"user","content":"Run ls"},
+		{"role":"assistant","content":"I need approval."},
+		{"role":"developer","content":"Approved command prefix saved: ls"},
+		{"role":"user","content":"Continue"}
+	]`)
+	msgs, err := translateInput(input, "You are a coding agent.")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 5 {
+		t.Fatalf("expected 5 messages, got %d: %v", len(msgs), msgs)
+	}
+	wantRoles := []string{"system", "user", "assistant", "developer", "user"}
+	for i, want := range wantRoles {
+		if got := msgs[i]["role"]; got != want {
+			t.Fatalf("message %d: expected role %q, got %v", i, want, got)
+		}
+	}
+	if got := msgs[3]["content"]; got != "Approved command prefix saved: ls" {
+		t.Fatalf("developer content changed: %v", got)
 	}
 }
 
@@ -930,8 +955,45 @@ func TestResponsesHandler_NativeModeNoFallback(t *testing.T) {
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadGateway {
-		t.Fatalf("expected 502 for native mode with unsupported backend, got %d", w.Code)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected native upstream 404 to be preserved, got %d", w.Code)
+	}
+}
+
+func TestResponsesHandler_AutoModeDoesNotTreat500AsUnsupported(t *testing.T) {
+	var responseCalls, chatCalls int
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/responses":
+			if r.Method == http.MethodOptions {
+				w.Header().Set("Allow", http.MethodPost)
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			responseCalls++
+			w.WriteHeader(http.StatusInternalServerError)
+		case "/v1/chat/completions":
+			chatCalls++
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer ts.Close()
+
+	cfg := &config.Config{Models: []config.ModelConfig{{
+		Name: "test-model", Backend: ts.URL + "/v1", Model: "test-model", Timeout: 10,
+	}}}
+	handler := NewResponsesHandler(config.NewTestConfigStore(cfg), nil, nil)
+	body := `{"model":"test-model","input":"Hello","stream":false}`
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("request %d: expected upstream 500, got %d: %s", i+1, w.Code, w.Body.String())
+		}
+	}
+	if responseCalls != 2 || chatCalls != 0 {
+		t.Fatalf("expected native requests without translation fallback, responses=%d chat=%d", responseCalls, chatCalls)
 	}
 }
 
