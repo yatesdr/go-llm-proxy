@@ -68,8 +68,10 @@ func modelInfoFromConfig(cfg *config.Config) []modelInfo {
 	out := make([]modelInfo, 0, len(cfg.Models))
 	for _, m := range cfg.Models {
 		u, _ := url.Parse(m.Backend)
-		local := false
-		if u != nil {
+		// A connect:// backend is hardware reached through an Eidonix
+		// connector: our own infrastructure, like a private address.
+		local := httputil.IsConnectURL(m.Backend)
+		if !local && u != nil {
 			host := u.Hostname()
 			if host == "localhost" {
 				local = true
