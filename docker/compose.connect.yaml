@@ -27,6 +27,9 @@ services:
       # Mount the directory, not the file: the admin UI saves config changes
       # via an atomic write+rename, which fails against a single-file bind mount.
       - ./config:/config
+      # Secret files the config names (e.g. enrollment.smtp.password_file:
+      # /run/secrets/go-llm/smtp_password). Keep them out of the config.
+      - ./secrets:/run/secrets/go-llm:ro
       - proxy-data:/data
     networks:
       eidonix-connect: {}

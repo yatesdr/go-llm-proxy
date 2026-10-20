@@ -916,6 +916,9 @@ func modelConfigNode(m ModelConfig) *yaml.Node {
 	if m.SupportsAudio {
 		add("supports_audio", boolNode(true))
 	}
+	if m.CodeLink {
+		add("code_link", boolNode(true))
+	}
 	if m.ForcePipeline {
 		add("force_pipeline", boolNode(true))
 	}

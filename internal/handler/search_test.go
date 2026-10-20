@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"go-llm-proxy/internal/auth"
 	"go-llm-proxy/internal/config"
 	"go-llm-proxy/internal/pipeline"
 )
@@ -80,5 +81,35 @@ func TestCapabilitiesListServicesAndDefaults(t *testing.T) {
 	NewCapabilitiesHandler(config.NewTestConfigStore(&config.Config{}), &fakeSearch{}).ServeHTTP(w, httptest.NewRequest("GET", "/v1/capabilities", nil))
 	if !strings.Contains(w.Body.String(), `"defaults":{}`) || !strings.Contains(w.Body.String(), `"web_search":null`) {
 		t.Fatalf("%s", w.Body)
+	}
+}
+
+func TestCapabilitiesListCodeLinkModelsTheKeyMayUse(t *testing.T) {
+	cs := config.NewTestConfigStore(&config.Config{
+		Models: []config.ModelConfig{{Name: "GLM-5.3-Flash", CodeLink: true}, {Name: "nomic-embed"}, {Name: "deepseek-4.1-flash-1017", CodeLink: true}},
+		Keys: []config.KeyConfig{{Key: "all-models-key-0001", Name: "all"},
+			{Key: "limited-key-000001", Name: "limited", Models: []string{"deepseek-4.1-flash-1017", "nomic-embed"}}}}) // gitleaks:allow
+	h := auth.AuthMiddleware(cs, NewCapabilitiesHandler(cs, &fakeSearch{}))
+	get := func(key string) []any {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/v1/capabilities", nil)
+		r.Header.Set("Authorization", "Bearer "+key)
+		h.ServeHTTP(w, r)
+		var got map[string]any
+		json.Unmarshal(w.Body.Bytes(), &got)
+		m, _ := got["models"].([]any)
+		return m
+	}
+	if m := get("all-models-key-0001"); len(m) != 2 || m[0] != "GLM-5.3-Flash" || m[1] != "deepseek-4.1-flash-1017" {
+		t.Fatalf("all marked: %v", m)
+	}
+	if m := get("limited-key-000001"); len(m) != 1 || m[0] != "deepseek-4.1-flash-1017" {
+		t.Fatalf("key-limited: %v", m)
+	}
+	none := config.NewTestConfigStore(&config.Config{Models: []config.ModelConfig{{Name: "a"}}})
+	w := httptest.NewRecorder()
+	NewCapabilitiesHandler(none, &fakeSearch{}).ServeHTTP(w, httptest.NewRequest("GET", "/v1/capabilities", nil))
+	if !strings.Contains(w.Body.String(), `"models":null`) {
+		t.Fatalf("unmarked: %s", w.Body)
 	}
 }

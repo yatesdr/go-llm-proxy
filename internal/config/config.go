@@ -260,6 +260,7 @@ type ModelConfig struct {
 	ContextWindow    int               `yaml:"context_window"`               // max context tokens (0 = auto-detect from backend)
 	SupportsVision   bool              `yaml:"supports_vision"`              // model handles images natively
 	SupportsAudio    bool              `yaml:"supports_audio"`               // model handles audio (transcription or audio input)
+	CodeLink         bool              `yaml:"code_link,omitempty"`          // offered in code-link's model lists (GET /v1/capabilities)
 	ForcePipeline    bool              `yaml:"force_pipeline,omitempty"`     // deprecated: use RewriteVision/RewriteWebSearch "on" instead; still honored as legacy "force both on"
 	RewriteVision    string            `yaml:"rewrite_vision,omitempty"`     // "" (auto by protocol), "on", or "off" — image_url content only
 	RewriteDocuments string            `yaml:"rewrite_documents,omitempty"`  // "" (auto by protocol), "on", or "off" — pdf_data content only

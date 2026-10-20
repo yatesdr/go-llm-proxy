@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"go-llm-proxy/internal/auth"
 	"go-llm-proxy/internal/config"
 	"go-llm-proxy/internal/httputil"
 	"go-llm-proxy/internal/pipeline"
@@ -94,7 +95,10 @@ func withDomains(q string, include, exclude []string) string {
 // that isn't configured is null.
 //
 //	{"service": "go-llm-proxy", "web_search": "/v1/search", "documents": "/layout-parsing",
-//	 "defaults": {"main": "GLM-5.3-Flash", …}}
+//	 "defaults": {"main": "GLM-5.3-Flash", …}, "models": ["GLM-5.3-Flash", …]}
+//
+// models are those marked code_link that the key may use, in config
+// order; null when no model is marked (the client then decides).
 type CapabilitiesHandler struct {
 	config *config.ConfigStore
 	search Searcher
@@ -117,6 +121,22 @@ func (h *CapabilitiesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	}
 	if cfg.Documents.PaddleOCR != nil {
 		caps["documents"] = "/layout-parsing"
+	}
+	caps["models"] = nil
+	key := auth.KeyFromContext(r.Context())
+	marked := false
+	offered := []string{}
+	for _, m := range cfg.Models {
+		if !m.CodeLink {
+			continue
+		}
+		marked = true
+		if auth.KeyAllowsModel(key, m.Name) {
+			offered = append(offered, m.Name)
+		}
+	}
+	if marked {
+		caps["models"] = offered
 	}
 	json.NewEncoder(w).Encode(caps)
 }
