@@ -162,6 +162,19 @@ type Config struct {
 	Connect                *ConnectConfig    `yaml:"connect,omitempty"`         // Eidonix connect hub for connect:// backends
 	HealthInterval         int               `yaml:"health_interval,omitempty"` // seconds between backend health probes (default 30)
 	AutoMode               *AutoModeConfig   `yaml:"auto_mode,omitempty"`       // Claude Code auto-mode classifier interception
+	ClientDefaults         *ClientDefaults   `yaml:"client_defaults,omitempty"` // recommended models for clients such as code-link
+}
+
+// ClientDefaults are the models a client that sets itself up from this
+// proxy (code-link) should use for each role, by model name. Published at
+// GET /v1/capabilities; empty fields leave the choice to the client.
+type ClientDefaults struct {
+	Main     string `yaml:"main,omitempty" json:"main,omitempty"`         // default model (Claude Code's Sonnet slot)
+	Opus     string `yaml:"opus,omitempty" json:"opus,omitempty"`         // the heavier tier (Opus / Fable)
+	Small    string `yaml:"small,omitempty" json:"small,omitempty"`       // background tasks (Haiku)
+	Decision string `yaml:"decision,omitempty" json:"decision,omitempty"` // auto-mode decisions; needs logprobs
+	Vision   string `yaml:"vision,omitempty" json:"vision,omitempty"`     // describes images for models without vision
+	Codex    string `yaml:"codex,omitempty" json:"codex,omitempty"`       // Codex
 }
 
 // DefaultHealthInterval is the backend probe period when health_interval is unset.
@@ -801,6 +814,17 @@ func validateConfig(cfg *Config) error {
 		}
 		if target.Type != "" && target.Type != BackendOpenAI {
 			return fmt.Errorf("auto_mode.model %q must use an OpenAI-compatible backend (logprobs and continue_final_message), not %q", a.Model, target.Type)
+		}
+	}
+
+	if d := cfg.ClientDefaults; d != nil {
+		for _, f := range []struct{ label, name string }{
+			{"main", d.Main}, {"opus", d.Opus}, {"small", d.Small},
+			{"decision", d.Decision}, {"vision", d.Vision}, {"codex", d.Codex},
+		} {
+			if f.name != "" && FindModel(cfg, ResolveModelName(cfg, f.name)) == nil {
+				return fmt.Errorf("client_defaults.%s references unknown model %q", f.label, f.name)
+			}
 		}
 	}
 

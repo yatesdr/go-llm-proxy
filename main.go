@@ -243,6 +243,8 @@ func main() {
 	mux.Handle("POST /v1/audio/speech", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, audio)))
 	mux.Handle("GET /v1/audio/voices", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, audio)))
 	mux.Handle("POST /layout-parsing", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, documents)))
+	mux.Handle("POST /v1/search", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, handler.NewSearchHandler(pl))))
+	mux.Handle("GET /v1/capabilities", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, handler.NewCapabilitiesHandler(cs, pl))))
 	mux.Handle("/v1/", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, proxy)))
 	mux.Handle("/anthropic/", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, proxy)))
 

@@ -663,6 +663,16 @@ func modelReferrers(cfg *Config, name string) []string {
 	if cfg.AutoMode != nil && cfg.AutoMode.Model == name {
 		refs = append(refs, "auto_mode.model")
 	}
+	if d := cfg.ClientDefaults; d != nil {
+		for _, f := range []struct{ label, name string }{
+			{"main", d.Main}, {"opus", d.Opus}, {"small", d.Small},
+			{"decision", d.Decision}, {"vision", d.Vision}, {"codex", d.Codex},
+		} {
+			if f.name == name {
+				refs = append(refs, "client_defaults."+f.label)
+			}
+		}
+	}
 	if cfg.Processors.Vision == name {
 		refs = append(refs, "processors.vision")
 	}

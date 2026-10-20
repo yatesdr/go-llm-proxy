@@ -148,8 +148,9 @@ func HasSearchToolCall(toolCalls []api.ChatChoiceToolCall) bool {
 
 // SearchHit represents a single search result from Tavily.
 type SearchHit struct {
-	Title string
-	URL   string
+	Title   string
+	URL     string
+	Snippet string // the provider's excerpt of the page
 }
 
 // SearchCallResult holds structured results for a single web_search execution.
@@ -206,6 +207,18 @@ func (p *Pipeline) executeWebSearchCascade(ctx context.Context, entries []config
 		}
 	}
 	return "", nil, lastErr
+}
+
+// SearchGlobal runs the global web-search cascade and returns the hits
+// (used by the /v1/search endpoint).
+func (p *Pipeline) SearchGlobal(ctx context.Context, query string) ([]SearchHit, error) {
+	_, hits, err := p.executeWebSearchCascade(ctx, p.config.Get().Processors.EffectiveSearchKeys(), query)
+	return hits, err
+}
+
+// SearchConfigured reports whether a web-search key is configured.
+func (p *Pipeline) SearchConfigured() bool {
+	return len(p.config.Get().Processors.EffectiveSearchKeys()) > 0
 }
 
 // ExecuteGlobalSearch runs the global web-search cascade (used by the MCP endpoint).
@@ -290,7 +303,7 @@ func (p *Pipeline) executeTavilySearch(ctx context.Context, apiKey, query string
 
 	var hits []SearchHit
 	for _, r := range tavilyResp.Results {
-		hits = append(hits, SearchHit{Title: r.Title, URL: r.URL})
+		hits = append(hits, SearchHit{Title: r.Title, URL: r.URL, Snippet: r.Content})
 	}
 
 	slog.Debug("tavily search completed",
@@ -369,7 +382,7 @@ func (p *Pipeline) executeBraveSearch(ctx context.Context, apiKey, query string)
 
 	var hits []SearchHit
 	for _, r := range braveResp.Web.Results {
-		hits = append(hits, SearchHit{Title: r.Title, URL: r.URL})
+		hits = append(hits, SearchHit{Title: r.Title, URL: r.URL, Snippet: r.Description})
 	}
 
 	slog.Debug("brave search completed",
