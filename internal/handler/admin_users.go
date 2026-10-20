@@ -82,6 +82,13 @@ func (h *AdminHandler) UsersData(w http.ResponseWriter, r *http.Request) {
 			"masked":   config.MaskKey(k.Key),
 			"models":   models,
 		}
+		if k.Email != "" {
+			entry["email"] = k.Email
+			entry["join_key"] = k.JoinKey
+			if jk := cfg.Enrollment.FindJoinKey(k.JoinKey); jk != nil {
+				entry["join_key_name"] = jk.Name
+			}
+		}
 		if a, ok := activity[hash]; ok {
 			entry["last_seen"] = a.LastSeen
 			entry["requests_30d"] = a.Requests
@@ -90,16 +97,7 @@ func (h *AdminHandler) UsersData(w http.ResponseWriter, r *http.Request) {
 		users = append(users, entry)
 	}
 
-	allModels := make([]string, 0, len(cfg.Models))
-	for _, m := range cfg.Models {
-		allModels = append(allModels, m.Name)
-	}
-	if cfg.Audio.Whisper != nil {
-		allModels = append(allModels, cfg.Audio.Whisper.Name)
-	}
-	if cfg.Audio.TTS != nil {
-		allModels = append(allModels, cfg.Audio.TTS.Name)
-	}
+	allModels := keyModelNames(cfg)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"users":      users,
@@ -292,7 +290,7 @@ function renderUserRow(u){
   }
   pills += '<button class="pill-add" onclick="showAddModel(\''+u.key_hash+'\', this)">+ add model…</button>';
   return '<tr data-hash="'+u.key_hash+'">' +
-    '<td class="cell-name"><span class="editable" title="Click to rename" onclick="editName(this, \''+u.key_hash+'\')">'+esc(u.name)+'</span></td>' +
+    '<td class="cell-name"><span class="editable" title="Click to rename" onclick="editName(this, \''+u.key_hash+'\')">'+esc(u.name)+'</span>'+enrolledNote(u)+'</td>' +
     '<td class="cell-key"><code>'+esc(u.masked)+'</code></td>' +
     '<td class="cell-pills"><div class="pills-wrap">'+pills+'</div></td>' +
     activityCells(u) +
@@ -301,6 +299,14 @@ function renderUserRow(u){
       '<button class="btn btn-secondary btn-sm btn-icon" onclick="confirmRotate(\''+u.key_hash+'\')" title="Rotate key — replaces it with a new one; the old key stops working immediately"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M13.5 8A5.5 5.5 0 1 1 11.7 3.9"/><path d="M13.9 1.6v3h-3"/></svg></button>'+
       '<button class="btn btn-danger btn-sm btn-icon" onclick="confirmDelete(\''+u.key_hash+'\')" title="Delete key — revokes access immediately"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2.5 4h11M5.5 4V2.5h5V4M4 4l.7 9.5h6.6L12 4M6.5 6.8v4.4M9.5 6.8v4.4"/></svg></button>'+
     '</div></td></tr>';
+}
+
+// enrolledNote marks a key issued by self-service enrollment.
+function enrolledNote(u){
+  if(!u.email) return "";
+  var via = u.join_key_name ? "via " + u.join_key_name : (u.join_key ? "via " + u.join_key + " (deleted link)" : "self-service");
+  var mail = u.email !== u.name ? esc(u.email) + " · " : "";
+  return '<div class="hint" title="Issued by self-service enrollment">' + mail + esc(via) + '</div>';
 }
 
 // ---- Inline rename ----

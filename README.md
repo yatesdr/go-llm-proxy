@@ -124,6 +124,14 @@ contract and is configured independently from OpenAI/Anthropic chat models.
 | Documents | [PaddleOCR-VL](https://www.paddleocr.ai/main/en/version3.x/pipeline_usage/PaddleOCR-VL.html) | Configure the full layout pipeline, not the element-level recognizer alone. |
 | Web search | [Tavily](https://tavily.com) or [Brave Search](https://brave.com/search/api/) | Tavily free: 1,000 req/month. Brave free: $5/month credit. Auto-detected from key prefix. |
 
+## Self-service API keys
+
+Give each team a join link instead of issuing keys by hand: people enter
+their work email (only the domains you allow), confirm by email, and get
+their own key with steps to set up code-link for Claude Code or Codex. They
+replace a lost key the same way. Configure it on the admin **Enrollment** tab;
+see [Self-service API keys](docs/config-reference.md#self-service-api-keys-enrollment).
+
 ## Documentation
 
 | Topic | Link |

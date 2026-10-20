@@ -6,6 +6,14 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Self-service API keys: an `enrollment` block (public URL, SMTP relay with
+  STARTTLS and an optional password file, code-link download links, join
+  keys limited to email domains and models) and public `/join` pages. A
+  person confirms a work email through a one-time link and is shown their own
+  key once, or replaces the key they have. Every submission gets the same
+  answer; rate limited per IP, address and join key. Managed on the new admin
+  Enrollment tab; enrolled keys show their email and join key on API Keys.
+  See docs/config-reference.md.
 - Claude Code auto mode: an optional `auto_mode` block (`model`,
   `block_probability`) answers the permission classifier requests on
   `/v1/messages` from the first-token logprobs of a decision model instead of a

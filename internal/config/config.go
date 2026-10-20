@@ -163,6 +163,7 @@ type Config struct {
 	HealthInterval         int               `yaml:"health_interval,omitempty"` // seconds between backend health probes (default 30)
 	AutoMode               *AutoModeConfig   `yaml:"auto_mode,omitempty"`       // Claude Code auto-mode classifier interception
 	ClientDefaults         *ClientDefaults   `yaml:"client_defaults,omitempty"` // recommended models for clients such as code-link
+	Enrollment             EnrollmentConfig  `yaml:"enrollment,omitempty"`      // self-service API keys by email (enrollment.go)
 }
 
 // ClientDefaults are the models a client that sets itself up from this
@@ -299,6 +300,11 @@ type KeyConfig struct {
 	Key    string   `yaml:"key"`
 	Name   string   `yaml:"name"`   // friendly name for logging
 	Models []string `yaml:"models"` // allowed models, empty = all
+	// Email and JoinKey are set on keys issued by self-service enrollment:
+	// the owner's lowercase address (one key per address) and the id of the
+	// join key it came through.
+	Email   string `yaml:"email,omitempty"`
+	JoinKey string `yaml:"join_key,omitempty"`
 }
 
 // ServicesConfig contains configuration for external services proxied by the server.
@@ -964,6 +970,10 @@ func validateConfig(cfg *Config) error {
 				return fmt.Errorf("key %q references unknown model %q", k.Name, m)
 			}
 		}
+	}
+
+	if err := validateEnrollment(cfg, names); err != nil {
+		return err
 	}
 
 	// Validate Qdrant service config.

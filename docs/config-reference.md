@@ -17,6 +17,7 @@ go-llm-proxy is configured via a single YAML file (default: `config.yaml`). See 
 | `connect` | — | Optional [Eidonix connect](connect.md) hub: `url` (default `http://connect:8080`) and `application` (default `go-llm-proxy`). Backends written `connect://<site>/<service>/<path>` are reached through it |
 | `health_interval` | `30` | Seconds between backend health probes. Read at startup (restart to change). Disabled backends are never probed; connect backends are judged from the hub catalog every 15 s instead |
 | `auto_mode` | — | Optional [Claude Code auto mode](claude-code.md#auto-mode) decision head: `model` (a configured model or alias with an OpenAI-compatible backend that supports `logprobs` and `continue_final_message`) and `block_probability` (default `0.5`, between 0 and 1). Absent means no interception |
+| `enrollment` | — | Optional [self-service API keys](#self-service-api-keys-enrollment): people get or replace their own key by confirming a work email |
 | `admin_password` | — | Enables the admin UI at `/admin` on its own; when unset, `/admin` uses the dashboard password (and requires the dashboard to be enabled). Falls back to `GO_LLM_ADMIN_PASSWORD` if unset — see below |
 
 ### Environment variable overrides
@@ -309,8 +310,77 @@ keys:
 | `key` | yes | The API key value clients send via `Authorization: Bearer` or `x-api-key` |
 | `name` | yes | Friendly name for logging |
 | `models` | no | Allowed model names. Empty or omitted = all models |
+| `email` | no | Set on keys issued by [enrollment](#self-service-api-keys-enrollment): the owner's lowercase address. One key per address |
+| `join_key` | no | Set on enrolled keys: the id of the join key it came through |
 
 Remove the `keys` section entirely to disable authentication (not recommended for public exposure).
+
+## Self-service API keys (enrollment)
+
+Instead of issuing keys by hand, an administrator can hand out a join link
+per team. Whoever opens it enters a work email in one of the link's domains,
+gets a one-time confirmation link by email (valid 30 minutes, single use), and
+is shown their own API key once, with steps to download code-link, paste the
+key and launch Claude Code or Codex. Someone who already has a key uses the
+same link to replace it: the old key stops working. Keys are written to
+`keys` like any other (name = email) and appear on the admin **API Keys** tab,
+where they can be rotated or revoked as usual.
+
+Set it up on the admin **Enrollment** tab, or in YAML:
+
+```yaml
+enrollment:
+  public_url: https://llm.example.com      # where emailed links point (required)
+  # paused: true                           # stops every join link
+  smtp:
+    host: smtp.example.com
+    port: 587                              # default 587
+    username: no-reply@example.com
+    password_file: /run/secrets/smtp_password   # preferred; or password: ...
+    from: "llm.example.com <no-reply@example.com>"
+    reply_to: support@example.com
+    # starttls: false                      # default true: refuses to send in plaintext
+  # downloads:                             # defaults point at codelink.eidonix.com
+  #   macos: https://example.com/code-link/macos
+  #   windows: https://example.com/code-link/windows
+  #   quickstart: https://example.com/code-link/quickstart
+  join_keys:
+    - id: example-co                       # recorded on every key it issues
+      name: Example Co                     # shown on the join page
+      key: replace-with-a-long-random-string  # the secret in /join/<key>; the admin page generates one
+      domains: [example.com]               # exact, lowercase; at least one
+      models: [my-model]                   # issued keys' allowed models; empty = all
+      # paused: true
+      # public: true                       # also accept these domains at /join
+```
+
+| Route | What it does |
+|---|---|
+| `GET /join/{key}` | The email form for one join link. An unknown or paused link (or enrollment paused or not configured) says "This link isn't active" |
+| `POST /join/{key}` | Emails a confirmation link when the address's domain is allowed. Every submission gets the same answer, so the page can't be used to find out which addresses or domains can get a key |
+| `GET /join` / `POST /join` | The same form without a link (code-link's "Get a key" opens it). The email's domain picks the active `public: true` join key that lists it; a domain may belong to only one public join key. With none active it asks for a team link |
+| `GET /join/confirm/{token}` | Shows what the button will do ("Create my key" or "Get a new key"). Opening it changes nothing, so mail scanners that prefetch links can't use it up |
+| `POST /join/confirm/{token}` | Uses the link up, creates or replaces the key and shows it once. The key is never emailed |
+
+Notes:
+
+- **Links use `public_url`, never the request's Host header**, so a forged
+  Host can't point a confirmation link at another site. Join links answer
+  "not active" until `public_url`, `smtp.host` and `smtp.from` are set.
+- **Pending confirmations live in memory.** A restart invalidates them; the
+  person just asks again.
+- **Rate limits** (per hour): 120 page views and 10 submissions per client IP,
+  3 confirmation emails per address, 200 submissions per join key, 20 key
+  creations per IP. Client IPs honour `trusted_proxies` like the rest of the
+  proxy.
+- **Domains are an exact allowlist** (no subdomains), so only the
+  addresses you list can get a key. Input is checked strictly: plain ASCII
+  addresses only, no display names, quoting or IP-literal domains.
+- Deleting a join link leaves the keys it issued working; revoke them on the
+  API Keys tab. If a model is force-deleted and a join key's model list
+  empties, the join key is paused rather than widened to every model.
+- Without any `keys`, the proxy runs unauthenticated; the first enrolled key
+  turns authentication on for everyone.
 
 ## Backend URL routing
 

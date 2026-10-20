@@ -660,6 +660,14 @@ func modelReferrers(cfg *Config, name string) []string {
 			}
 		}
 	}
+	for _, j := range cfg.Enrollment.JoinKeys {
+		for _, m := range j.Models {
+			if m == name {
+				refs = append(refs, "join key "+j.Name)
+				break
+			}
+		}
+	}
 	if cfg.AutoMode != nil && cfg.AutoMode.Model == name {
 		refs = append(refs, "auto_mode.model")
 	}
@@ -731,6 +739,26 @@ func stripModelReferences(root *yaml.Node, modelName string) {
 			} else {
 				modelsVal.Content = filtered
 			}
+		}
+	}
+	for _, entry := range joinKeyEntries(root) {
+		modelsVal := findMappingValue(entry, "models")
+		if modelsVal == nil || modelsVal.Kind != yaml.SequenceNode {
+			continue
+		}
+		filtered := modelsVal.Content[:0]
+		for _, child := range modelsVal.Content {
+			if child.Value != modelName {
+				filtered = append(filtered, child)
+			}
+		}
+		if len(filtered) == 0 {
+			// An emptied list would widen the join key to every model;
+			// pause it so the operator decides.
+			deleteMappingValue(entry, "models")
+			setMappingValue(entry, "paused", boolNode(true))
+		} else {
+			modelsVal.Content = filtered
 		}
 	}
 	if am := findMappingValue(root, "auto_mode"); am != nil && am.Kind == yaml.MappingNode {
@@ -1032,15 +1060,35 @@ func keyModelReferrers(cfg *Config, modelName string) []string {
 			}
 		}
 	}
+	for _, j := range cfg.Enrollment.JoinKeys {
+		for _, allowed := range j.Models {
+			if allowed == modelName {
+				refs = append(refs, "join key "+j.Name)
+				break
+			}
+		}
+	}
 	return refs
 }
 
-func renameKeyModelReferences(root *yaml.Node, oldName, newName string) {
-	keys := findMappingValue(root, "keys")
-	if keys == nil || keys.Kind != yaml.SequenceNode {
-		return
+// joinKeyEntries returns the enrollment.join_keys mapping nodes in root.
+func joinKeyEntries(root *yaml.Node) []*yaml.Node {
+	seq := findMappingValue(findMappingValue(root, "enrollment"), "join_keys")
+	if seq == nil || seq.Kind != yaml.SequenceNode {
+		return nil
 	}
-	for _, entry := range keys.Content {
+	return seq.Content
+}
+
+// renameKeyModelReferences renames a model in API-key and join-key
+// allow-lists.
+func renameKeyModelReferences(root *yaml.Node, oldName, newName string) {
+	var entries []*yaml.Node
+	if keys := findMappingValue(root, "keys"); keys != nil && keys.Kind == yaml.SequenceNode {
+		entries = keys.Content
+	}
+	entries = append(append([]*yaml.Node(nil), entries...), joinKeyEntries(root)...)
+	for _, entry := range entries {
 		models := findMappingValue(entry, "models")
 		if models == nil || models.Kind != yaml.SequenceNode {
 			continue

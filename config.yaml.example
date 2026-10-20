@@ -154,6 +154,24 @@ keys:
   #   name: guest
   #   models: [my-model]            # only this model
 
+# ── Self-service keys ─────────────────────────────────────────────────────────
+# Optional. People open a join link, confirm a work email and get their own key
+# (docs/config-reference.md, "Self-service API keys"). Easiest to set up on the
+# admin Enrollment tab, which also creates join keys.
+# enrollment:
+#   public_url: https://llm.example.com
+#   smtp:
+#     host: smtp.example.com
+#     username: no-reply@example.com
+#     password_file: /run/secrets/smtp_password
+#     from: "llm.example.com <no-reply@example.com>"
+#     reply_to: support@example.com
+#   join_keys:
+#     - id: example-co
+#       name: Example Co
+#       key: replace-with-a-long-random-string
+#       domains: [example.com]
+
 # ── Features ───────────────────────────────────────────────────────────────────
 # Config generator: web UI at GET / that creates client configs for coding assistants.
 # serve_config_generator: true

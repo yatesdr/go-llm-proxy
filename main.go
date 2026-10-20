@@ -16,6 +16,7 @@ import (
 	"go-llm-proxy/internal/handler"
 	"go-llm-proxy/internal/httputil"
 	"go-llm-proxy/internal/lb"
+	"go-llm-proxy/internal/mailer"
 	"go-llm-proxy/internal/mcp"
 	"go-llm-proxy/internal/pipeline"
 	"go-llm-proxy/internal/ratelimit"
@@ -193,8 +194,13 @@ func main() {
 		mux.Handle("GET /usage/data", http.HandlerFunc(dash.ServeData))
 		slog.Info("usage dashboard enabled at /usage")
 	}
+	// Self-service enrollment (public join pages). Always mounted; a join
+	// link answers "not active" until enrollment is configured.
+	mailSender := &mailer.SMTP{}
+	handler.NewEnrollHandler(cs, rl, mailSender).Mount(mux)
 	{
 		admin := handler.NewAdminHandler(cs, dashRl, healthStore, ul)
+		admin.Mailer = mailSender
 		mux.Handle("GET /admin", http.HandlerFunc(admin.Root))
 		mux.Handle("GET /admin/", http.HandlerFunc(admin.Root))
 		mux.Handle("GET /admin/login", http.HandlerFunc(admin.LoginPage))
@@ -216,6 +222,9 @@ func main() {
 		mux.Handle("GET /admin/documents/data", admin.RequireAPI(admin.DocumentsData))
 		mux.Handle("POST /admin/documents/mutate", admin.RequireAPI(admin.DocumentsMutate))
 		mux.Handle("POST /admin/workloads/probe", admin.RequireAPI(admin.WorkloadProbe))
+		mux.Handle("GET /admin/enrollment", admin.RequirePage(admin.EnrollmentPage))
+		mux.Handle("GET /admin/enrollment/data", admin.RequireAPI(admin.EnrollmentData))
+		mux.Handle("POST /admin/enrollment/mutate", admin.RequireAPI(admin.EnrollmentMutate))
 		// Legacy processors API remains as a compatibility surface for the
 		// Chat helpers card; it is no longer an administrator-facing tab.
 		mux.Handle("GET /admin/processors", admin.RequirePage(admin.ProcessorsPage))

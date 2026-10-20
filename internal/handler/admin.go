@@ -9,6 +9,7 @@ import (
 
 	"go-llm-proxy/internal/config"
 	"go-llm-proxy/internal/httputil"
+	"go-llm-proxy/internal/mailer"
 	"go-llm-proxy/internal/ratelimit"
 	"go-llm-proxy/internal/usage"
 )
@@ -24,6 +25,9 @@ type AdminHandler struct {
 	health   *config.HealthStore
 	ul       *usage.UsageLogger // may be nil when metrics logging is off
 	sessions *sessionStore
+
+	// Mailer sends the enrollment test email (nil = real SMTP).
+	Mailer mailer.Sender
 }
 
 func NewAdminHandler(cs *config.ConfigStore, rl *ratelimit.RateLimiter, hs *config.HealthStore, ul *usage.UsageLogger) *AdminHandler {
@@ -289,7 +293,7 @@ func (h *AdminHandler) renderShell(w http.ResponseWriter, activeTab, title, body
     </div>
   </div>
 </div>
-<nav class="tabs-bar">`+tab("users", "API Keys", "/admin/users")+tab("chat", "LLM", "/admin/chat")+tab("audio", "Audio", "/admin/audio")+tab("documents", "Documents", "/admin/documents")+`</nav>
+<nav class="tabs-bar">`+tab("users", "API Keys", "/admin/users")+tab("chat", "LLM", "/admin/chat")+tab("audio", "Audio", "/admin/audio")+tab("documents", "Documents", "/admin/documents")+tab("enrollment", "Enrollment", "/admin/enrollment")+`</nav>
 <div class="content"><div class="container">
 `+bodyHTML+adminConfirmModalHTML+`
 </div></div>
