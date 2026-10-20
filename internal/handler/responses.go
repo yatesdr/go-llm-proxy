@@ -651,14 +651,28 @@ func (h *ResponsesHandler) sendChatRequest(ctx context.Context, chatReq map[stri
 	return sendChatCompletionsRequest(ctx, h.client, chatReq, model)
 }
 
-// reasoningOutputItem builds a completed reasoning item carrying the text both
-// as a summary (what clients display) and as reasoning_text content (what
-// clients replay verbatim in later requests).
+// reasoningHeading is the summary's first line for a backend's reasoning
+// (which has no summary of its own): Codex shows it in its status line while
+// the model thinks.
+const reasoningHeading = "**Thinking**"
+
+// reasoningSummary is the heading and then the reasoning: Codex lists it in
+// the expanded transcript (Ctrl+T), not in the main view.
+func reasoningSummary(text string) string {
+	if body := strings.TrimSpace(text); body != "" {
+		return reasoningHeading + "\n\n" + body
+	}
+	return reasoningHeading
+}
+
+// reasoningOutputItem builds a completed reasoning item: the summary as above
+// and the text as reasoning_text content (what clients replay verbatim in
+// later requests).
 func reasoningOutputItem(id, text string) map[string]any {
 	return map[string]any{
 		"id":      id,
 		"type":    "reasoning",
-		"summary": []any{map[string]any{"type": "summary_text", "text": text}},
+		"summary": []any{map[string]any{"type": "summary_text", "text": reasoningSummary(text)}},
 		"content": []any{map[string]any{"type": "reasoning_text", "text": text}},
 	}
 }

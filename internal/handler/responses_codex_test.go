@@ -612,7 +612,10 @@ func TestResponsesHandler_ReasoningItemsCarryReasoningText(t *testing.T) {
 
 	rd := eventsOf(w, "response.reasoning_text.delta")
 	sd := eventsOf(w, "response.reasoning_summary_text.delta")
-	if len(rd) != 2 || len(sd) != 2 || rd[0]["delta"] != "think " || rd[0]["content_index"].(float64) != 0 {
+	// The summary streams a heading (Codex's status line shows its latest
+	// line), then the reasoning once the block ends.
+	if len(rd) != 2 || len(sd) != 2 || rd[0]["delta"] != "think " || rd[0]["content_index"].(float64) != 0 ||
+		sd[0]["delta"] != "**Thinking**" || sd[1]["delta"] != "\n\nthink hard" {
 		t.Fatalf("reasoning delta events wrong:\n%s", w.Body.String())
 	}
 	if d := eventsOf(w, "response.reasoning_text.done"); len(d) != 1 || d[0]["text"] != "think hard" {
@@ -625,7 +628,7 @@ func TestResponsesHandler_ReasoningItemsCarryReasoningText(t *testing.T) {
 	}
 	c := item["content"].([]any)[0].(map[string]any)
 	s := item["summary"].([]any)[0].(map[string]any)
-	if c["type"] != "reasoning_text" || c["text"] != "think hard" || s["type"] != "summary_text" || s["text"] != "think hard" {
+	if c["type"] != "reasoning_text" || c["text"] != "think hard" || s["type"] != "summary_text" || s["text"] != "**Thinking**\n\nthink hard" {
 		t.Errorf("reasoning item wrong: %v", item)
 	}
 }

@@ -1450,7 +1450,7 @@ func TestResponsesHandler_StreamingReasoningItems(t *testing.T) {
 	if !foundReasoningDone {
 		t.Error("expected response.output_item.done with type reasoning")
 	}
-	expectedReasoning := "Let me think about this...Okay, I know the answer."
+	expectedReasoning := "**Thinking**\n\nLet me think about this...Okay, I know the answer."
 	if reasoningDoneText != expectedReasoning {
 		t.Errorf("expected reasoning text %q, got %q", expectedReasoning, reasoningDoneText)
 	}

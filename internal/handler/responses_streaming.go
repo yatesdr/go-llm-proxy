@@ -296,8 +296,18 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 			return
 		}
 		text := reasoningBuf.String()
+		if body := strings.TrimSpace(text); body != "" {
+			emit("response.reasoning_summary_text.delta", map[string]any{
+				"delta":           "\n\n" + body,
+				"item_id":         reasoningID,
+				"output_index":    outputIdx,
+				"summary_index":   0,
+				"sequence_number": seq,
+			})
+			seq++
+		}
 		emit("response.reasoning_summary_text.done", map[string]any{
-			"text":            text,
+			"text":            reasoningSummary(text),
 			"item_id":         reasoningID,
 			"output_index":    outputIdx,
 			"summary_index":   0,
@@ -325,9 +335,12 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 	}
 
 	// emitReasoningText emits a reasoning text segment (used by both the
-	// reasoning JSON field path and think-tag filter). The text is sent as a
-	// summary delta (what clients display) and as a reasoning_text delta (the
-	// raw reasoning clients replay in later requests).
+	// reasoning JSON field path and think-tag filter) as a reasoning_text
+	// delta: the raw reasoning, which clients replay in later requests and
+	// Codex keeps out of view. The summary streams only a heading — Codex's
+	// status line shows the summary's latest line while it streams — and
+	// gets the reasoning when the block ends (Codex lists it in the expanded
+	// transcript, not the main view).
 	emitReasoningText := func(text string) {
 		if !reasoningStarted {
 			reasoningID = api.RandomID("rs_")
@@ -350,17 +363,17 @@ func (h *ResponsesHandler) handleStreaming(w http.ResponseWriter, resp *http.Res
 				"sequence_number": seq,
 			})
 			seq++
+			emit("response.reasoning_summary_text.delta", map[string]any{
+				"delta":           reasoningHeading,
+				"item_id":         reasoningID,
+				"output_index":    outputIdx,
+				"summary_index":   0,
+				"sequence_number": seq,
+			})
+			seq++
 			reasoningStarted = true
 		}
 		reasoningBuf.WriteString(text)
-		emit("response.reasoning_summary_text.delta", map[string]any{
-			"delta":           text,
-			"item_id":         reasoningID,
-			"output_index":    outputIdx,
-			"summary_index":   0,
-			"sequence_number": seq,
-		})
-		seq++
 		emit("response.reasoning_text.delta", map[string]any{
 			"delta":           text,
 			"item_id":         reasoningID,
