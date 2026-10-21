@@ -79,8 +79,17 @@ func TestCapabilitiesListServicesAndDefaults(t *testing.T) {
 	}
 	w = httptest.NewRecorder()
 	NewCapabilitiesHandler(config.NewTestConfigStore(&config.Config{}), &fakeSearch{}).ServeHTTP(w, httptest.NewRequest("GET", "/v1/capabilities", nil))
-	if !strings.Contains(w.Body.String(), `"defaults":{}`) || !strings.Contains(w.Body.String(), `"web_search":null`) {
+	if !strings.Contains(w.Body.String(), `"defaults":{}`) || !strings.Contains(w.Body.String(), `"web_search":null`) ||
+		!strings.Contains(w.Body.String(), `"documents_restructure":null`) {
 		t.Fatalf("%s", w.Body)
+	}
+	w = httptest.NewRecorder()
+	docs := config.NewTestConfigStore(&config.Config{Documents: config.DocumentsConfig{PaddleOCR: &config.PaddleOCRConfig{}}})
+	NewCapabilitiesHandler(docs, &fakeSearch{}).ServeHTTP(w, httptest.NewRequest("GET", "/v1/capabilities", nil))
+	got = nil
+	json.Unmarshal(w.Body.Bytes(), &got)
+	if got["documents"] != "/layout-parsing" || got["documents_restructure"] != "/restructure-pages" {
+		t.Fatalf("documents: %s", w.Body)
 	}
 }
 

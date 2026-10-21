@@ -8,6 +8,7 @@ All notable changes to this project will be documented in this file.
 
 - Documents: `POST /restructure-pages` alongside `/layout-parsing`, and both
   under `/v1` as well, forwarding PaddleOCR-VL's pipeline contract unchanged.
+  `/v1/capabilities` lists it as `documents_restructure`.
 - Self-service API keys: an `enrollment` block (public URL, SMTP relay with
   STARTTLS and an optional password file, code-link download links, join
   keys limited to email domains and models) and public `/join` pages. A

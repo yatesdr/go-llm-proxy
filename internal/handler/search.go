@@ -95,6 +95,7 @@ func withDomains(q string, include, exclude []string) string {
 // that isn't configured is null.
 //
 //	{"service": "go-llm-proxy", "web_search": "/v1/search", "documents": "/layout-parsing",
+//	 "documents_restructure": "/restructure-pages",
 //	 "defaults": {"main": "GLM-5.3-Flash", …}, "models": ["GLM-5.3-Flash", …]}
 //
 // models are those marked code_link that the key may use, in config
@@ -112,7 +113,7 @@ func (h *CapabilitiesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	httputil.SetSecurityHeaders(w)
 	w.Header().Set("Content-Type", "application/json")
 	cfg := h.config.Get()
-	caps := map[string]any{"service": "go-llm-proxy", "web_search": nil, "documents": nil, "defaults": map[string]any{}}
+	caps := map[string]any{"service": "go-llm-proxy", "web_search": nil, "documents": nil, "documents_restructure": nil, "defaults": map[string]any{}}
 	if d := cfg.ClientDefaults; d != nil {
 		caps["defaults"] = d
 	}
@@ -121,6 +122,7 @@ func (h *CapabilitiesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	}
 	if cfg.Documents.PaddleOCR != nil {
 		caps["documents"] = "/layout-parsing"
+		caps["documents_restructure"] = "/restructure-pages"
 	}
 	caps["models"] = nil
 	key := auth.KeyFromContext(r.Context())
