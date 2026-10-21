@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Documents: `POST /restructure-pages` alongside `/layout-parsing`, and both
+  under `/v1` as well, forwarding PaddleOCR-VL's pipeline contract unchanged.
 - Self-service API keys: an `enrollment` block (public URL, SMTP relay with
   STARTTLS and an optional password file, code-link download links, join
   keys limited to email domains and models) and public `/join` pages. A
@@ -31,6 +33,10 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- `/v1/chat/completions` and the other OpenAI-style passthrough routes return
+  the backend's cleaned error message with an OpenAI error code (for example
+  `context_length_exceeded`, `invalid_prompt`) instead of "backend returned
+  HTTP 400", as the Responses endpoint already did.
 - PDF documents are always rewritten to text for translated Messages requests
   (previously vision-capable models received the internal `pdf_data` part and
   failed); `rewrite_documents: off` now yields OpenAI `file` parts.
@@ -45,6 +51,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Native Responses passthrough fills in `"detail":"auto"` on `input_image`
+  parts that omit it; vLLM rejected such requests with a 400.
+- The admin Detect button now reads the context window of the configured
+  upstream model when a backend serves several names (vLLM
+  `--served-model-name a b c`), instead of reporting none.
 - Chat Completions responses keep `choices[].logprobs` (streaming and not)
   when the proxy re-serializes them to strip reasoning and think tags.
 - Admin model saves no longer drop `rewrite_documents`.

@@ -94,7 +94,7 @@ func ProbeBackendForModel(backendURL, apiKey, backendType, modelForDetection str
 		res.ContextWindow = ctx
 		return res
 	}
-	if ctx, ok := probeModelsEndpoint(client, base, apiKey); ok {
+	if ctx, ok := probeModelsEndpoint(client, base, apiKey, modelForDetection); ok {
 		res.Engine = "openai-compatible"
 		res.ContextWindow = ctx
 		return res
@@ -104,9 +104,11 @@ func ProbeBackendForModel(backendURL, apiKey, backendType, modelForDetection str
 }
 
 // probeModelsEndpoint GETs {base}/models and reports whether it looks like an
-// OpenAI-compatible backend, plus a context window when only one model is
-// served (the common case for local inference servers).
-func probeModelsEndpoint(client *http.Client, base, apiKey string) (ctxWindow int, ok bool) {
+// OpenAI-compatible backend, plus a context window for the entry matching
+// modelID, or for the sole entry when only one model is served. vLLM lists
+// one entry per served model name, so a name match is needed when it has
+// several.
+func probeModelsEndpoint(client *http.Client, base, apiKey, modelID string) (ctxWindow int, ok bool) {
 	req, err := http.NewRequest(http.MethodGet, base+"/models", nil)
 	if err != nil {
 		return 0, false
@@ -128,7 +130,8 @@ func probeModelsEndpoint(client *http.Client, base, apiKey string) (ctxWindow in
 	}
 	var result struct {
 		Data []struct {
-			MaxModelLen int `json:"max_model_len"`
+			ID          string `json:"id"`
+			MaxModelLen int    `json:"max_model_len"`
 			Meta        struct {
 				NCtxTrain int `json:"n_ctx_train"`
 			} `json:"meta"`
@@ -137,12 +140,14 @@ func probeModelsEndpoint(client *http.Client, base, apiKey string) (ctxWindow in
 	if err := json.Unmarshal(body, &result); err != nil {
 		return 0, false
 	}
-	if len(result.Data) == 1 {
-		if result.Data[0].MaxModelLen > 0 {
-			return result.Data[0].MaxModelLen, true
-		}
-		if result.Data[0].Meta.NCtxTrain > 0 {
-			return result.Data[0].Meta.NCtxTrain, true
+	for _, m := range result.Data {
+		if (modelID != "" && m.ID == modelID) || len(result.Data) == 1 {
+			if m.MaxModelLen > 0 {
+				return m.MaxModelLen, true
+			}
+			if m.Meta.NCtxTrain > 0 {
+				return m.Meta.NCtxTrain, true
+			}
 		}
 	}
 	return 0, true

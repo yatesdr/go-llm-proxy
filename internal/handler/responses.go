@@ -145,6 +145,53 @@ func (h *ResponsesHandler) probeNativeRoute(ctx context.Context, model *config.M
 	return false, false
 }
 
+// defaultInputImageDetail sets "detail":"auto" on input_image parts that omit
+// it. OpenAI treats detail as optional, but vLLM's Responses endpoint rejects
+// the whole request without it. The body is returned unchanged when there is
+// nothing to fill in or it does not parse.
+func defaultInputImageDetail(body []byte) []byte {
+	if !bytes.Contains(body, []byte(`"input_image"`)) {
+		return body
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	var req map[string]any
+	if dec.Decode(&req) != nil {
+		return body
+	}
+	changed := false
+	var walk func(v any)
+	walk = func(v any) {
+		switch t := v.(type) {
+		case map[string]any:
+			if t["type"] == "input_image" {
+				if _, ok := t["detail"]; !ok {
+					t["detail"] = "auto"
+					changed = true
+				}
+			}
+			for _, child := range t {
+				walk(child)
+			}
+		case []any:
+			for _, child := range t {
+				walk(child)
+			}
+		}
+	}
+	walk(req["input"])
+	if !changed {
+		return body
+	}
+	var out bytes.Buffer
+	enc := json.NewEncoder(&out)
+	enc.SetEscapeHTML(false)
+	if enc.Encode(req) != nil {
+		return body
+	}
+	return bytes.TrimRight(out.Bytes(), "\n")
+}
+
 // tryNativePassthrough attempts to forward the request directly to the
 // backend's native Responses API endpoint. It returns false only when auto
 // mode has conclusive evidence that translation should be used.
@@ -168,6 +215,7 @@ func (h *ResponsesHandler) tryNativePassthrough(ctx context.Context, disarm func
 	if model.Model != modelName {
 		body = RewriteModelName(body, model.Model)
 	}
+	body = defaultInputImageDetail(body)
 
 	upstreamURL := strings.TrimRight(model.Backend, "/") + path
 

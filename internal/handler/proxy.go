@@ -325,7 +325,13 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, api.MaxResponseBodySize))
 		slog.Error("upstream returned error", "model", modelName, "status", resp.StatusCode,
 			"body", string(errBody))
-		httputil.WriteError(w, resp.StatusCode, fmt.Sprintf("backend returned HTTP %d", resp.StatusCode))
+		if model.Type == config.BackendAnthropic {
+			httputil.WriteError(w, resp.StatusCode, fmt.Sprintf("backend returned HTTP %d", resp.StatusCode))
+		} else {
+			// Same cleaned message and OpenAI error code the Responses
+			// endpoint returns, so clients see why a request was rejected.
+			writeUpstreamError(w, classifyUpstreamError(resp.StatusCode, errBody, resp.Header))
+		}
 
 		logUsage(p.usage, usageLogInput{
 			startTime: startTime, statusCode: resp.StatusCode,

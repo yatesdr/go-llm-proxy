@@ -223,8 +223,18 @@ documents:
       - url: http://192.168.13.30:8002
 ```
 
-The proxy exposes `POST /layout-parsing` and forwards PaddleOCR's official
-request and response unchanged. No artificial OpenAI model ID is required.
+The proxy exposes PaddleOCR-VL's pipeline service, `POST /layout-parsing` and
+`POST /restructure-pages`, and forwards the official request and response
+unchanged, so every pipeline option (`promptLabel`, `useSealRecognition`,
+`restructurePages`, `outputFormats`, ...) works. Both routes are also served
+under `/v1` for clients that only take a `/v1` base URL. `/restructure-pages`
+goes to the sibling of `endpoint` (`/ocr/layout-parsing` gives
+`/ocr/restructure-pages`). No artificial OpenAI model ID is required.
+
+The PaddleOCR-VL model server itself (`paddleocr genai_server`) is an
+ordinary OpenAI-compatible backend: add it under `models` to offer its
+single-image task prompts (`OCR:`, `Table Recognition:`, `Formula
+Recognition:`, `Chart Recognition:`) on `/v1/chat/completions`.
 
 ### Per-model processor overrides
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"path"
 	"strings"
 	"time"
 
@@ -118,9 +119,10 @@ func (h *AudioHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// DocumentHandler publishes the official PaddleOCR layout parsing contract at
-// /layout-parsing. It does not invent a model ID or wrap the response in an
-// OpenAI shape; clients receive result.layoutParsingResults[].markdown.text.
+// DocumentHandler publishes the official PaddleOCR-VL pipeline service:
+// /layout-parsing and /restructure-pages, each also under /v1 for clients
+// that only take a /v1 base URL. It does not invent a model ID or wrap the
+// response in an OpenAI shape; clients receive the PaddleOCR JSON as-is.
 type DocumentHandler struct{ config *config.ConfigStore }
 
 func NewDocumentHandler(cs *config.ConfigStore) *DocumentHandler { return &DocumentHandler{config: cs} }
@@ -147,8 +149,18 @@ func (h *DocumentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	proxyWorkload(w, r, workloadRequest{
 		Name: "paddleocr", Backends: doc.Backends, Body: body,
-		UpstreamPath: doc.Endpoint, Timeout: doc.Timeout, BackendType: config.BackendOpenAI,
+		UpstreamPath: documentUpstreamPath(r.URL.Path, doc.Endpoint), Timeout: doc.Timeout, BackendType: config.BackendOpenAI,
 	})
+}
+
+// documentUpstreamPath maps a public document route to the backend path.
+// /layout-parsing goes to the configured endpoint; /restructure-pages goes to
+// its sibling, so an endpoint served under a prefix keeps that prefix.
+func documentUpstreamPath(publicPath, endpoint string) string {
+	if strings.TrimPrefix(publicPath, "/v1") == "/restructure-pages" {
+		return path.Join(path.Dir(endpoint), "restructure-pages")
+	}
+	return endpoint
 }
 
 type workloadRequest struct {

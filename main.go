@@ -251,7 +251,9 @@ func main() {
 	mux.Handle("POST /v1/audio/translations", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, audio)))
 	mux.Handle("POST /v1/audio/speech", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, audio)))
 	mux.Handle("GET /v1/audio/voices", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, audio)))
-	mux.Handle("POST /layout-parsing", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, documents)))
+	for _, route := range []string{"/layout-parsing", "/restructure-pages", "/v1/layout-parsing", "/v1/restructure-pages"} {
+		mux.Handle("POST "+route, ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, documents)))
+	}
 	mux.Handle("POST /v1/search", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, handler.NewSearchHandler(pl))))
 	mux.Handle("GET /v1/capabilities", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, handler.NewCapabilitiesHandler(cs, pl))))
 	mux.Handle("/v1/", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, proxy)))
