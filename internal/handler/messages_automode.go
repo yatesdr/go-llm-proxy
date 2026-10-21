@@ -358,6 +358,65 @@ func decisionPayload(model *config.ModelConfig, ar *autoModeRequest, prefill str
 	}
 }
 
+// warmTranscriptPayload is the decision prompt cut off right after the
+// transcript's last entry and left open, or nil when the user text has no
+// transcript. The next decision's prompt starts with exactly this text.
+func warmTranscriptPayload(model *config.ModelConfig, ar *autoModeRequest) map[string]any {
+	end := strings.LastIndex(ar.user, "</transcript>")
+	if end <= 0 {
+		return nil
+	}
+	return map[string]any{
+		"model":                  model.Model,
+		"max_tokens":             1,
+		"continue_final_message": true,
+		"add_generation_prompt":  false,
+		"messages": []map[string]any{
+			{"role": "system", "content": ar.system},
+			{"role": "user", "content": ar.user[:end]},
+		},
+	}
+}
+
+// warmTranscript sends warmTranscriptPayload alongside the decision so the
+// backend keeps a cache checkpoint where the next decision's prompt diverges.
+// A classifier prompt ends with "</transcript>" and the stage instruction,
+// and Claude Code inserts each new action before them, so one decision's
+// prompt is never a prefix of the next. A hybrid model caches only where a
+// request's prompt ended (GLM-5.3: --recurrent-checkpoint-policy
+// request_boundaries; Flare: instruction, prompt and terminal checkpoints),
+// so without this every decision prefills its whole transcript again; with
+// it the next decision computes only the new action and the instruction.
+// Failures are ignored and never count against the backend's health.
+func (h *MessagesHandler) warmTranscript(r *http.Request, model *config.ModelConfig, ar *autoModeRequest) {
+	payload := warmTranscriptPayload(model, ar)
+	if payload == nil {
+		return
+	}
+	buf, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	ctx, cancel, _ := armUntilHeaders(context.WithoutCancel(r.Context()), model)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		strings.TrimRight(model.Backend, "/")+api.ChatCompletionsPath, bytes.NewReader(buf))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if model.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+model.APIKey)
+	}
+	resp, err := h.client.Do(req)
+	if err != nil {
+		slog.Debug("auto mode transcript warm-up failed", "error", err)
+		return
+	}
+	io.Copy(io.Discard, io.LimitReader(resp.Body, api.MaxResponseBodySize))
+	resp.Body.Close()
+}
+
 // categoryPayload asks for the BLOCK rule name once the severity is known.
 func categoryPayload(model *config.ModelConfig, ar *autoModeRequest, n int) map[string]any {
 	return map[string]any{
@@ -450,6 +509,7 @@ func (h *MessagesHandler) serveAutoMode(w http.ResponseWriter, r *http.Request, 
 	}
 	payload := decisionPayload(chosen, ar, prefill)
 	reqBytes := int64(len(ar.system) + len(ar.user))
+	go h.warmTranscript(r, chosen, ar)
 
 	dr, status, err := h.callDecision(ctx, r, chosen, payload)
 	if err != nil {

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"go-llm-proxy/internal/auth"
 	"go-llm-proxy/internal/config"
@@ -63,13 +65,25 @@ func logprobResponse(top []map[string]any, content string) map[string]any {
 }
 
 // decisionStub is a fake Chat Completions backend that records every request.
+// Transcript warm-ups (an open final user message) are kept apart in warms,
+// so requests holds exactly the decision calls in order.
 type decisionStub struct {
 	mu       sync.Mutex
 	requests []map[string]any
 	paths    []string
 	auths    []string
+	warms    []map[string]any
 	// respond builds the reply for the n-th request (0-based).
 	respond func(n int, req map[string]any) (int, any)
+}
+
+func isWarmUp(req map[string]any) bool {
+	msgs, _ := req["messages"].([]any)
+	if req["continue_final_message"] != true || len(msgs) == 0 {
+		return false
+	}
+	last, _ := msgs[len(msgs)-1].(map[string]any)
+	return last["role"] == "user"
 }
 
 func (s *decisionStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -77,6 +91,13 @@ func (s *decisionStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var req map[string]any
 	json.Unmarshal(raw, &req)
 	s.mu.Lock()
+	if isWarmUp(req) {
+		s.warms = append(s.warms, req)
+		s.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"id": "w", "choices": []any{}})
+		return
+	}
 	n := len(s.requests)
 	s.requests = append(s.requests, req)
 	s.paths = append(s.paths, r.URL.Path)
@@ -92,6 +113,21 @@ func (s *decisionStub) count() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.requests)
+}
+
+// warmUps waits briefly for the background warm-ups to arrive.
+func (s *decisionStub) warmUps(t *testing.T, want int) []map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s.mu.Lock()
+		got := append([]map[string]any(nil), s.warms...)
+		s.mu.Unlock()
+		if len(got) >= want || time.Now().After(deadline) {
+			return got
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 func scoreStub(top map[string]float64) *decisionStub {
@@ -321,6 +357,76 @@ func TestDecideSeverityNeverFifty(t *testing.T) {
 				t.Fatal("N must never be 50")
 			}
 		})
+	}
+}
+
+// The warm-up ends exactly where the next decision's prompt diverges: right
+// after the transcript's last entry, with the same system text, open-ended.
+func TestWarmTranscriptPayload(t *testing.T) {
+	model := &config.ModelConfig{Model: "up"}
+	ar := &autoModeRequest{system: "sys", user: "<transcript>\n{\"user\":\"a\"}\n{\"Bash\":\"ls\"}\n</transcript>\nRespond now."}
+	p := warmTranscriptPayload(model, ar)
+	msgs := p["messages"].([]map[string]any)
+	if msgs[0]["content"] != "sys" || msgs[1]["role"] != "user" ||
+		msgs[1]["content"] != "<transcript>\n{\"user\":\"a\"}\n{\"Bash\":\"ls\"}\n" {
+		t.Fatalf("messages = %v", msgs)
+	}
+	if p["continue_final_message"] != true || p["add_generation_prompt"] != false || p["max_tokens"] != 1 || p["model"] != "up" {
+		t.Fatalf("payload = %v", p)
+	}
+	if _, has := p["temperature"]; has {
+		t.Error("temperature must be left out (Flare rejects 0)")
+	}
+	// The next decision adds an action before </transcript>: its user text
+	// starts with this warm-up's.
+	next := strings.Replace(ar.user, "</transcript>", "{\"Bash\":\"pwd\"}\n</transcript>", 1)
+	if !strings.HasPrefix(next, msgs[1]["content"].(string)) {
+		t.Fatal("the next decision must extend the warm-up")
+	}
+	if warmTranscriptPayload(model, &autoModeRequest{system: "sys", user: "no transcript"}) != nil {
+		t.Fatal("no transcript, no warm-up")
+	}
+}
+
+// Every decision sends one warm-up of its transcript alongside it.
+func TestAutoModeSendsTranscriptWarmUp(t *testing.T) {
+	stub := scoreStub(map[string]float64{"5": 0.9})
+	env := newAutoEnv(t, stub, nil)
+	decodeMsg(t, env.post(t, autoRequestBody("claude-sonnet-5", testAutoSeveritySystem, []string{"</severity>"}, false), ""))
+	warms := stub.warmUps(t, 1)
+	if len(warms) != 1 || stub.count() != 1 {
+		t.Fatalf("warm-ups %d, decisions %d", len(warms), stub.count())
+	}
+	msgs := warms[0]["messages"].([]any)
+	if got := msgs[1].(map[string]any)["content"]; got != strings.TrimSuffix(testAutoUser, "</transcript>\nRespond now.") {
+		t.Fatalf("warm-up user text = %q", got)
+	}
+	if warms[0]["model"] != "decision-upstream" {
+		t.Fatalf("model = %v", warms[0]["model"])
+	}
+}
+
+// A warm-up the backend rejects changes nothing: the decision is answered.
+func TestAutoModeWarmUpFailureIsHarmless(t *testing.T) {
+	stub := scoreStub(map[string]float64{"5": 0.9})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var req map[string]any
+		json.Unmarshal(raw, &req)
+		if isWarmUp(req) {
+			http.Error(w, "continue_final_message unsupported", http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(raw))
+		stub.ServeHTTP(w, r)
+	}))
+	t.Cleanup(ts.Close)
+	env := newAutoEnv(t, stub, func(c *config.Config, _ string) { c.Models[0].Backend = ts.URL + "/v1" })
+	for i := 0; i < 3; i++ {
+		m := decodeMsg(t, env.post(t, autoRequestBody("claude-sonnet-5", testAutoSeveritySystem, []string{"</severity>"}, false), ""))
+		if firstText(t, m) != "<severity>5" {
+			t.Fatalf("decision %d: %v", i, m)
+		}
 	}
 }
 
