@@ -904,6 +904,9 @@ func modelConfigNode(m ModelConfig) *yaml.Node {
 	if m.MessagesMode != "" {
 		add("messages_mode", stringNode(m.MessagesMode))
 	}
+	if m.NativeClassifier {
+		add("native_classifier", boolNode(true))
+	}
 	if m.DeveloperRole != "" {
 		add("developer_role", stringNode(m.DeveloperRole))
 	}

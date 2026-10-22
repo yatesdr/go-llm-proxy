@@ -161,3 +161,11 @@ func TestRecordAttempt(t *testing.T) {
 		}
 	}
 }
+
+func TestAffinityKeyIgnoresCacheControl(t *testing.T) {
+	a := []byte(`{"system":[{"type":"text","text":"s","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]},{"role":"assistant","content":[{"type":"text","text":"yo","cache_control":{"type":"ephemeral"}}]}]}`)
+	b := []byte(`{"system":[{"type":"text","text":"s"}],"messages":[{"role":"user","content":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}]},{"role":"assistant","content":[{"type":"text","text":"yo"}]}]}`)
+	if AffinityKey(a) == 0 || AffinityKey(a) != AffinityKey(b) {
+		t.Fatalf("keys differ: %d vs %d", AffinityKey(a), AffinityKey(b))
+	}
+}

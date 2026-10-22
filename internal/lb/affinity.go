@@ -1,8 +1,10 @@
 package lb
 
 import (
+	"bytes"
 	"encoding/json"
 	"hash/fnv"
+	"regexp"
 )
 
 // affinityCapBytes bounds how much of each prefix component is hashed.
@@ -43,6 +45,7 @@ func AffinityKey(body []byte) uint64 {
 	}
 	wrote := false
 	write := func(b []byte) {
+		b = stripCacheControl(b)
 		if len(b) == 0 {
 			return
 		}
@@ -83,4 +86,17 @@ func AffinityKey(body []byte) uint64 {
 		return 0
 	}
 	return h.Sum64()
+}
+
+// cacheControlRe matches a cache_control marker (a flat object) with its
+// separating comma, in compact JSON as the SDKs send it.
+var cacheControlRe = regexp.MustCompile(`,"cache_control":\{[^{}]*\}|"cache_control":\{[^{}]*\},?`)
+
+// stripCacheControl removes cache_control markers so that moving a marker
+// between turns does not change the key.
+func stripCacheControl(b []byte) []byte {
+	if !bytes.Contains(b, []byte(`"cache_control"`)) {
+		return b
+	}
+	return cacheControlRe.ReplaceAll(b, nil)
 }

@@ -431,6 +431,7 @@ func (d *modelInputDTO) toConfig(cfg *config.Config, originalName string) (confi
 	}
 	// developer_role is config-only (no admin UI field): keep it across edits.
 	if existing != nil {
+		m.NativeClassifier = existing.NativeClassifier
 		m.DeveloperRole = existing.DeveloperRole
 	}
 	m.AWSSecretKey = resolveModelSecret(d.AWSSecretKey, existing, func(x *config.ModelConfig) string { return x.AWSSecretKey })

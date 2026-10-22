@@ -92,6 +92,10 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	requestedModel := req.Model
 	resolvedModel := config.ResolveModelName(cfg, requestedModel)
 
+	if !requireAnthropic && h.serveNativeClassifier(w, r, cfg, &req, body, resolvedModel, requestedModel) {
+		return
+	}
+
 	// Claude Code auto mode: classifier requests are answered by the decision
 	// model whatever model name they ask for. On a miss the same request
 	// continues below with the model swapped, so the reply stays a valid
@@ -168,7 +172,7 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Native passthrough for anthropic backends or native mode.
 	if !h.shouldTranslate(model) {
-		h.handleNativePassthrough(ctx, disarmTimeout, w, r, body, req, model, keyName, keyHash, startTime)
+		h.handleNativePassthrough(ctx, disarmTimeout, w, r, body, req, model, keyName, keyHash, startTime, false)
 		return
 	}
 
@@ -317,18 +321,51 @@ func (h *MessagesHandler) failBeforeStream(w http.ResponseWriter, streamOpen boo
 
 // --- Native passthrough ---
 
-func (h *MessagesHandler) handleNativePassthrough(ctx context.Context, disarmTimeout func(), w http.ResponseWriter, r *http.Request, body []byte, req messagesRequest, model *config.ModelConfig, keyName, keyHash string, startTime time.Time) {
+// serveNativeClassifier forwards a Claude Code auto-mode classifier request
+// unchanged to a native_classifier model's /v1/messages, ahead of the decision
+// head. It reports false when the request should continue down the usual path.
+func (h *MessagesHandler) serveNativeClassifier(w http.ResponseWriter, r *http.Request, cfg *config.Config, req *messagesRequest, body []byte, resolvedModel, requestedModel string) bool {
+	model := config.FindModel(cfg, resolvedModel)
+	if model == nil || !model.NativeClassifier || model.Type == config.BackendBedrock {
+		return false
+	}
+	key := auth.KeyFromContext(r.Context())
+	if !auth.KeyAllowsModel(key, resolvedModel) || detectAutoModeRequest(req) == nil {
+		return false
+	}
+	nreq := *req
+	nreq.Model = resolvedModel
+	if resolvedModel != requestedModel {
+		nreq.aliasFrom = requestedModel
+		body = RewriteModelName(body, resolvedModel)
+	}
+	r = withAffinity(r, body)
+	model, release := lb.ResolveModel(cfg, model, body)
+	defer release()
+
+	keyName, keyHash := "", ""
+	if key != nil {
+		keyName = key.Name
+		keyHash = usage.HashKey(key.Key)
+	}
+	ctx, cancel, disarm := armUntilHeaders(r.Context(), model)
+	defer cancel()
+	return h.handleNativePassthrough(ctx, disarm, w, r, body, nreq, model, keyName, keyHash, time.Now(), true)
+}
+
+func (h *MessagesHandler) handleNativePassthrough(ctx context.Context, disarmTimeout func(), w http.ResponseWriter, r *http.Request, body []byte, req messagesRequest, model *config.ModelConfig, keyName, keyHash string, startTime time.Time, fallback bool) (handled bool) {
 	if model.Model != req.Model {
 		body = RewriteModelName(body, model.Model)
 	}
 
 	// Build upstream URL: Anthropic backends keep /v1 in path.
-	upstreamURL := strings.TrimRight(model.Backend, "/") + "/v1/messages"
+	// A base URL may already end in /v1.
+	upstreamURL := strings.TrimSuffix(strings.TrimRight(model.Backend, "/"), "/v1") + "/v1/messages"
 
 	upReq, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(body))
 	if err != nil {
 		httputil.WriteAnthropicError(w, http.StatusInternalServerError, "api_error", "failed to create upstream request")
-		return
+		return true
 	}
 
 	upReq.Header.Set("Content-Type", "application/json")
@@ -341,11 +378,17 @@ func (h *MessagesHandler) handleNativePassthrough(ctx context.Context, disarmTim
 	// Anthropic auth and protocol headers.
 	if model.APIKey != "" {
 		upReq.Header.Set("X-Api-Key", model.APIKey)
+		if model.Type != config.BackendAnthropic {
+			upReq.Header.Set("Authorization", "Bearer "+model.APIKey)
+		}
 	}
 	for _, h := range []string{"Anthropic-Version", "Anthropic-Beta"} {
 		if v := r.Header.Get(h); v != "" {
 			upReq.Header.Set(h, v)
 		}
+	}
+	if upReq.Header.Get("Anthropic-Version") == "" {
+		upReq.Header.Set("Anthropic-Version", "2023-06-01")
 	}
 
 	slog.Info("proxying messages request (native)", "model", req.Model, "key", keyName)
@@ -358,13 +401,20 @@ func (h *MessagesHandler) handleNativePassthrough(ctx context.Context, disarmTim
 	if err != nil {
 		if ctx.Err() != nil {
 			httputil.WriteAnthropicError(w, http.StatusGatewayTimeout, "api_error", "upstream request timed out")
-			return
+			return true
 		}
 		slog.Error("upstream request failed", "error", err, "model", req.Model)
 		httputil.WriteAnthropicError(w, http.StatusBadGateway, "api_error", "upstream request failed")
-		return
+		return true
 	}
 	defer resp.Body.Close()
+
+	// A classifier request the backend rejects falls back to the usual path.
+	if fallback && resp.StatusCode >= 400 && resp.StatusCode < 500 &&
+		resp.StatusCode != http.StatusUnauthorized && resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusTooManyRequests {
+		slog.Warn("native classifier request rejected, falling back", "model", req.Model, "status", resp.StatusCode)
+		return false
+	}
 
 	// For error responses, sanitize before sending to the client.
 	if resp.StatusCode >= 400 {
@@ -379,7 +429,7 @@ func (h *MessagesHandler) handleNativePassthrough(ctx context.Context, disarmTim
 			backend:      model.Backend,
 			requestBytes: int64(len(body)), responseBytes: int64(len(errBody)),
 		})
-		return
+		return true
 	}
 
 	// Forward response headers (including rate-limit state).
@@ -420,6 +470,7 @@ func (h *MessagesHandler) handleNativePassthrough(ctx context.Context, disarmTim
 		backend:      model.Backend,
 		requestBytes: int64(len(body)), responseBytes: totalBytes,
 	})
+	return true
 }
 
 // --- Non-streaming handler ---

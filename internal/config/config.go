@@ -256,6 +256,7 @@ type ModelConfig struct {
 	Type             string            `yaml:"type"`                         // backend type: "" or "openai" (default), "anthropic"
 	ResponsesMode    string            `yaml:"responses_mode"`               // "auto" (default), "native", or "translate"
 	MessagesMode     string            `yaml:"messages_mode"`                // "auto" (default), "native", or "translate"
+	NativeClassifier bool              `yaml:"native_classifier,omitempty"`  // send Claude Code auto-mode classifier requests to the backend's /v1/messages unchanged (needs a Messages-capable backend)
 	DeveloperRole    string            `yaml:"developer_role,omitempty"`     // Responses translation: role for developer messages that follow the first user/assistant turn — "user" (default, wrapped in <developer> tags), "system", or "developer"
 	ContextWindow    int               `yaml:"context_window"`               // max context tokens (0 = auto-detect from backend)
 	SupportsVision   bool              `yaml:"supports_vision"`              // model handles images natively
