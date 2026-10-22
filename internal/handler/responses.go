@@ -412,6 +412,7 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Sticky backend selection; the model view carries the chosen backend
 	// through every downstream call for this request.
+	r = withAffinity(r, body)
 	model, releaseBackend := lb.ResolveModel(cfg, model, body)
 	defer releaseBackend()
 

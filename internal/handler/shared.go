@@ -18,6 +18,7 @@ import (
 	"go-llm-proxy/internal/api"
 	"go-llm-proxy/internal/config"
 	"go-llm-proxy/internal/httputil"
+	"go-llm-proxy/internal/lb"
 	"go-llm-proxy/internal/pipeline"
 )
 
@@ -176,4 +177,11 @@ func startPipelineKeepalives(w http.ResponseWriter, interval time.Duration) (sto
 		close(done)
 		wg.Wait()
 	}
+}
+
+// withAffinity tags r's context with body's conversation affinity key; the
+// connect transport sends it as X-Affinity-Key, so a load balancer in front of
+// a connect service's replicas keeps the conversation on one of them.
+func withAffinity(r *http.Request, body []byte) *http.Request {
+	return r.WithContext(httputil.WithAffinity(r.Context(), lb.AffinityKey(body)))
 }

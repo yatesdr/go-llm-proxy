@@ -133,6 +133,27 @@ func SanitizeLabel(s string) string {
 
 type callerKey struct{}
 
+type affinityKey struct{}
+
+// HeaderAffinity carries a conversation's affinity key to a connect service,
+// so a load balancer in front of several replicas there (haproxy: balance
+// hdr(X-Affinity-Key)) keeps the conversation on the replica that holds its
+// prefix cache. Backends listed directly are chosen here (lb.ResolveModel);
+// a connect service's replicas are chosen at the site.
+const HeaderAffinity = "X-Affinity-Key"
+
+// WithAffinity records a request's conversation affinity key (lb.AffinityKey;
+// 0 = none) for calls to connect backends.
+func WithAffinity(ctx context.Context, key uint64) context.Context {
+	return context.WithValue(ctx, affinityKey{}, key)
+}
+
+// AffinityFromContext returns the key stored by WithAffinity, or 0.
+func AffinityFromContext(ctx context.Context) uint64 {
+	k, _ := ctx.Value(affinityKey{}).(uint64)
+	return k
+}
+
 // WithCaller records the name of the API key serving a request so that calls
 // to connect backends can carry it as X-Eidonix-For.
 func WithCaller(ctx context.Context, name string) context.Context {
@@ -176,6 +197,11 @@ func (c *connectRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 		out.Header.Set(HeaderFor, who)
 	} else {
 		out.Header.Del(HeaderFor)
+	}
+	if k := AffinityFromContext(req.Context()); k != 0 {
+		out.Header.Set(HeaderAffinity, fmt.Sprintf("%016x", k))
+	} else {
+		out.Header.Del(HeaderAffinity)
 	}
 	return c.base.RoundTrip(out)
 }

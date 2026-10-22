@@ -164,3 +164,34 @@ func TestClientsShareTransport(t *testing.T) {
 		t.Fatal("redirects must stay disabled")
 	}
 }
+
+func TestConnectAffinityHeader(t *testing.T) {
+	rec := &hubRecorder{}
+	hub := httptest.NewServer(http.HandlerFunc(rec.handler))
+	defer hub.Close()
+	SetConnect(hub.URL, "")
+	t.Cleanup(func() { SetConnect("", "") })
+
+	do := func(ctx context.Context, url string) http.Header {
+		t.Helper()
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(`{}`))
+		req.Header.Set(HeaderAffinity, "spoofed")
+		resp, err := NewHTTPClient().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return rec.reqs[len(rec.reqs)-1].Header
+	}
+	if got := do(WithAffinity(context.Background(), 0x9f2c), "connect://site-a/glm/v1/chat/completions").Get(HeaderAffinity); got != "0000000000009f2c" {
+		t.Errorf("affinity header = %q", got)
+	}
+	// No key: a client-sent value never reaches the site.
+	if got := do(context.Background(), "connect://site-a/glm/v1/chat/completions").Get(HeaderAffinity); got != "" {
+		t.Errorf("affinity header without a key = %q", got)
+	}
+	// Plain backends are chosen here, not at a site: they get no key from us.
+	if got := do(WithAffinity(context.Background(), 0x9f2c), hub.URL+"/v1/chat/completions").Get(HeaderAffinity); got != "spoofed" {
+		t.Errorf("plain backend affinity header changed: %q", got)
+	}
+}

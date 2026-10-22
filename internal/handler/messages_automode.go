@@ -485,6 +485,7 @@ func (h *MessagesHandler) serveAutoMode(w http.ResponseWriter, r *http.Request, 
 		slog.Info("auto mode decision", attrs...)
 	}
 
+	r = withAffinity(r, body)
 	chosen, release := lb.ResolveModel(cfg, decision, body)
 	defer release()
 	if chosen == nil {

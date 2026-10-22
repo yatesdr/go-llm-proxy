@@ -87,6 +87,7 @@ func (h *CountTokensHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Native Anthropic backends: proxy through to the real count_tokens endpoint.
 	if model.Type == config.BackendAnthropic {
+		r = withAffinity(r, body)
 		model, releaseBackend := lb.ResolveModel(cfg, model, body)
 		defer releaseBackend()
 		h.proxyNative(r.Context(), w, r, body, model, req.Model)

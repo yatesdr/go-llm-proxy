@@ -76,6 +76,7 @@ func (h *ResponsesHandler) HandleCompact(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Sticky backend selection for the compaction call.
+	r = withAffinity(r, body)
 	model, releaseBackend := lb.ResolveModel(cfg, model, body)
 	defer releaseBackend()
 

@@ -126,6 +126,7 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Pick a backend for this request (sticky across a conversation's turns).
 	// Everything below sees the chosen backend through the model view, so
 	// search loops, probes, and pipeline sub-requests inherit it.
+	r = withAffinity(r, body)
 	model, releaseBackend := lb.ResolveModel(cfg, model, body)
 	defer releaseBackend()
 
