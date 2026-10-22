@@ -122,3 +122,23 @@ func TestCapabilitiesListCodeLinkModelsTheKeyMayUse(t *testing.T) {
 		t.Fatalf("unmarked: %s", w.Body)
 	}
 }
+
+func TestCapabilitiesListNativeClassifierModels(t *testing.T) {
+	cs := config.NewTestConfigStore(&config.Config{Models: []config.ModelConfig{
+		{Name: "a", NativeClassifier: true}, {Name: "b"}, {Name: "c", NativeClassifier: true},
+	}})
+	w := httptest.NewRecorder()
+	NewCapabilitiesHandler(cs, &fakeSearch{}).ServeHTTP(w, httptest.NewRequest("GET", "/v1/capabilities", nil))
+	var got struct {
+		Native []string `json:"native_classifier_models"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &got)
+	if len(got.Native) != 2 || got.Native[0] != "a" || got.Native[1] != "c" {
+		t.Fatalf("%s", w.Body)
+	}
+	w = httptest.NewRecorder()
+	NewCapabilitiesHandler(config.NewTestConfigStore(&config.Config{}), &fakeSearch{}).ServeHTTP(w, httptest.NewRequest("GET", "/v1/capabilities", nil))
+	if !strings.Contains(w.Body.String(), `"native_classifier_models":[]`) {
+		t.Fatalf("%s", w.Body)
+	}
+}

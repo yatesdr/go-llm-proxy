@@ -100,6 +100,9 @@ func withDomains(q string, include, exclude []string) string {
 //
 // models are those marked code_link that the key may use, in config
 // order; null when no model is marked (the client then decides).
+// native_classifier_models are the models (the key may use) with
+// native_classifier set, so a client can send Claude Code's auto-mode
+// classifier requests to them natively.
 type CapabilitiesHandler struct {
 	config *config.ConfigStore
 	search Searcher
@@ -125,10 +128,14 @@ func (h *CapabilitiesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		caps["documents_restructure"] = "/restructure-pages"
 	}
 	caps["models"] = nil
+	native := []string{}
 	key := auth.KeyFromContext(r.Context())
 	marked := false
 	offered := []string{}
 	for _, m := range cfg.Models {
+		if m.NativeClassifier && auth.KeyAllowsModel(key, m.Name) {
+			native = append(native, m.Name)
+		}
 		if !m.CodeLink {
 			continue
 		}
@@ -140,5 +147,6 @@ func (h *CapabilitiesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	if marked {
 		caps["models"] = offered
 	}
+	caps["native_classifier_models"] = native
 	json.NewEncoder(w).Encode(caps)
 }
