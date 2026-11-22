@@ -321,6 +321,7 @@ keys:
 | `key` | yes | The API key value clients send via `Authorization: Bearer` or `x-api-key` |
 | `name` | yes | Friendly name for logging |
 | `models` | no | Allowed model names. Empty or omitted = all models |
+| `max_concurrent` | no | Most model requests the key may have in flight at once, streaming or not (`/v1/messages`, `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings` and the rest of the proxied `/v1/` routes). Further requests get 429 with `Retry-After: 5` until one finishes. `0` or unset = no limit (1–1000). Editable on the admin API Keys page; takes effect on the next request |
 | `email` | no | Set on keys issued by [enrollment](#self-service-api-keys-enrollment): the owner's lowercase address. One key per address |
 | `join_key` | no | Set on enrolled keys: the id of the join key it came through |
 

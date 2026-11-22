@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Per-key `max_concurrent` caps a key's model requests in flight at once,
+  streaming or not; more get 429 with `Retry-After` until one finishes.
+  0 or unset = no limit. Set it per key on the admin API Keys page.
 - Upstream requests honor `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`
   (vision image fetches excepted). See docs/deployment.md.
 - `max_request_body_mb` (default 50, the previous fixed limit; 1-2048) sets

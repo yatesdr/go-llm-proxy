@@ -21,8 +21,8 @@ func (h *AdminHandler) UsersPage(w http.ResponseWriter, r *http.Request) {
   </div>
   <div class="table-wrap">
     <table class="data-table">
-      <thead><tr><th style="width:170px">Name</th><th style="width:140px">Key</th><th>Allowed Models</th><th style="width:96px" title="Most recent request in the last 30 days">Last seen</th><th style="width:88px;text-align:right" title="Requests in the last 30 days">Req · 30d</th><th style="width:112px;text-align:right" title="Tokens in the last 30 days">Tokens · 30d</th><th style="width:170px;text-align:right">Actions</th></tr></thead>
-      <tbody id="usersBody"><tr><td colspan="7" style="text-align:center;color:var(--muted)">Loading…</td></tr></tbody>
+      <thead><tr><th style="width:170px">Name</th><th style="width:140px">Key</th><th>Allowed Models</th><th style="width:84px;text-align:right" title="Most model requests this key may have in flight at once, streaming or not; more get 429 until one finishes. Click a value to change it; 0 or empty means no limit">Concurrent</th><th style="width:96px" title="Most recent request in the last 30 days">Last seen</th><th style="width:88px;text-align:right" title="Requests in the last 30 days">Req · 30d</th><th style="width:112px;text-align:right" title="Tokens in the last 30 days">Tokens · 30d</th><th style="width:170px;text-align:right">Actions</th></tr></thead>
+      <tbody id="usersBody"><tr><td colspan="8" style="text-align:center;color:var(--muted)">Loading…</td></tr></tbody>
     </table>
   </div>
 </div>
@@ -81,6 +81,8 @@ func (h *AdminHandler) UsersData(w http.ResponseWriter, r *http.Request) {
 			"key_hash": hash,
 			"masked":   config.MaskKey(k.Key),
 			"models":   models,
+			// max_concurrent: 0 = no limit.
+			"max_concurrent": k.MaxConcurrent,
 		}
 		if k.Email != "" {
 			entry["email"] = k.Email
@@ -112,6 +114,8 @@ func (h *AdminHandler) UsersMutate(w http.ResponseWriter, r *http.Request) {
 		KeyHash string   `json:"key_hash"`
 		Name    string   `json:"name"`
 		Models  []string `json:"models"`
+		// MaxConcurrent is the update_limit value; 0 removes the limit.
+		MaxConcurrent int `json:"max_concurrent"`
 	}
 	if err := decodeJSONBody(r, &req, 32*1024); err != nil {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid request body")
@@ -143,6 +147,17 @@ func (h *AdminHandler) UsersMutate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Info("admin: api key models updated", "hash", req.KeyHash[:min(8, len(req.KeyHash))], "models", req.Models)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	case "update_limit":
+		if req.KeyHash == "" {
+			httputil.WriteError(w, http.StatusBadRequest, "key_hash is required")
+			return
+		}
+		if err := h.cs.UpdateKeyMaxConcurrent(req.KeyHash, req.MaxConcurrent); err != nil {
+			writeMutateError(w, err)
+			return
+		}
+		slog.Info("admin: api key concurrent limit updated", "hash", req.KeyHash[:min(8, len(req.KeyHash))], "max_concurrent", req.MaxConcurrent)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	case "rename":
 		if req.KeyHash == "" {
@@ -256,7 +271,7 @@ function load(){
 function renderUsers(){
   var tbody = document.getElementById("usersBody");
   if(!state.users.length){
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--muted)">No API keys configured — add one to grant access</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted)">No API keys configured — add one to grant access</td></tr>';
     return;
   }
   var html = "";
@@ -293,6 +308,7 @@ function renderUserRow(u){
     '<td class="cell-name"><span class="editable" title="Click to rename" onclick="editName(this, \''+u.key_hash+'\')">'+esc(u.name)+'</span>'+enrolledNote(u)+'</td>' +
     '<td class="cell-key"><code>'+esc(u.masked)+'</code></td>' +
     '<td class="cell-pills"><div class="pills-wrap">'+pills+'</div></td>' +
+    limitCell(u) +
     activityCells(u) +
     '<td class="row-actions"><div class="action-group">'+
       '<button class="btn btn-secondary btn-sm" onclick="revealKey(\''+u.key_hash+'\', \''+escAttr(u.name)+'\')" title="Show the full key in a banner">Reveal</button>'+
@@ -328,6 +344,43 @@ function editName(el, hash){
         load();
       });
     } else { load(); }
+  }
+  input.addEventListener("keydown", function(ev){
+    if(ev.key === "Enter"){ ev.preventDefault(); finish(true); }
+    else if(ev.key === "Escape"){ finish(false); }
+  });
+  input.addEventListener("blur", function(){ finish(true); });
+}
+
+// ---- Inline concurrent-request limit ----
+function limitCell(u){
+  var n = Number(u.max_concurrent||0);
+  var label = n > 0 ? String(n) : '<span style="color:var(--faint)">no limit</span>';
+  return '<td class="mono" style="text-align:right"><span class="editable" title="Click to change the concurrent request limit (0 or empty = no limit)" onclick="editLimit(this, \''+u.key_hash+'\')">'+label+'</span></td>';
+}
+
+function editLimit(el, hash){
+  var u = userByHash(hash); if(!u) return;
+  var cur = Number(u.max_concurrent||0);
+  var input = document.createElement("input");
+  input.type = "number"; input.min = "0"; input.max = "1000"; input.step = "1";
+  input.className = "editable-input"; input.style.width = "64px"; input.style.textAlign = "right";
+  input.value = cur > 0 ? String(cur) : ""; input.placeholder = "none";
+  el.replaceWith(input); input.focus(); input.select();
+  var done = false;
+  function finish(save){
+    if(done) return; done = true;
+    var raw = input.value.trim();
+    var val = raw === "" ? 0 : Number(raw);
+    if(!save || val === cur){ load(); return; }
+    if(!Number.isInteger(val) || val < 0 || val > 1000){
+      flash("Limit must be a whole number from 0 (no limit) to 1000", "error"); load(); return;
+    }
+    apiPost("/admin/users/mutate", {action:"update_limit", key_hash: hash, max_concurrent: val}).then(function(res){
+      if(!res.ok){ flash(res.json.error && res.json.error.message || "Update failed", "error"); }
+      else { flash(val > 0 ? "Limited to "+val+" concurrent requests" : "Limit removed", "success"); }
+      load();
+    });
   }
   input.addEventListener("keydown", function(ev){
     if(ev.key === "Enter"){ ev.preventDefault(); finish(true); }

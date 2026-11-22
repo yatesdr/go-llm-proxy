@@ -17,3 +17,6 @@ func (c *Config) RequestBodyLimit() int64 {
 	}
 	return int64(mb) << 20
 }
+
+// MaxKeyConcurrentCeiling is the largest per-key max_concurrent accepted.
+const MaxKeyConcurrentCeiling = 1000

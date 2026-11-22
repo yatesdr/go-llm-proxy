@@ -174,6 +174,46 @@ func TestUpdateKeyModelsRejectsUnknownModel(t *testing.T) {
 	}
 }
 
+func TestUpdateKeyMaxConcurrent(t *testing.T) {
+	path := writeFixture(t, baseFixture)
+	cs := loadStore(t, path)
+	hash := KeyHash(cs.Get().Keys[0].Key)
+
+	if err := cs.UpdateKeyMaxConcurrent(hash, 3); err != nil {
+		t.Fatalf("UpdateKeyMaxConcurrent: %v", err)
+	}
+	if got := cs.Get().Keys[0].MaxConcurrent; got != 3 {
+		t.Fatalf("max_concurrent = %d, want 3", got)
+	}
+
+	// Rotating the secret keeps the limit.
+	newKey, err := cs.RotateKey(hash)
+	if err != nil {
+		t.Fatalf("RotateKey: %v", err)
+	}
+	if got := cs.Get().Keys[0].MaxConcurrent; got != 3 {
+		t.Fatalf("max_concurrent after rotate = %d, want 3", got)
+	}
+	hash = KeyHash(newKey)
+
+	if err := cs.UpdateKeyMaxConcurrent(hash, 0); err != nil {
+		t.Fatalf("clear limit: %v", err)
+	}
+	if got := cs.Get().Keys[0].MaxConcurrent; got != 0 {
+		t.Fatalf("max_concurrent after clear = %d, want 0", got)
+	}
+	raw, _ := os.ReadFile(path)
+	if strings.Contains(string(raw), "max_concurrent") {
+		t.Errorf("cleared limit left max_concurrent in the file:\n%s", raw)
+	}
+
+	for _, bad := range []int{-1, MaxKeyConcurrentCeiling + 1} {
+		if err := cs.UpdateKeyMaxConcurrent(hash, bad); err == nil {
+			t.Errorf("limit %d accepted", bad)
+		}
+	}
+}
+
 func TestRenameKey(t *testing.T) {
 	path := writeFixture(t, baseFixture)
 	cs := loadStore(t, path)

@@ -327,6 +327,9 @@ type KeyConfig struct {
 	Key    string   `yaml:"key"`
 	Name   string   `yaml:"name"`   // friendly name for logging
 	Models []string `yaml:"models"` // allowed models, empty = all
+	// MaxConcurrent caps the key's model requests in flight at once,
+	// streaming or not (0 = no limit). See auth.ConcurrencyMiddleware.
+	MaxConcurrent int `yaml:"max_concurrent,omitempty"`
 	// Email and JoinKey are set on keys issued by self-service enrollment:
 	// the owner's lowercase address (one key per address) and the id of the
 	// join key it came through.
@@ -699,6 +702,11 @@ func validateConfig(cfg *Config) error {
 	}
 	if cfg.MaxRequestBodyMB < 0 || cfg.MaxRequestBodyMB > MaxRequestBodyMBCeiling {
 		return fmt.Errorf("max_request_body_mb must be between 1 and %d (0 or unset = %d)", MaxRequestBodyMBCeiling, DefaultMaxRequestBodyMB)
+	}
+	for _, k := range cfg.Keys {
+		if k.MaxConcurrent < 0 || k.MaxConcurrent > MaxKeyConcurrentCeiling {
+			return fmt.Errorf("key %q: max_concurrent must be between 0 (no limit) and %d", k.Name, MaxKeyConcurrentCeiling)
+		}
 	}
 	if c := cfg.Connect; c != nil && c.URL != "" {
 		u, err := url.Parse(c.URL)

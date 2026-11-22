@@ -138,6 +138,10 @@ func main() {
 	messages := handler.NewMessagesHandler(cs, ul, pl)
 	models := handler.NewModelsHandler(cs, healthStore)
 	rl := ratelimit.NewRateLimiter(cfg.TrustedProxies)
+	// Per-key max_concurrent applies to the model request endpoints only,
+	// not to listings, token counts, search, audio or documents.
+	inflight := ratelimit.NewConcurrency()
+	limited := func(h http.Handler) http.Handler { return auth.ConcurrencyMiddleware(inflight, h) }
 
 	dashEnabled := (*serveDashboard || cfg.UsageDashboard) && ul != nil
 	// Admin routes always mount; the handler answers 404 until an admin
@@ -238,15 +242,15 @@ func main() {
 	}
 	mux.Handle("GET /v1/models", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, models)))
 	mux.Handle("GET /v1/models/status", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, http.HandlerFunc(models.ServeStatus))))
-	mux.Handle("POST /v1/responses", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, responses)))
+	mux.Handle("POST /v1/responses", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, limited(responses))))
 	mux.Handle("POST /v1/responses/compact", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs,
-		http.HandlerFunc(responses.HandleCompact),
+		limited(http.HandlerFunc(responses.HandleCompact)),
 	)))
 	countTokens := handler.NewCountTokensHandler(cs, ul)
 	mux.Handle("POST /v1/messages/count_tokens", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, countTokens)))
 	mux.Handle("POST /anthropic/v1/messages/count_tokens", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, countTokens)))
-	mux.Handle("POST /v1/messages", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, messages)))
-	mux.Handle("POST /anthropic/v1/messages", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, messages)))
+	mux.Handle("POST /v1/messages", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, limited(messages))))
+	mux.Handle("POST /anthropic/v1/messages", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, limited(messages))))
 	audio := handler.NewAudioHandler(cs, proxy)
 	documents := handler.NewDocumentHandler(cs)
 	mux.Handle("POST /v1/audio/transcriptions", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, audio)))
@@ -258,8 +262,8 @@ func main() {
 	}
 	mux.Handle("POST /v1/search", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, handler.NewSearchHandler(pl))))
 	mux.Handle("GET /v1/capabilities", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, handler.NewCapabilitiesHandler(cs, pl))))
-	mux.Handle("/v1/", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, proxy)))
-	mux.Handle("/anthropic/", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, proxy)))
+	mux.Handle("/v1/", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, limited(proxy))))
+	mux.Handle("/anthropic/", ratelimit.RateLimitMiddleware(rl, auth.AuthMiddleware(cs, limited(proxy))))
 
 	// MCP endpoint for web search (OpenCode, Qwen Code, any MCP client).
 	mcpHandler := mcp.NewHandler(cs, pl)

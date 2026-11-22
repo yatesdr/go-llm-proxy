@@ -280,6 +280,28 @@ func (cs *ConfigStore) UpdateKeyModels(keyHash string, models []string) error {
 	})
 }
 
+// UpdateKeyMaxConcurrent sets how many model requests the key identified by
+// keyHash may have in flight at once. 0 removes the limit.
+func (cs *ConfigStore) UpdateKeyMaxConcurrent(keyHash string, n int) error {
+	if n < 0 || n > MaxKeyConcurrentCeiling {
+		return fmt.Errorf("invalid limit: must be between 0 (no limit) and %d", MaxKeyConcurrentCeiling)
+	}
+	fullKey := lookupKeyByHash(cs.Get(), keyHash)
+	if fullKey == "" {
+		return fmt.Errorf("key not found")
+	}
+	return cs.mutateYAML(func(root *yaml.Node) error {
+		return mutateKeyEntry(root, fullKey, func(entry *yaml.Node) error {
+			if n == 0 {
+				deleteMappingValue(entry, "max_concurrent")
+			} else {
+				setMappingValue(entry, "max_concurrent", intNode(n))
+			}
+			return nil
+		})
+	})
+}
+
 // RenameKey sets the friendly name for the key identified by keyHash.
 func (cs *ConfigStore) RenameKey(keyHash, newName string) error {
 	if newName == "" {
