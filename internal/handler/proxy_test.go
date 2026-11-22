@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -123,6 +124,8 @@ func TestAllowedPaths(t *testing.T) {
 		"/v1/chat/completions",
 		"/v1/completions",
 		"/v1/embeddings",
+		"/v1/rerank",
+		"/v1/decisions",
 		"/v1/images/generations",
 		"/v1/audio/transcriptions",
 		"/v1/audio/translations",
@@ -139,6 +142,7 @@ func TestAllowedPaths(t *testing.T) {
 		"/v1/models",
 		"/v1/fine-tunes",
 		"/v1/chat/completions/extra",
+		"/v1/decisions/extra",
 		"/v2/chat/completions",
 		"/v1/",
 		"/",
@@ -216,6 +220,37 @@ func TestProxyHandler_OpenAIUpstreamPath(t *testing.T) {
 	// OpenAI backend has /v1 in base URL, proxy strips /v1 -> upstream sees /v1/chat/completions
 	if gotPath != "/v1/chat/completions" {
 		t.Fatalf("expected upstream path /v1/chat/completions, got: %q", gotPath)
+	}
+}
+
+// TestProxyHandler_DecisionsPassthrough: /v1/decisions is forwarded to the
+// model's backend unchanged and the backend's answer comes back as-is.
+func TestProxyHandler_DecisionsPassthrough(t *testing.T) {
+	const reqBody = `{"model":"test-model","input":"x","questions":[{"type":"predicate","name":"q","instructions":"y"}]}`
+	const respBody = `{"answers":[{"type":"predicate","name":"q","probability":0.9}],"usage":{"input_tokens":12}}`
+	var gotPath, gotBody string
+	proxy, ts := newTestProxyHandler(t, "", func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(respBody))
+	})
+	defer ts.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/decisions", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	proxy.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK || w.Body.String() != respBody {
+		t.Fatalf("status %d body %q, want 200 and the backend's body", w.Code, w.Body.String())
+	}
+	if gotPath != "/v1/decisions" {
+		t.Errorf("upstream path %q, want /v1/decisions", gotPath)
+	}
+	if gotBody != reqBody {
+		t.Errorf("upstream body changed:\n got %s\nwant %s", gotBody, reqBody)
 	}
 }
 

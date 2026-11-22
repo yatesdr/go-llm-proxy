@@ -79,3 +79,22 @@ func TestUsageLoggerConcurrentLogAndClose(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestExtractTokenUsageOpenAIShapes(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want TokenUsage
+	}{
+		{"chat", `{"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`, TokenUsage{10, 5, 15}},
+		{"embeddings", `{"usage":{"prompt_tokens":7,"total_tokens":7}}`, TokenUsage{7, 0, 7}},
+		{"decisions", `{"answers":[],"usage":{"input_tokens":12,"input_tokens_details":{"cached_tokens":4}}}`, TokenUsage{12, 0, 12}},
+		{"responses-style with total", `{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}`, TokenUsage{3, 2, 5}},
+		{"no usage", `{"answers":[]}`, TokenUsage{}},
+	}
+	for _, c := range cases {
+		if got := ExtractTokenUsage([]byte(c.body), "", false); got != c.want {
+			t.Errorf("%s: got %+v, want %+v", c.name, got, c.want)
+		}
+	}
+}

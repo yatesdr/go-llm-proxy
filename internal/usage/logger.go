@@ -480,24 +480,38 @@ func extractTokensFromJSON(body []byte, backendType string) TokenUsage {
 	return extractOpenAITokens(body)
 }
 
-// extractOpenAITokens parses the "usage" object from an OpenAI-format response.
+// extractOpenAITokens parses the "usage" object from an OpenAI-format
+// response: Chat Completions and embeddings name the counts
 //
 //	{"usage": {"prompt_tokens": N, "completion_tokens": N, "total_tokens": N}}
+//
+// while Responses-style endpoints (such as /v1/decisions, whose usage may
+// carry no total) name them input_tokens / output_tokens.
 func extractOpenAITokens(body []byte) TokenUsage {
 	var resp struct {
 		Usage struct {
 			PromptTokens     int `json:"prompt_tokens"`
 			CompletionTokens int `json:"completion_tokens"`
+			InputTokens      int `json:"input_tokens"`
+			OutputTokens     int `json:"output_tokens"`
 			TotalTokens      int `json:"total_tokens"`
 		} `json:"usage"`
 	}
 	if json.Unmarshal(body, &resp) != nil {
 		return TokenUsage{}
 	}
+	u := resp.Usage
+	if u.PromptTokens == 0 && u.CompletionTokens == 0 && (u.InputTokens != 0 || u.OutputTokens != 0) {
+		total := u.TotalTokens
+		if total == 0 {
+			total = u.InputTokens + u.OutputTokens
+		}
+		return TokenUsage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, TotalTokens: total}
+	}
 	return TokenUsage{
-		InputTokens:  resp.Usage.PromptTokens,
-		OutputTokens: resp.Usage.CompletionTokens,
-		TotalTokens:  resp.Usage.TotalTokens,
+		InputTokens:  u.PromptTokens,
+		OutputTokens: u.CompletionTokens,
+		TotalTokens:  u.TotalTokens,
 	}
 }
 

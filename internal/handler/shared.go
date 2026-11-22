@@ -23,7 +23,7 @@ import (
 )
 
 // AllowedPaths restricts which sub-paths can be proxied to backends.
-var AllowedPaths = regexp.MustCompile(`^/v1/(chat/completions|completions|embeddings|rerank|images/generations|audio/(transcriptions|translations|speech))$`)
+var AllowedPaths = regexp.MustCompile(`^/v1/(chat/completions|completions|embeddings|rerank|decisions|images/generations|audio/(transcriptions|translations|speech))$`)
 
 // AllowedResponseHeaders controls which upstream headers are forwarded to clients.
 var AllowedResponseHeaders = map[string]bool{

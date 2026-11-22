@@ -6,6 +6,10 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- `POST /v1/decisions` (OpenAI's Decisions API) is proxied to the model's
+  backend unchanged, like embeddings and rerank; a backend without it
+  answers with its own error. Usage logging reads `input_tokens` /
+  `output_tokens` when a response has no `prompt_tokens`.
 - Per-key `max_concurrent` caps a key's model requests in flight at once,
   streaming or not; more get 429 with `Retry-After` until one finishes.
   0 or unset = no limit. Set it per key on the admin API Keys page.
